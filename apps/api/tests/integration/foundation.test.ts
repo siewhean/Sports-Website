@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
-import { edgeCacheEnvironment, healthyProbes, oidcEnvironment, testConfig } from "../helpers.js";
+import { clientIpEnvironment, edgeCacheEnvironment, healthyProbes, oidcEnvironment, testConfig } from "../helpers.js";
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())));
@@ -71,6 +71,7 @@ describe("foundation API controls", () => {
         OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
         REDIS_URL: "redis://cache.internal:6379",
         ...edgeCacheEnvironment(),
+        ...clientIpEnvironment(),
         ...oidcEnvironment("https://app.matchday.example", "https://api.matchday.example"),
       }),
       probes: healthyProbes,
@@ -93,6 +94,7 @@ describe("foundation API controls", () => {
         OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
         REDIS_URL: "redis://cache.internal:6379",
         ...edgeCacheEnvironment(),
+        ...clientIpEnvironment(),
         ...oidcEnvironment("https://app.matchday.example", "https://api.matchday.example"),
       }),
       probes: healthyProbes,

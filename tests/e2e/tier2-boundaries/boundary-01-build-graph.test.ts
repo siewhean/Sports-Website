@@ -12,7 +12,7 @@ describe("Tier 2 - Boundary 01: Build Graph & Output Bounds", () => {
     const turbo = JSON.parse(readFileSync(turboPath, "utf8"));
     expect(turbo.tasks.build.env).toBeDefined();
     expect(Array.isArray(turbo.tasks.build.env)).toBe(true);
-    expect(turbo.tasks.build.env).toContain("RENDER_API_ORIGIN");
+    expect(turbo.tasks.build.env).toContain("API_ORIGIN");
   });
 
   it("B01-T02: rejects invalid/corrupted JSON structure in package.json", () => {

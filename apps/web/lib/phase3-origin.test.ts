@@ -27,11 +27,11 @@ describe("Phase 3 forwarded origin", () => {
     expect(
       requestForwardedOrigin(
         new Headers({
-          "x-forwarded-host": "c5-staging.poladex.shop, internal.example",
+          "x-forwarded-host": "c5-staging.example.test, internal.example",
           "x-forwarded-proto": "https, http",
         }),
       ),
-    ).toBe("https://c5-staging.poladex.shop");
+    ).toBe("https://c5-staging.example.test");
   });
 
   it("rejects malformed hosts", () => {
@@ -40,23 +40,23 @@ describe("Phase 3 forwarded origin", () => {
 
   it("prefers a validated deployment public origin over an internal proxy host", () => {
     const requestHeaders = new Headers({ host: "matchdayweb-c3-staging.up.railway.app" });
-    expect(requestPublicOrigin(requestHeaders, "https://c5-staging.poladex.shop")).toBe(
-      "https://c5-staging.poladex.shop",
+    expect(requestPublicOrigin(requestHeaders, "https://c5-staging.example.test")).toBe(
+      "https://c5-staging.example.test",
     );
-    expect(configuredPublicOrigin("https://c5-staging.poladex.shop/organiser")).toBeNull();
+    expect(configuredPublicOrigin("https://c5-staging.example.test/organiser")).toBeNull();
   });
 
   it("forwards a session only to the configured public API host when a proxy replaces the host", () => {
     const headers = new Headers({ host: "matchdayweb-c3-staging.up.railway.app" });
-    expect(requestCanForwardSessionCookie(headers, "c5-staging.poladex.shop", "https://c5-staging.poladex.shop")).toBe(
+    expect(requestCanForwardSessionCookie(headers, "c5-staging.example.test", "https://c5-staging.example.test")).toBe(
       true,
     );
-    expect(requestCanForwardSessionCookie(headers, "api.attacker.test", "https://c5-staging.poladex.shop")).toBe(false);
+    expect(requestCanForwardSessionCookie(headers, "api.attacker.test", "https://c5-staging.example.test")).toBe(false);
     expect(
       requestCanForwardSessionCookie(
         new Headers({ host: "api.attacker.test" }),
         "api.attacker.test",
-        "https://c5-staging.poladex.shop",
+        "https://c5-staging.example.test",
       ),
     ).toBe(false);
   });
@@ -68,17 +68,17 @@ describe("Phase 3 forwarded origin", () => {
       "x-forwarded-proto": "https",
     });
     expect(
-      requestOriginAllowed("https://c5-staging.poladex.shop", headers, "https://c5-staging.poladex.shop", "https:"),
+      requestOriginAllowed("https://c5-staging.example.test", headers, "https://c5-staging.example.test", "https:"),
     ).toBe(true);
     expect(
       requestOriginAllowed(
         "https://matchdayweb-c3-staging.up.railway.app",
         headers,
-        "https://c5-staging.poladex.shop",
+        "https://c5-staging.example.test",
         "https:",
       ),
     ).toBe(false);
-    expect(requestOriginAllowed("https://attacker.test", headers, "https://c5-staging.poladex.shop", "https:")).toBe(
+    expect(requestOriginAllowed("https://attacker.test", headers, "https://c5-staging.example.test", "https:")).toBe(
       false,
     );
   });

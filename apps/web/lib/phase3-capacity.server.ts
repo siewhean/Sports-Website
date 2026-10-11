@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
@@ -165,10 +166,13 @@ export async function getCapacityDocument(
   const cookie = await sessionCookie(base);
   if (!cookie) return unavailable(competitionId, competitionName, "permission");
   try {
-    const response = await fetch(new URL(`/api/v1/competitions/${encodeURIComponent(competitionId)}/capacity`, base), {
-      cache: "no-store",
-      headers: { accept: "application/json", cookie },
-    });
+    const response = await apiFetch(
+      new URL(`/api/v1/competitions/${encodeURIComponent(competitionId)}/capacity`, base),
+      {
+        cache: "no-store",
+        headers: { accept: "application/json", cookie },
+      },
+    );
     if (response.status === 401 || response.status === 403)
       return unavailable(competitionId, competitionName, "permission");
     if (!response.ok) return unavailable(competitionId, competitionName, "error");

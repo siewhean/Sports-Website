@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { cookies, headers } from "next/headers";
 import type { Phase4SetupDocument } from "@matchday/contracts";
@@ -293,7 +294,7 @@ export async function getAssistedSetupDocument(
   const cookie = await sessionCookie(base);
   if (!cookie) return unavailable(competitionId, competitionName, "permission");
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       new URL(`/api/v1/competitions/${encodeURIComponent(competitionId)}/setup-draft`, base),
       {
         cache: "no-store",

@@ -32,7 +32,9 @@ describe("Event Pass competition scope", () => {
         };
       },
     };
-    const runtime = new EntitlementRuntime(sql, stripe);
+    const runtime = new EntitlementRuntime(sql, stripe, {
+      checkoutRedirectOrigins: ["https://example.com", "https://example.test", "https://matchday.test"],
+    });
 
     const result = await runtime.createCheckoutSession({ accountId: "acc-1" }, "org-1", {
       tier: "event_pass",
@@ -61,7 +63,9 @@ describe("Event Pass competition scope", () => {
         throw new Error("must not reach Stripe");
       },
     };
-    const runtime = new EntitlementRuntime(sql, stripe);
+    const runtime = new EntitlementRuntime(sql, stripe, {
+      checkoutRedirectOrigins: ["https://example.com", "https://example.test", "https://matchday.test"],
+    });
 
     await expect(
       runtime.createCheckoutSession({ accountId: "acc-1" }, "org-1", {
@@ -97,6 +101,7 @@ describe("Event Pass competition scope", () => {
       type: "checkout.session.completed",
       data: {
         object: {
+          payment_status: "paid",
           customer: "cus_1",
           metadata: {
             organisation_id: "org-1",
@@ -113,7 +118,7 @@ describe("Event Pass competition scope", () => {
     const result = await runtime.processBillingWebhook(`t=${now},v1=${signature}`, raw, payload, secret);
 
     expect(result.processed).toBe(true);
-    expect(grantParams).toEqual([["comp-1", "org-1", "stripe:event-pass:evt_event_pass_scope:comp-1"]]);
+    expect(grantParams).toEqual([["comp-1", "org-1", "stripe:event-pass:event:evt_event_pass_scope:comp-1"]]);
     expect(calls.some((query) => query.includes("INSERT INTO organisation_subscriptions"))).toBe(false);
   });
 
@@ -134,6 +139,7 @@ describe("Event Pass competition scope", () => {
       type: "checkout.session.completed",
       data: {
         object: {
+          payment_status: "paid",
           metadata: { organisation_id: "org-1", purchase_type: "plan", tier: "event_pass" },
         },
       },

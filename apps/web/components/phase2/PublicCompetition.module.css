@@ -1,84 +1,601 @@
-.liveBar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 24px;
-  align-items: center;
-  justify-content: space-between;
-  margin: 20px 0;
+/* Spectator competition page. Mobile first (360px), theme tokens only so dark graphite stays correct. */
+:global(.p2-public) > .main {
+  width: min(100% - 32px, 1280px);
+  margin: 0 auto;
+  /* Room for the fixed "Privacy choices" pill and the home indicator so it never covers scores. */
+  padding: 24px 0 calc(96px + env(safe-area-inset-bottom));
+}
+.app {
+  grid-template-columns: minmax(0, 1fr);
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.identity {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 12px;
+}
+.identity h1 {
+  margin: 0;
+  font-size: clamp(2rem, 8vw, 4.5rem);
+  font-weight: 600;
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  overflow-wrap: anywhere;
+}
+.eyebrow,
+.venue {
+  margin: 0;
   color: var(--ink-muted);
   font-size: 0.875rem;
 }
-.scoreLink {
-  text-decoration: none;
-}
-.scoreLink:focus-visible,
-.matchCard:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 3px;
-}
-.allMatches {
-  margin: 48px 0 64px;
-}
-.allMatches header p {
-  color: var(--ink-muted);
-  margin: 0 0 4px;
-}
-.allMatches h2 {
-  font-size: clamp(1.75rem, 3vw, 2.5rem);
-  margin: 0 0 20px;
-}
-.matchGrid {
+.subHeader {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+  gap: 8px;
+  margin-inline: -16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--canvas);
+}
+.subHeaderRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  min-width: 0;
+}
+.subHeaderName {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.9375rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.liveStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+.liveStatus span {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+}
+.liveStatus[data-tone="live"] span {
+  background: var(--signal-strong);
+}
+.liveStatus[data-tone="warn"] span {
+  background: var(--warning);
+}
+.tabs {
+  display: flex;
+  flex: 1 1 100%;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 3px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--surface-subtle);
+}
+.tabs button {
+  flex: 1 0 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tabs button[aria-selected="true"] {
+  background: var(--signal);
+  color: var(--signal-ink);
+}
+.tabs button:focus-visible,
+.textButton:focus-visible,
+.dayPicker button:focus-visible,
+.scoreCard:focus-visible,
+.fixture:focus-visible,
+.tableScroll:focus-visible,
+.panel select:focus-visible,
+.divisionSwitch select:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+.divisionSwitch,
+.filters label,
+.followHead label {
+  display: inline-grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+.divisionSwitch select,
+.filters select,
+.followHead select {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+}
+.panel {
+  grid-template-columns: minmax(0, 1fr);
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+}
+.panel:focus {
+  outline: none;
+}
+.panel > section {
+  grid-template-columns: minmax(0, 1fr);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.sectionTitle {
+  margin: 0;
+  font-size: clamp(1.375rem, 4vw, 2rem);
+  letter-spacing: -0.02em;
+}
+.empty,
+.help {
+  margin: 0;
+  color: var(--ink-muted);
+}
+.textButton {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* follow */
+.follow {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--surface);
+}
+.followHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
   gap: 12px;
 }
-.matchCard {
+.followHead h2 {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 1.125rem;
+}
+.followCards {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.followCards h3 {
+  margin: 0 0 6px;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+/* score cards */
+.rail,
+.cardGrid {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rail {
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(260px, 86%);
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 6px;
+}
+.rail > li {
+  scroll-snap-align: start;
+}
+.cardGrid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+}
+.scoreCard {
+  display: grid;
+  gap: 8px;
+  height: 100%;
   min-width: 0;
-  min-height: 188px;
-  padding: 20px;
+  padding: 14px 16px;
   border: 1px solid var(--hairline);
-  border-radius: 18px;
-  background: var(--surface, var(--canvas));
+  border-radius: 16px;
+  background: var(--surface);
   color: var(--ink);
   text-decoration: none;
 }
-.matchCard:hover {
-  border-color: var(--ink);
+.scoreCard:hover {
+  border-color: var(--ink-muted);
 }
-.matchCard > span {
-  color: var(--ink-muted);
-  font-size: 0.8rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-.matchCard[data-status="live"] {
+.scoreCard[data-status="live"] {
   border-color: var(--signal-strong);
 }
-.matchCard[data-status="live"] > span {
-  color: var(--ink);
+.scoreCard[data-followed],
+.fixtures > li[data-followed] .fixture,
+.table tr[data-followed] > * {
+  box-shadow: inset 4px 0 0 var(--signal-strong);
 }
-.matchCard strong {
+.cardMeta {
   display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  font-size: 1.125rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
 }
-.matchCard b {
-  font-size: 1.5rem;
+.divisionTag {
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.badge[data-tone="live"] {
+  border-color: transparent;
+  background: var(--signal);
+  color: var(--signal-ink);
+}
+.side {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  font-size: 1.0625rem;
+}
+.side span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.side strong {
+  font-family: var(--font-mono);
+  font-size: 1.75rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.segments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+.segmentNow {
+  color: var(--ink);
+  font-weight: 700;
+}
+.cardFoot {
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+
+/* schedule */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+.dayPicker {
+  display: flex;
+  flex: 1 1 100%;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.dayPicker button {
+  display: grid;
+  flex: none;
+  min-height: 44px;
+  padding: 4px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dayPicker button small {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.dayPicker button[aria-pressed="true"] {
+  border-color: var(--signal-strong);
+  background: var(--signal);
+  color: var(--signal-ink);
+}
+.dayPicker button[aria-pressed="true"] small {
+  color: var(--signal-ink);
+}
+.day {
+  grid-template-columns: minmax(0, 1fr);
+  display: grid;
+  gap: 8px;
+}
+.day h3 {
+  margin: 8px 0 0;
+  font-size: 1.0625rem;
+}
+.day h3 small {
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.fixtures {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--hairline);
+  list-style: none;
+}
+.fixtures > li {
+  border-bottom: 1px solid var(--hairline);
+}
+.fixture {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr) auto;
+  grid-template-areas:
+    "time teams score"
+    "court stage stage";
+  gap: 4px 12px;
+  align-items: center;
+  min-height: 56px;
+  padding: 10px 4px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.fixture:hover {
+  background: var(--surface-subtle);
+}
+.fixture time {
+  grid-area: time;
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
-.matchCard small {
+.fixtureCourt {
+  grid-area: court;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+.fixtureTeams {
+  display: grid;
+  gap: 2px;
+  grid-area: teams;
+  min-width: 0;
+  font-weight: 600;
+}
+.fixtureTeams > span {
+  overflow-wrap: anywhere;
+}
+.versus {
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+/* Stacked teams on phones: "v" stays for screen readers only. */
+.fixtureTeams .versus {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.fixtureScore {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  grid-area: score;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.fixtureStage {
+  grid-area: stage;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+
+/* table */
+.tableScroll {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.table th,
+.table td {
+  padding: 10px 10px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  text-align: center;
+  white-space: nowrap;
+}
+.table thead th {
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+.table abbr {
+  text-decoration: none;
+}
+.table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.table .teamCell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 9rem;
+  max-width: 14rem;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 1px 0 0 var(--hairline);
+}
+.table tbody .teamCell {
+  font-weight: 600;
+}
+.table tr[data-followed] > * {
+  background: var(--surface-subtle);
+}
+.youTag {
+  display: block;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.tieBreaks {
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+.tieBreaks summary {
+  min-height: 32px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.tieBreaks p {
   color: var(--ink-muted);
 }
+.tieBreaks dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+.tieBreaks dt {
+  font-weight: 650;
+}
+.tieBreaks dd {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+
+/* A just-changed score: a static outline for everyone, a brief pulse only when motion is welcome. */
+[data-changed].scoreCard,
+.fixtures > li[data-changed] .fixture {
+  outline: 2px solid var(--signal-strong);
+  outline-offset: -2px;
+}
 @media (prefers-reduced-motion: no-preference) {
-  .matchCard {
-    transition:
-      border-color 0.15s ease,
-      transform 0.15s ease;
+  [data-changed].scoreCard,
+  .fixtures > li[data-changed] .fixture {
+    animation: scorePulse 1.2s var(--ease-out) 1;
   }
-  .matchCard:hover {
-    transform: translateY(-2px);
+  .scoreCard {
+    transition: border-color 0.15s ease;
+  }
+}
+@keyframes scorePulse {
+  from {
+    background: color-mix(in srgb, var(--signal) 28%, var(--surface));
+  }
+  to {
+    background: var(--surface);
+  }
+}
+
+@media (min-width: 720px) {
+  .tabs {
+    flex: 0 1 auto;
+  }
+  :global(.p2-public) > .main {
+    width: min(100% - 48px, 1280px);
+    padding-top: 40px;
+  }
+  .subHeader {
+    margin-inline: -24px;
+    padding-inline: 24px;
+  }
+  .rail {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    overflow: visible;
+  }
+  .fixtureTeams {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+  }
+  .fixtureTeams .versus {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+  }
+  .fixture {
+    grid-template-columns: 4rem 7rem minmax(0, 1fr) minmax(8rem, auto) auto;
+    grid-template-areas: "time court teams stage score";
+  }
+  .follow {
+    padding: 20px 24px;
   }
 }

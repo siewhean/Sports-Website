@@ -59,15 +59,20 @@ export class FormatRepository {
     return rows[0] ?? null;
   }
 
+  /**
+   * Always scoped by the authorised competition: a division id alone is not proof of ownership, so a
+   * division belonging to another competition yields an empty list rather than its revision history.
+   */
   async listByDivisionId(
     divisionId: string,
+    competitionId: string,
     executor: SqlExecutor = this.sql,
   ): Promise<readonly FormatRevisionRecord[]> {
     return executor.unsafe<FormatRevisionRecord>(
       `SELECT ${FORMAT_COLUMNS} FROM format_revisions
-       WHERE division_id = $1
+       WHERE division_id = $1 AND competition_id = $2
        ORDER BY revision DESC, id DESC`,
-      [divisionId],
+      [divisionId, competitionId],
     );
   }
 

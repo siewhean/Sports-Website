@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { Check, Clock, Copy, DownloadSimple, Printer, QrCode, ShieldWarning, X } from "@phosphor-icons/react";
 import { toDataURL, toString as qrToString } from "qrcode";
-import { translate as t } from "@matchday/ui";
+import { messages, translate as t } from "@matchday/ui";
 import type { CompetitionView, MatchView } from "@/lib/phase2";
 import { LatestRequestFence } from "@/lib/latest-request";
 import {
@@ -93,6 +93,10 @@ function localExpiry(): string {
   const expiry = new Date(Date.now() + 2 * 60 * 60 * 1_000);
   const offset = expiry.getTimezoneOffset() * 60_000;
   return new Date(expiry.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function codeEntryPath(matchId: string): string {
+  return `/score?match=${encodeURIComponent(matchId)}`;
 }
 
 function absoluteScoringUrl(path: string): string {
@@ -724,6 +728,16 @@ export function AccessPassManager({
                   <code>{issued.shortCode ?? "—"}</code>
                 </dd>
               </div>
+              {issued.shortCode ? (
+                <div>
+                  <dt>{messages.scorerAccess.codeEntryLink}</dt>
+                  <dd>
+                    {/* Fallback codes are only accepted with match context, so the scorer must start from this link. */}
+                    <code>{absoluteScoringUrl(codeEntryPath(issued.matchId))}</code>
+                    <small>{messages.scorerAccess.codeEntryLinkHint}</small>
+                  </dd>
+                </div>
+              ) : null}
             </dl>
             <div className="p5-access-reveal__actions">
               {issued.qrPath ? (
@@ -746,6 +760,21 @@ export function AccessPassManager({
                 <Copy />
                 {copy.copyCode}
               </button>
+              {issued.shortCode ? (
+                <button
+                  type="button"
+                  onClick={(event) =>
+                    void copyValue(
+                      absoluteScoringUrl(codeEntryPath(issued.matchId)),
+                      messages.scorerAccess.codeEntryLinkCopied,
+                      event.currentTarget,
+                    )
+                  }
+                >
+                  <Copy />
+                  {messages.scorerAccess.copyCodeEntryLink}
+                </button>
+              ) : null}
               {issued.qrPath ? (
                 <button type="button" onClick={() => void downloadQr()}>
                   <DownloadSimple />

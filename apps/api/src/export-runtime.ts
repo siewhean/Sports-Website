@@ -2,24 +2,48 @@ import { randomUUID } from "node:crypto";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
+import { escapeCsvCell } from "./csv-escape.js";
+import { isFeatureAllowed } from "@matchday/domain";
+import type { SubscriptionTier } from "@matchday/contracts";
+import { ARCHIVE_HTTPS_URL_PATTERN, ARCHIVE_LIMITS } from "./competition-archive-schema.js";
 
-const escapeCsv = (val: string | number | null | undefined): string => {
-  if (val === null || val === undefined) return "";
-  const str = String(val);
-  if (/[",\n\r]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
+const httpsUrlPattern = new RegExp(ARCHIVE_HTTPS_URL_PATTERN, "u");
+const colorPattern = /^#[0-9a-fA-F]{6}$/u;
+const sponsorTiers = new Set(["headline", "tier1", "tier2", "community"]);
+/** Only https links survive import; anything else (javascript:, data:, http:) is dropped. */
+function safeHttpsUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 2_048 || !httpsUrlPattern.test(value)) return null;
+  try {
+    return new URL(value).protocol === "https:" ? value : null;
+  } catch {
+    return null;
   }
-  return str;
+}
+
+// Formula-injection-safe CSV cell escaping (see csv-escape.ts).
+const escapeCsv = escapeCsvCell;
+
+export type ExportAccess = {
+  organisationId: string;
+  isPublished: boolean;
+  publishedRevisionId: string | null;
+  resultsPublishedAt: Date | null;
+  /**
+   * True only for an active owner/organiser of the owning organisation or an active platform admin.
+   * Only privileged callers may read draft/unpublished data; everyone else (signed in or not) is
+   * limited to the published-only public projection.
+   */
+  privileged: boolean;
 };
 
 export class ExportRuntime {
   constructor(private readonly sql: PostgresJsSql) {}
 
-  private async assertExportAccess(
+  protected async assertExportAccess(
     competitionId: string,
     actor?: Phase3Actor,
     requirePrivateAccess = false,
-  ): Promise<{ organisationId: string; isPublished: boolean; publishedRevisionId: string | null }> {
+  ): Promise<ExportAccess> {
     const comp = (
       await this.sql.unsafe<{ id: string; organisation_id: string; status: string }>(
         `SELECT id, organisation_id, status FROM competitions WHERE id=$1`,
@@ -34,8 +58,9 @@ export class ExportRuntime {
       await this.sql.unsafe<{
         published_schedule_revision_id: string | null;
         schedule_published_at: Date | null;
+        results_published_at: Date | null;
       }>(
-        `SELECT published_schedule_revision_id, schedule_published_at
+        `SELECT published_schedule_revision_id, schedule_published_at, results_published_at
          FROM competition_publications
          WHERE competition_id=$1`,
         [competitionId],
@@ -60,13 +85,16 @@ export class ExportRuntime {
         organisationId: comp.organisation_id,
         isPublished: true,
         publishedRevisionId: publication!.published_schedule_revision_id,
+        resultsPublishedAt: publication?.results_published_at ?? null,
+        privileged: false,
       };
     }
 
     // Authenticated caller: assert organisation membership or platform admin
     const member = (
       await this.sql.unsafe<{ role: string }>(
-        `SELECT role FROM organisation_memberships WHERE organisation_id=$1 AND account_id=$2 AND status='active'`,
+        `SELECT role FROM organisation_memberships
+         WHERE organisation_id=$1 AND account_id=$2 AND status='active' AND role IN ('owner','organiser')`,
         [comp.organisation_id, actor.accountId],
       )
     )[0];
@@ -82,7 +110,9 @@ export class ExportRuntime {
       )
     )[0];
 
-    if (!member && !platformAdmin && (requirePrivateAccess || !isPublished)) {
+    const privileged = Boolean(member || platformAdmin);
+
+    if (!privileged && (requirePrivateAccess || !isPublished)) {
       const message = requirePrivateAccess
         ? "Access denied to private competition export"
         : "Access denied to unpublished competition";
@@ -93,12 +123,18 @@ export class ExportRuntime {
       organisationId: comp.organisation_id,
       isPublished,
       publishedRevisionId: publication?.published_schedule_revision_id ?? null,
+      resultsPublishedAt: publication?.results_published_at ?? null,
+      privileged,
     };
   }
 
   async generateCompetitionCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    const { isPublished, publishedRevisionId } = await this.assertExportAccess(competitionId, actor);
-    const restrictToPublished = !actor && isPublished && Boolean(publishedRevisionId);
+    return this.buildCompetitionCsv(competitionId, await this.assertExportAccess(competitionId, actor));
+  }
+
+  protected async buildCompetitionCsv(competitionId: string, access: ExportAccess): Promise<string> {
+    const { isPublished, publishedRevisionId } = access;
+    const restrictToPublished = !access.privileged && isPublished && Boolean(publishedRevisionId);
 
     const matches = await this.sql.unsafe<{
       division_name: string;
@@ -127,6 +163,7 @@ export class ExportRuntime {
          AND ($2::uuid IS NULL OR sm.schedule_revision_id = $2)
        LEFT JOIN playing_areas pa ON pa.id = sm.playing_area_id
        WHERE d.competition_id = $1
+         AND ($2::uuid IS NULL OR sm.match_id IS NOT NULL)
        ORDER BY d.created_at, d.name, sm.starts_at NULLS LAST, m.code`,
       [competitionId, restrictToPublished ? publishedRevisionId : null],
     );
@@ -157,7 +194,11 @@ export class ExportRuntime {
   }
 
   async generateStandingsCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    await this.assertExportAccess(competitionId, actor);
+    return this.buildStandingsCsv(competitionId, await this.assertExportAccess(competitionId, actor));
+  }
+
+  protected async buildStandingsCsv(competitionId: string, access: ExportAccess): Promise<string> {
+    const restricted = !access.privileged;
 
     const standings = await this.sql.unsafe<{
       division_name: string;
@@ -211,6 +252,7 @@ export class ExportRuntime {
              SELECT DISTINCT ON (match_id) match_id, home_score, away_score
              FROM match_result_snapshots
              WHERE state IN ('final', 'corrected')
+               AND ($2::boolean IS NOT TRUE OR ($3::timestamptz IS NOT NULL AND created_at <= $3::timestamptz))
              ORDER BY match_id, result_version DESC
            ) mrs ON mrs.match_id = m.id
            WHERE d2.competition_id = $1
@@ -230,6 +272,7 @@ export class ExportRuntime {
              SELECT DISTINCT ON (match_id) match_id, home_score, away_score
              FROM match_result_snapshots
              WHERE state IN ('final', 'corrected')
+               AND ($2::boolean IS NOT TRUE OR ($3::timestamptz IS NOT NULL AND created_at <= $3::timestamptz))
              ORDER BY match_id, result_version DESC
            ) mrs ON mrs.match_id = m.id
            WHERE d2.competition_id = $1
@@ -237,8 +280,17 @@ export class ExportRuntime {
          GROUP BY entry_id
        ) s ON s.entry_id = e.id
        WHERE d.competition_id = $1
+         AND ($2::boolean IS NOT TRUE OR EXISTS (
+           SELECT 1 FROM scheduled_matches psm
+           WHERE psm.schedule_revision_id = $4::uuid AND (psm.home_entry_id = e.id OR psm.away_entry_id = e.id)
+         ))
        ORDER BY d.name, COALESCE(s.points, 0) DESC, COALESCE(s.goal_difference, 0) DESC, e.name`,
-      [competitionId],
+      [
+        competitionId,
+        restricted,
+        restricted ? access.resultsPublishedAt : null,
+        restricted ? access.publishedRevisionId : null,
+      ],
     );
 
     const headers = [
@@ -273,7 +325,12 @@ export class ExportRuntime {
   }
 
   async generateBracketCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    await this.assertExportAccess(competitionId, actor);
+    return this.buildBracketCsv(competitionId, await this.assertExportAccess(competitionId, actor));
+  }
+
+  protected async buildBracketCsv(competitionId: string, access: ExportAccess): Promise<string> {
+    const publishedRevisionId =
+      !access.privileged && access.isPublished && access.publishedRevisionId ? access.publishedRevisionId : null;
 
     const bracketMatches = await this.sql.unsafe<{
       division_name: string;
@@ -295,8 +352,11 @@ export class ExportRuntime {
        LEFT JOIN division_entries e_home ON e_home.id = m.home_entry_id
        LEFT JOIN division_entries e_away ON e_away.id = m.away_entry_id
        WHERE d.competition_id = $1
+         AND ($2::uuid IS NULL OR EXISTS (
+           SELECT 1 FROM scheduled_matches sm WHERE sm.match_id = m.id AND sm.schedule_revision_id = $2
+         ))
        ORDER BY d.name, m.code`,
-      [competitionId],
+      [competitionId, publishedRevisionId],
     );
 
     const headers = ["Division", "Stage", "Match", "Home Team", "Away Team", "State"];
@@ -347,8 +407,12 @@ export class ExportRuntime {
   }
 
   async generateCompetitionJson(competitionId: string, actor?: Phase3Actor): Promise<Record<string, unknown>> {
-    const { isPublished, publishedRevisionId } = await this.assertExportAccess(competitionId, actor);
-    const restrictToPublished = !actor && isPublished && Boolean(publishedRevisionId);
+    return this.buildCompetitionJson(competitionId, await this.assertExportAccess(competitionId, actor));
+  }
+
+  protected async buildCompetitionJson(competitionId: string, access: ExportAccess): Promise<Record<string, unknown>> {
+    const { isPublished, publishedRevisionId } = access;
+    const restrictToPublished = !access.privileged && isPublished && Boolean(publishedRevisionId);
 
     const comp = (
       await this.sql.unsafe<{ id: string; name: string; sport_code: string; status: string; created_at: Date }>(
@@ -387,6 +451,7 @@ export class ExportRuntime {
        LEFT JOIN scheduled_matches sm ON sm.match_id = m.id
          AND ($2::uuid IS NULL OR sm.schedule_revision_id = $2)
        WHERE d.competition_id=$1
+         AND ($2::uuid IS NULL OR sm.match_id IS NOT NULL)
        ORDER BY d.created_at, d.name, sm.starts_at NULLS LAST, m.code`,
       [competitionId, restrictToPublished ? publishedRevisionId : null],
     );
@@ -417,6 +482,15 @@ export class ExportRuntime {
       [competitionId],
     );
 
+    // Public projection: only divisions/entries referenced by the published schedule revision.
+    const visibleDivisions = restrictToPublished
+      ? divisions.filter((d) => matches.some((m) => m.division_id === d.id))
+      : divisions;
+    const visibleEntryIds = new Set(
+      matches.flatMap((m) => [m.home_entry_id, m.away_entry_id]).filter((id): id is string => Boolean(id)),
+    );
+    const visibleEntries = restrictToPublished ? entries.filter((e) => visibleEntryIds.has(e.id)) : entries;
+
     return {
       schema_version: "1.0",
       exported_at: new Date().toISOString(),
@@ -435,10 +509,10 @@ export class ExportRuntime {
         website_url: s.website_url,
         sort_order: s.sort_order,
       })),
-      divisions: divisions.map((d) => ({
+      divisions: visibleDivisions.map((d) => ({
         id: d.id,
         name: d.name,
-        entries: entries
+        entries: visibleEntries
           .filter((e) => e.division_id === d.id)
           .map((e) => ({
             id: e.id,
@@ -484,6 +558,13 @@ export class ExportRuntime {
       return { valid: false, error: "Archive divisions must be an array" };
     }
 
+    if (divisions.length > ARCHIVE_LIMITS.divisions) {
+      return { valid: false, error: `Archive may contain at most ${ARCHIVE_LIMITS.divisions} divisions` };
+    }
+    if (Array.isArray(doc.sponsors) && doc.sponsors.length > ARCHIVE_LIMITS.sponsors) {
+      return { valid: false, error: `Archive may contain at most ${ARCHIVE_LIMITS.sponsors} sponsors` };
+    }
+
     let entriesCount = 0;
     let matchesCount = 0;
 
@@ -496,11 +577,18 @@ export class ExportRuntime {
         return { valid: false, error: "Invalid division object in archive" };
       }
       if (Array.isArray(divisionObj.entries)) {
+        if (divisionObj.entries.length > ARCHIVE_LIMITS.entriesPerDivision)
+          return { valid: false, error: "Archive division has too many entries" };
         entriesCount += divisionObj.entries.length;
       }
       if (Array.isArray(divisionObj.matches)) {
+        if (divisionObj.matches.length > ARCHIVE_LIMITS.matchesPerDivision)
+          return { valid: false, error: "Archive division has too many matches" };
         matchesCount += divisionObj.matches.length;
       }
+    }
+    if (entriesCount > ARCHIVE_LIMITS.totalEntries || matchesCount > ARCHIVE_LIMITS.totalMatches) {
+      return { valid: false, error: "Archive exceeds the maximum number of entries or matches" };
     }
 
     return {
@@ -527,6 +615,7 @@ export class ExportRuntime {
     divisions_count: number;
     entries_count: number;
     matches_count: number;
+    warnings: string[];
   }> {
     const validation = this.validateCompetitionArchive(archive);
     if (!validation.valid || !validation.competition) {
@@ -624,30 +713,83 @@ export class ExportRuntime {
 
       await tx.unsafe(`INSERT INTO competition_publications (competition_id) VALUES ($1)`, [compId]);
 
+      // Branding and sponsors are paid features: an archive must not smuggle them (or
+      // hide_platform_badge) into a plan that does not include them. Drop them with a warning so the
+      // rest of the competition still imports.
+      const warnings: string[] = [];
+      const tier: SubscriptionTier =
+        (await tx.unsafe<{ tier: SubscriptionTier }>(`SELECT matchday_effective_plan_tier($1) tier`, [compId]))[0]
+          ?.tier ?? "free";
+
       if (doc.branding) {
-        await tx.unsafe(
-          `INSERT INTO competition_branding (
-             competition_id, primary_color, secondary_color, logo_url, banner_url, hide_platform_badge
-           ) VALUES ($1, $2, $3, $4, $5, $6)`,
-          [
-            compId,
-            doc.branding.primary_color ?? null,
-            doc.branding.secondary_color ?? null,
-            doc.branding.logo_url ?? null,
-            doc.branding.banner_url ?? null,
-            doc.branding.hide_platform_badge ?? false,
-          ],
+        const branding = {
+          primary_color:
+            typeof doc.branding.primary_color === "string" && colorPattern.test(doc.branding.primary_color)
+              ? doc.branding.primary_color
+              : null,
+          secondary_color:
+            typeof doc.branding.secondary_color === "string" && colorPattern.test(doc.branding.secondary_color)
+              ? doc.branding.secondary_color
+              : null,
+          logo_url: safeHttpsUrl(doc.branding.logo_url),
+          banner_url: safeHttpsUrl(doc.branding.banner_url),
+          hide_platform_badge: doc.branding.hide_platform_badge === true,
+        };
+        if ((doc.branding.logo_url && !branding.logo_url) || (doc.branding.banner_url && !branding.banner_url)) {
+          warnings.push("Branding images that were not https URLs were removed.");
+        }
+        const hasCustomBranding = Boolean(
+          branding.primary_color ||
+          branding.secondary_color ||
+          branding.logo_url ||
+          branding.banner_url ||
+          branding.hide_platform_badge,
         );
+        if (hasCustomBranding && !isFeatureAllowed(tier, "custom_branding")) {
+          warnings.push("Custom branding was not imported because the current plan does not include it.");
+        } else if (hasCustomBranding) {
+          await tx.unsafe(
+            `INSERT INTO competition_branding (
+               competition_id, primary_color, secondary_color, logo_url, banner_url, hide_platform_badge
+             ) VALUES ($1, $2, $3, $4, $5, $6)`,
+            [
+              compId,
+              branding.primary_color,
+              branding.secondary_color,
+              branding.logo_url,
+              branding.banner_url,
+              branding.hide_platform_badge,
+            ],
+          );
+        }
       }
 
-      if (Array.isArray(doc.sponsors)) {
-        for (const s of doc.sponsors) {
-          await tx.unsafe(
-            `INSERT INTO competition_sponsors (
-               competition_id, name, tier, logo_url, website_url, sort_order
-             ) VALUES ($1, $2, $3, $4, $5, $6)`,
-            [compId, s.name.trim(), s.tier, s.logo_url ?? null, s.website_url ?? null, s.sort_order],
-          );
+      if (Array.isArray(doc.sponsors) && doc.sponsors.length > 0) {
+        if (!isFeatureAllowed(tier, "sponsor_placements")) {
+          warnings.push("Sponsors were not imported because the current plan does not include sponsor placements.");
+        } else {
+          let droppedLinks = false;
+          for (const s of doc.sponsors.slice(0, ARCHIVE_LIMITS.sponsors)) {
+            const name = typeof s.name === "string" ? s.name.trim().slice(0, 100) : "";
+            if (!name) continue;
+            const logoUrl = safeHttpsUrl(s.logo_url);
+            const websiteUrl = safeHttpsUrl(s.website_url);
+            if ((s.logo_url && !logoUrl) || (s.website_url && !websiteUrl)) droppedLinks = true;
+            await tx.unsafe(
+              `INSERT INTO competition_sponsors (
+                 competition_id, name, tier, logo_url, website_url, sort_order
+               ) VALUES ($1, $2, $3, $4, $5, $6)`,
+              [
+                compId,
+                name,
+                sponsorTiers.has(s.tier) ? s.tier : "community",
+                logoUrl,
+                websiteUrl,
+                Number.isSafeInteger(s.sort_order) ? Math.min(Math.max(s.sort_order, 0), 32_767) : 0,
+              ],
+            );
+          }
+          if (droppedLinks) warnings.push("Sponsor links that were not https URLs were removed.");
         }
       }
 
@@ -689,7 +831,8 @@ export class ExportRuntime {
                 `INSERT INTO matches (
                    id, competition_id, division_id, code, stage, state, home_entry_id, away_entry_id
                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                [matchId, compId, divId, match.code, match.stage ?? "Main", match.state ?? "draft", homeId, awayId],
+                // An archive must never import a result: every match restarts as pending.
+                [matchId, compId, divId, match.code, match.stage ?? "Main", "pending", homeId, awayId],
               );
               totalMatches++;
             }
@@ -703,6 +846,7 @@ export class ExportRuntime {
         divisions_count: doc.divisions?.length ?? 0,
         entries_count: totalEntries,
         matches_count: totalMatches,
+        warnings,
       };
     });
   }

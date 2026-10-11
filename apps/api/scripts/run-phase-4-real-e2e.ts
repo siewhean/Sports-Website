@@ -1127,6 +1127,10 @@ export async function runOnce(runNumber: number, configuration: RunConfiguration
     await runProcess("production web build", "pnpm", ["--filter", "@matchday/web", "build"], runtimeEnv);
     process.stdout.write("Production web build: PASS\n");
     const webBuildId = (await readFile(path.join(root, "apps/web/.next/BUILD_ID"), "utf8")).trim();
+    // Every run is an isolated deployment over a fresh database that reuses the same fixture slugs. Next's Data
+    // Cache persists public projections on disk (stale-while-revalidate), so start each server with an empty one;
+    // otherwise run N would be served run N-1's published competition for a slug that is not yet public.
+    await rm(path.join(root, "apps/web/.next/cache/fetch-cache"), { recursive: true, force: true });
     web = startProcess(
       "production web",
       "pnpm",

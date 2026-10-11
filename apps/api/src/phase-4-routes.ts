@@ -7,6 +7,7 @@ import type { Phase4FormatBuilderDocument } from "@matchday/contracts";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 import type { Phase4Runtime } from "./phase-4-runtime.js";
 import { registerPhase4OfficialRoutes } from "./phase-4-official-routes.js";
+import { constantTimeEquals } from "./mutation-guard.js";
 
 const Id = Type.String({ format: "uuid" });
 const IdempotencyKey = Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" });
@@ -410,7 +411,8 @@ export async function registerPhase4Routes(
     identityRuntime: IdentityApiRuntime;
     identityRequests: IdentityRequestContext;
     allowedOrigins: readonly string[];
-    deepHealthToken?: string;
+    /** Dedicated MATCHDAY_MAINTENANCE_TOKEN; deliberately not the deep-health token. */
+    maintenanceToken?: string;
   },
 ) {
   const readActor = async (request: FastifyRequest): Promise<Phase3Actor> => ({
@@ -1138,18 +1140,18 @@ export async function registerPhase4Routes(
       ),
   );
 
-  app.post<{ Headers: { "x-deep-health-token"?: string } }>(
+  app.post<{ Headers: { "x-matchday-maintenance-token"?: string } }>(
     "/internal/phase4/schedule-maintenance",
     {
       schema: {
-        headers: strict({ "x-deep-health-token": Type.Optional(Type.String()) }),
+        headers: strict({ "x-matchday-maintenance-token": Type.Optional(Type.String({ maxLength: 1_024 })) }),
         response: { 200: Json, 404: ErrorResponse },
         tags: ["internal"],
       },
       config: { rateLimit: false },
     },
     async (request) => {
-      if (!options.deepHealthToken || request.headers["x-deep-health-token"] !== options.deepHealthToken)
+      if (!constantTimeEquals(request.headers["x-matchday-maintenance-token"], options.maintenanceToken))
         throw new ApiError(404, ErrorCode.ROUTE_NOT_FOUND, "Route not found");
       const maintenance = await options.runtime.runScheduleMaintenance(request.id);
       const queueRecovery = await options.runtime.recoverQueuedScheduleJobs();

@@ -109,15 +109,16 @@ async function recordUiAction(page: Page, sport: SportSeed): Promise<Record<stri
     (request) => request.url().endsWith("/api/scoring/events") && request.method() === "POST",
   );
   await page.getByRole("button", { name: sport.action.accessibleName }).click();
-  const dialog = page.getByRole("dialog");
-  const participant = dialog.getByLabel("Scorer or participant name");
-  if (await participant.count()) await participant.fill(`${sport.homeName} scorer`);
-  await dialog
-    .getByRole("button", {
-      name: sport.sportId === "canoe_polo" ? `Record goal for ${sport.homeName}` : "Record event",
-    })
-    .click();
-  await expect(dialog).toBeHidden();
+  // Goals need a named scorer and keep the sheet; points are recorded with one tap.
+  if (sport.sportId === "canoe_polo") {
+    const dialog = page.getByRole("dialog");
+    const participant = dialog.getByLabel("Scorer or participant name");
+    if (await participant.count()) await participant.fill(`${sport.homeName} scorer`);
+    await dialog.getByRole("button", { name: `Record goal for ${sport.homeName}` }).click();
+    await expect(dialog).toBeHidden();
+  } else {
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  }
   const request = await requestPromise;
   const body = request.postDataJSON() as Record<string, unknown>;
   expect(body.type).toBe(sport.action.eventType);
@@ -341,14 +342,15 @@ test("C2 real five-sport scoring, correction, audit, and downstream conflict", a
     ).toBeVisible();
     observedSteps.push("audit_review");
     if (sport.secondaryDivision) {
-      await page.goto(`/competitions/${sport.slug}`);
+      // Each division's schedule is its own view (division switcher, shareable via ?division=).
+      await page.goto(`/competitions/${sport.slug}?tab=schedule&division=${sport.divisionId}`);
       const primarySections = page.locator(`[data-division-id="${sport.divisionId}"]`);
-      const secondarySections = page.locator(`[data-division-id="${sport.secondaryDivision.divisionId}"]`);
-      await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
-      await expect(page.getByRole("link", { name: "Women", exact: true })).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "Division" })).toBeVisible();
       await expect(primarySections.filter({ hasText: sport.homeName }).first()).toBeVisible();
-      await expect(secondarySections.filter({ hasText: sport.secondaryDivision.homeName }).first()).toBeVisible();
       await expect(primarySections.filter({ hasText: sport.secondaryDivision.homeName })).toHaveCount(0);
+      await page.goto(`/competitions/${sport.slug}?tab=schedule&division=${sport.secondaryDivision.divisionId}`);
+      const secondarySections = page.locator(`[data-division-id="${sport.secondaryDivision.divisionId}"]`);
+      await expect(secondarySections.filter({ hasText: sport.secondaryDivision.homeName }).first()).toBeVisible();
       await expect(secondarySections.filter({ hasText: sport.homeName })).toHaveCount(0);
       multiDivisionBrowserOracle = {
         competition_id: sport.competitionId,

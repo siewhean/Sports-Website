@@ -18,6 +18,12 @@ const redisUrlSchema = z
   .refine((value) => ["redis:", "rediss:"].includes(new URL(value).protocol), {
     message: "REDIS_URL must use the redis or rediss protocol",
   });
+function integerEnv(min: number, max: number, fallback: number) {
+  return z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(min).max(max).default(fallback),
+  );
+}
 const identityProviderSchema = z.enum(["disabled", "oidc"]);
 const identityRecoveryModeSchema = z.enum(["hosted"]);
 const scoringAccessHmacKeyVersionSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u, {
@@ -56,8 +62,37 @@ const rawConfigSchema = z.object({
     (value) => (value === "" ? undefined : value),
     z.coerce.number().int().min(600).max(10_000).optional(),
   ),
+  // Anonymous GET /api/v1/public/* reads get their own per-client bucket so a
+  // busy event cannot exhaust the general anonymous limit.
+  API_PUBLIC_READ_RATE_LIMIT_MAX: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(60).max(100_000).default(600),
+  ),
+  // Concurrent public SSE version streams per client IP, per API instance.
+  API_PUBLIC_SSE_MAX_STREAMS_PER_CLIENT: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(1).max(1_000).default(16),
+  ),
+  // Shared with the web BFF, which HMAC-signs the end-user IP it forwards.
+  MATCHDAY_CLIENT_IP_SECRET: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(32).max(1_024).optional(),
+  ),
   MATCHDAY_PUBLIC_ORIGIN: optionalUrlSchema,
   DATABASE_URL: databaseUrlSchema.default("postgres://matchday:matchday@127.0.0.1:5432/matchday"),
+  // Per API instance. Blue/green deploys briefly run two instances plus the
+  // worker and probes against max_connections=100 on a 1 CPU database, and
+  // more backends than cores only adds contention, so keep this small.
+  DB_POOL_MAX: integerEnv(1, 100, 10),
+  // Request-path guards, applied as connection parameters on every pooled session.
+  DB_STATEMENT_TIMEOUT_MS: integerEnv(100, 600_000, 15_000),
+  DB_LOCK_TIMEOUT_MS: integerEnv(50, 600_000, 5_000),
+  DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: integerEnv(1_000, 3_600_000, 30_000),
+  DB_CONNECT_TIMEOUT_SECONDS: integerEnv(1, 120, 10),
+  // Migration runner (packages/database/scripts/migrate.ts).
+  MIGRATION_LOCK_TIMEOUT_MS: integerEnv(100, 600_000, 5_000),
+  MIGRATION_STATEMENT_TIMEOUT_MS: integerEnv(0, 24 * 3_600_000, 10 * 60_000),
+  MIGRATION_LOCK_RETRIES: integerEnv(0, 20, 3),
   REDIS_URL: redisUrlSchema.default("redis://127.0.0.1:6379"),
   SCORING_ACCESS_RATE_LIMIT_HMAC_SECRET: z.string().min(32).max(1_024).default("local-test-scoring-access-rate-key"),
   SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING: z.preprocess(
@@ -78,6 +113,32 @@ const rawConfigSchema = z.object({
     .default("local-test-scoring-fallback-code-key"),
   LOG_LEVEL: logLevelSchema.default("info"),
   DEEP_HEALTH_TOKEN: z.string().min(32).optional(),
+  // Separate operational secret for /internal/* maintenance triggers; never reuse the deep-health token.
+  MATCHDAY_MAINTENANCE_TOKEN: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(32).max(1_024).optional(),
+  ),
+  STRIPE_SECRET_KEY: z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).max(512).optional()),
+  STRIPE_WEBHOOK_SECRET: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).max(512).optional(),
+  ),
+  STRIPE_PRICE_ID_EVENT_PASS: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).max(255).optional(),
+  ),
+  STRIPE_PRICE_ID_ORGANISER_PRO: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).max(255).optional(),
+  ),
+  STRIPE_PRICE_ID_AI_TOPUP: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).max(255).optional(),
+  ),
+  STRIPE_API_TIMEOUT_MS: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(1_000).max(60_000).default(10_000),
+  ),
   IDENTITY_CSRF_HMAC_SECRET: z.string().min(32).max(1_024).default("local-test-csrf-secret-change-me-32"),
   IDENTITY_PROVIDER: identityProviderSchema.default("disabled"),
   IDENTITY_OIDC_ISSUER: optionalUrlSchema,
@@ -122,6 +183,14 @@ const rawConfigSchema = z.object({
     .default("false")
     .transform((value) => value === "true"),
   SMTP_FROM: z.string().min(1).default("Matchday <no-reply@matchday.test>"),
+  SMTP_REPLY_TO: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z
+      .string()
+      .max(320)
+      .regex(/^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/u, "SMTP_REPLY_TO must be a single email address")
+      .optional(),
+  ),
   SMTP_AUTH_USER: z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).max(512).optional()),
   SMTP_AUTH_PASS: z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).max(4_096).optional()),
   EMAIL_PROVIDER_WEBHOOK_SECRET: z.preprocess(
@@ -140,9 +209,31 @@ export type AppConfig = {
     allowedOrigins: readonly string[];
     trustedProxies: readonly string[];
     anonymousRateLimitMax: number;
+    publicReadRateLimitMax: number;
+    publicSseMaxStreamsPerClient: number;
+  };
+  /**
+   * Verifies the web BFF's signed end-user IP header. Kept outside `api` so
+   * safeConfigSummary never spreads the secret into diagnostics.
+   */
+  clientIpForwarding?: {
+    secret: string;
   };
   publicOrigin?: string;
   databaseUrl: string;
+  /** API pool sizing and per-session guards (postgres.js connection parameters). */
+  database: {
+    poolMax: number;
+    statementTimeoutMs: number;
+    lockTimeoutMs: number;
+    idleInTransactionSessionTimeoutMs: number;
+    connectTimeoutSeconds: number;
+  };
+  migrations: {
+    lockTimeoutMs: number;
+    statementTimeoutMs: number;
+    lockRetries: number;
+  };
   redisUrl: string;
   scoringAccess: {
     rateLimitHmacSecret: string;
@@ -156,6 +247,15 @@ export type AppConfig = {
   };
   logLevel: z.infer<typeof logLevelSchema>;
   deepHealthToken?: string;
+  /** Bearer for internal maintenance triggers (header x-matchday-maintenance-token). */
+  maintenanceToken?: string;
+  /** Stripe credentials; kept outside `api` so safeConfigSummary never spreads secrets. */
+  stripe?: {
+    secretKey?: string;
+    webhookSecret?: string;
+    prices: { eventPass?: string; organiserPro?: string; aiTopUp?: string };
+    timeoutMs: number;
+  };
   identity: {
     csrfHmacSecret: string;
     sessionCookieName: string;
@@ -189,6 +289,7 @@ export type AppConfig = {
     port: number;
     secure: boolean;
     from: string;
+    replyTo?: string;
     auth?: {
       username: string;
       password: string;
@@ -200,7 +301,13 @@ export type AppConfig = {
 function requireProductionValue(
   environment: AppEnvironment,
   source: NodeJS.ProcessEnv,
-  key: "DATABASE_URL" | "REDIS_URL" | "DEEP_HEALTH_TOKEN" | "API_ALLOWED_ORIGINS" | "OTEL_EXPORTER_OTLP_ENDPOINT",
+  key:
+    | "DATABASE_URL"
+    | "REDIS_URL"
+    | "DEEP_HEALTH_TOKEN"
+    | "API_ALLOWED_ORIGINS"
+    | "OTEL_EXPORTER_OTLP_ENDPOINT"
+    | "MATCHDAY_CLIENT_IP_SECRET",
 ) {
   if (environment === "production" && !source[key]) {
     throw new Error(`${key} must be explicitly configured in production`);
@@ -360,6 +467,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   requireProductionValue(parsed.APP_ENV, source, "REDIS_URL");
   requireProductionValue(parsed.APP_ENV, source, "DEEP_HEALTH_TOKEN");
   requireProductionValue(parsed.APP_ENV, source, "API_ALLOWED_ORIGINS");
+  requireProductionValue(parsed.APP_ENV, source, "MATCHDAY_CLIENT_IP_SECRET");
   if (parsed.OTEL_ENABLED) {
     requireProductionValue(parsed.APP_ENV, source, "OTEL_EXPORTER_OTLP_ENDPOINT");
   }
@@ -550,6 +658,30 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     }
   }
 
+  if (parsed.MATCHDAY_CLIENT_IP_SECRET) {
+    const clientIpSecret = parsed.MATCHDAY_CLIENT_IP_SECRET;
+    if (Buffer.byteLength(clientIpSecret, "utf8") < 32) {
+      throw new Error("MATCHDAY_CLIENT_IP_SECRET must be at least 32 bytes");
+    }
+    const otherSecrets: Array<[string, string | undefined]> = [
+      ["identity CSRF key", parsed.IDENTITY_CSRF_HMAC_SECRET],
+      ["identity flow seal key", parsed.IDENTITY_FLOW_SEAL_KEY],
+      ["identity provider-event key", parsed.IDENTITY_PROVIDER_EVENT_HMAC_SECRET],
+      ["OIDC client secret", parsed.IDENTITY_OIDC_CLIENT_SECRET],
+      ["deep health token", parsed.DEEP_HEALTH_TOKEN],
+      ["edge cache purge token", parsed.EDGE_CACHE_PURGE_BEARER_TOKEN],
+      ["email provider webhook secret", parsed.EMAIL_PROVIDER_WEBHOOK_SECRET],
+      ["SMTP password", parsed.SMTP_AUTH_PASS],
+      ...fallbackSecrets.map((secret): [string, string] => ["fallback-code HMAC secret", secret]),
+      ...rateLimitSecrets.map((secret): [string, string] => ["rate-limit HMAC secret", secret]),
+    ];
+    for (const [label, secret] of otherSecrets) {
+      if (secret && secret === clientIpSecret) {
+        throw new Error(`MATCHDAY_CLIENT_IP_SECRET and ${label} must be different`);
+      }
+    }
+  }
+
   if (parsed.EMAIL_PROVIDER_WEBHOOK_SECRET) {
     const webhookSecret = parsed.EMAIL_PROVIDER_WEBHOOK_SECRET;
     if (parsed.SMTP_AUTH_PASS && webhookSecret === parsed.SMTP_AUTH_PASS) {
@@ -568,6 +700,45 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       throw new Error("Email provider webhook secret and rate-limit HMAC secret must be different");
     }
   }
+
+  if (parsed.MATCHDAY_MAINTENANCE_TOKEN) {
+    const maintenanceToken = parsed.MATCHDAY_MAINTENANCE_TOKEN;
+    if (Buffer.byteLength(maintenanceToken, "utf8") < 32) {
+      throw new Error("MATCHDAY_MAINTENANCE_TOKEN must be at least 32 bytes");
+    }
+    const otherSecrets: Array<[string, string | undefined]> = [
+      ["deep health token", parsed.DEEP_HEALTH_TOKEN],
+      ["identity CSRF key", parsed.IDENTITY_CSRF_HMAC_SECRET],
+      ["client IP secret", parsed.MATCHDAY_CLIENT_IP_SECRET],
+      ["email provider webhook secret", parsed.EMAIL_PROVIDER_WEBHOOK_SECRET],
+      ["edge cache purge token", parsed.EDGE_CACHE_PURGE_BEARER_TOKEN],
+      ["Stripe webhook secret", parsed.STRIPE_WEBHOOK_SECRET],
+    ];
+    for (const [label, secret] of otherSecrets) {
+      if (secret && secret === maintenanceToken) {
+        throw new Error(`MATCHDAY_MAINTENANCE_TOKEN and ${label} must be different`);
+      }
+    }
+  }
+
+  const stripeConfigured =
+    parsed.STRIPE_SECRET_KEY ||
+    parsed.STRIPE_WEBHOOK_SECRET ||
+    parsed.STRIPE_PRICE_ID_EVENT_PASS ||
+    parsed.STRIPE_PRICE_ID_ORGANISER_PRO ||
+    parsed.STRIPE_PRICE_ID_AI_TOPUP;
+  const stripe: AppConfig["stripe"] = stripeConfigured
+    ? {
+        ...(parsed.STRIPE_SECRET_KEY ? { secretKey: parsed.STRIPE_SECRET_KEY } : {}),
+        ...(parsed.STRIPE_WEBHOOK_SECRET ? { webhookSecret: parsed.STRIPE_WEBHOOK_SECRET } : {}),
+        prices: {
+          ...(parsed.STRIPE_PRICE_ID_EVENT_PASS ? { eventPass: parsed.STRIPE_PRICE_ID_EVENT_PASS } : {}),
+          ...(parsed.STRIPE_PRICE_ID_ORGANISER_PRO ? { organiserPro: parsed.STRIPE_PRICE_ID_ORGANISER_PRO } : {}),
+          ...(parsed.STRIPE_PRICE_ID_AI_TOPUP ? { aiTopUp: parsed.STRIPE_PRICE_ID_AI_TOPUP } : {}),
+        },
+        timeoutMs: parsed.STRIPE_API_TIMEOUT_MS,
+      }
+    : undefined;
 
   let telemetryEndpoint: string | undefined;
   if (parsed.OTEL_EXPORTER_OTLP_ENDPOINT) {
@@ -621,6 +792,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     port: parsed.SMTP_PORT,
     secure: parsed.SMTP_SECURE,
     from: parsed.SMTP_FROM,
+    ...(parsed.SMTP_REPLY_TO ? { replyTo: parsed.SMTP_REPLY_TO } : {}),
     ...(parsed.SMTP_AUTH_USER && parsed.SMTP_AUTH_PASS
       ? { auth: { username: parsed.SMTP_AUTH_USER, password: parsed.SMTP_AUTH_PASS } }
       : {}),
@@ -634,9 +806,24 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       allowedOrigins,
       trustedProxies,
       anonymousRateLimitMax,
+      publicReadRateLimitMax: parsed.API_PUBLIC_READ_RATE_LIMIT_MAX,
+      publicSseMaxStreamsPerClient: parsed.API_PUBLIC_SSE_MAX_STREAMS_PER_CLIENT,
     },
+    ...(parsed.MATCHDAY_CLIENT_IP_SECRET ? { clientIpForwarding: { secret: parsed.MATCHDAY_CLIENT_IP_SECRET } } : {}),
     ...(publicOrigin ? { publicOrigin } : {}),
     databaseUrl: parsed.DATABASE_URL,
+    database: {
+      poolMax: parsed.DB_POOL_MAX,
+      statementTimeoutMs: parsed.DB_STATEMENT_TIMEOUT_MS,
+      lockTimeoutMs: parsed.DB_LOCK_TIMEOUT_MS,
+      idleInTransactionSessionTimeoutMs: parsed.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+      connectTimeoutSeconds: parsed.DB_CONNECT_TIMEOUT_SECONDS,
+    },
+    migrations: {
+      lockTimeoutMs: parsed.MIGRATION_LOCK_TIMEOUT_MS,
+      statementTimeoutMs: parsed.MIGRATION_STATEMENT_TIMEOUT_MS,
+      lockRetries: parsed.MIGRATION_LOCK_RETRIES,
+    },
     redisUrl: parsed.REDIS_URL,
     scoringAccess: {
       rateLimitHmacSecret: rateLimitHmacKeyring.primary.secret,
@@ -651,6 +838,8 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     },
     logLevel: parsed.LOG_LEVEL,
     ...(parsed.DEEP_HEALTH_TOKEN ? { deepHealthToken: parsed.DEEP_HEALTH_TOKEN } : {}),
+    ...(parsed.MATCHDAY_MAINTENANCE_TOKEN ? { maintenanceToken: parsed.MATCHDAY_MAINTENANCE_TOKEN } : {}),
+    ...(stripe ? { stripe } : {}),
     identity: {
       csrfHmacSecret: parsed.IDENTITY_CSRF_HMAC_SECRET,
       sessionCookieName:
@@ -697,6 +886,8 @@ export function safeConfigSummary(config: AppConfig) {
     },
     publicOrigin: config.publicOrigin,
     databaseUrl: redactUrl(config.databaseUrl),
+    database: config.database,
+    migrations: config.migrations,
     redisUrl: redactUrl(config.redisUrl),
     scoringAccess: {
       rateLimitHmacPrimaryVersion: config.scoringAccess.rateLimitHmacKeyring.primary.version,
@@ -711,6 +902,13 @@ export function safeConfigSummary(config: AppConfig) {
     },
     logLevel: config.logLevel,
     deepHealthTokenConfigured: Boolean(config.deepHealthToken),
+    maintenanceTokenConfigured: Boolean(config.maintenanceToken),
+    stripe: {
+      secretKeyConfigured: Boolean(config.stripe?.secretKey),
+      webhookSecretConfigured: Boolean(config.stripe?.webhookSecret),
+      timeoutMs: config.stripe?.timeoutMs,
+    },
+    clientIpForwardingConfigured: Boolean(config.clientIpForwarding),
     identity: {
       csrfHmacSecretConfigured: Boolean(config.identity.csrfHmacSecret),
       sessionCookieName: config.identity.sessionCookieName,
@@ -739,6 +937,7 @@ export function safeConfigSummary(config: AppConfig) {
       port: config.smtp.port,
       secure: config.smtp.secure,
       from: config.smtp.from,
+      replyToConfigured: Boolean(config.smtp.replyTo),
       authConfigured: Boolean(config.smtp.auth),
     },
     emailWebhookSecretConfigured: Boolean(config.emailWebhookSecret),

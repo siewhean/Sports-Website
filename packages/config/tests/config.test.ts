@@ -27,8 +27,19 @@ const edgeCacheConfig = {
   EDGE_CACHE_PURGE_ENDPOINT: "https://edge-bridge.matchday.example/purge",
   EDGE_CACHE_PURGE_BEARER_TOKEN: "e".repeat(32),
 };
+const clientIpConfig = { MATCHDAY_CLIENT_IP_SECRET: "client-ip-forwarding-secret-32-bytes" };
 
 describe("configuration", () => {
+  it("accepts an optional single SMTP reply-to address", () => {
+    expect(parseConfig({}).smtp.replyTo).toBeUndefined();
+    expect(parseConfig({ SMTP_REPLY_TO: "" }).smtp.replyTo).toBeUndefined();
+    const configured = parseConfig({ SMTP_REPLY_TO: "support@example.test" });
+    expect(configured.smtp.replyTo).toBe("support@example.test");
+    expect(safeConfigSummary(configured).smtp.replyToConfigured).toBe(true);
+    expect(() => parseConfig({ SMTP_REPLY_TO: "not-an-email" })).toThrow("single email address");
+    expect(() => parseConfig({ SMTP_REPLY_TO: "a@example.test, b@example.test" })).toThrow("single email address");
+  });
+
   it("provides safe local defaults", () => {
     const config = parseConfig({});
     expect(config.environment).toBe("local");
@@ -39,6 +50,30 @@ describe("configuration", () => {
     expect(config.scoringAccess.rateLimitHmacKeyring.primary).toMatchObject({ version: "v1" });
     expect(config.scoringAccess.rateLimitHmacKeyring.primary.secret).toHaveLength(34);
     expect(config.scoringAccess.fallbackCodeHmacSecret).toHaveLength(36);
+  });
+
+  it("bounds the database pool and request/migration timeouts with production-safe defaults", () => {
+    const config = parseConfig({});
+    expect(config.database).toEqual({
+      poolMax: 10,
+      statementTimeoutMs: 15_000,
+      lockTimeoutMs: 5_000,
+      idleInTransactionSessionTimeoutMs: 30_000,
+      connectTimeoutSeconds: 10,
+    });
+    expect(config.migrations).toEqual({ lockTimeoutMs: 5_000, statementTimeoutMs: 600_000, lockRetries: 3 });
+    const tuned = parseConfig({
+      DB_POOL_MAX: "16",
+      DB_STATEMENT_TIMEOUT_MS: "20000",
+      DB_LOCK_TIMEOUT_MS: "",
+      MIGRATION_LOCK_RETRIES: "0",
+    });
+    expect(tuned.database).toMatchObject({ poolMax: 16, statementTimeoutMs: 20_000, lockTimeoutMs: 5_000 });
+    expect(tuned.migrations.lockRetries).toBe(0);
+    expect(() => parseConfig({ DB_POOL_MAX: "0" })).toThrow();
+    expect(() => parseConfig({ DB_STATEMENT_TIMEOUT_MS: "unbounded" })).toThrow();
+    expect(() => parseConfig({ DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: "0" })).toThrow();
+    expect(safeConfigSummary(config).database).toEqual(config.database);
   });
 
   it("requires explicit production dependencies and health protection", () => {
@@ -65,6 +100,7 @@ describe("configuration", () => {
         OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
         GATE_D_STAGING_PUBLIC_RATE_LIMIT_MAX: "750",
         ...edgeCacheConfig,
+        ...clientIpConfig,
         ...oidcConfig,
       }),
     ).toThrow("only be configured in staging");
@@ -81,6 +117,7 @@ describe("configuration", () => {
       OTEL_ENABLED: "true",
       OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.internal:4318",
       ...edgeCacheConfig,
+      ...clientIpConfig,
       ...oidcConfig,
     };
     expect(() => parseConfig({ ...base, API_ALLOWED_ORIGINS: "*" })).toThrow("Wildcard");
@@ -166,6 +203,7 @@ describe("configuration", () => {
       DEEP_HEALTH_TOKEN: "a".repeat(32),
       IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
       ...edgeCacheConfig,
+      ...clientIpConfig,
       ...oidcConfig,
     };
     expect(parseConfig(production).telemetry.enabled).toBe(false);
@@ -362,6 +400,7 @@ describe("configuration", () => {
       DEEP_HEALTH_TOKEN: "h".repeat(32),
       IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
       ...edgeCacheConfig,
+      ...clientIpConfig,
       ...oidcConfig,
     };
 
@@ -588,6 +627,7 @@ describe("configuration", () => {
       port: 587,
       secure: true,
       from: "Matchday Notifications <notify@matchday.test>",
+      replyToConfigured: false,
       authConfigured: true,
     });
     expect(JSON.stringify(summary)).not.toContain("super-secret-mail-password");
@@ -603,5 +643,66 @@ describe("configuration", () => {
         SMTP_AUTH_PASS: "pass-only",
       }),
     ).toThrow("SMTP authentication requires both");
+  });
+
+  it("configures client IP forwarding and public read limits", () => {
+    const production = {
+      APP_ENV: "production",
+      DATABASE_URL: "postgres://user:secret@db.internal/matchday",
+      REDIS_URL: "redis://cache.internal:6379",
+      DEEP_HEALTH_TOKEN: "a".repeat(32),
+      IDENTITY_CSRF_HMAC_SECRET: "c".repeat(32),
+      ...edgeCacheConfig,
+      ...oidcConfig,
+    };
+    const local = parseConfig({});
+    expect(local.clientIpForwarding).toBeUndefined();
+    expect(local.api).toMatchObject({ publicReadRateLimitMax: 600, publicSseMaxStreamsPerClient: 16 });
+    expect(
+      parseConfig({ API_PUBLIC_READ_RATE_LIMIT_MAX: "1200", API_PUBLIC_SSE_MAX_STREAMS_PER_CLIENT: "4" }).api,
+    ).toMatchObject({ publicReadRateLimitMax: 1200, publicSseMaxStreamsPerClient: 4 });
+
+    expect(() => parseConfig(production)).toThrow("MATCHDAY_CLIENT_IP_SECRET must be explicitly configured");
+    expect(() => parseConfig({ ...production, MATCHDAY_CLIENT_IP_SECRET: "short" })).toThrow();
+    expect(() => parseConfig({ ...production, MATCHDAY_CLIENT_IP_SECRET: "c".repeat(32) })).toThrow(
+      "MATCHDAY_CLIENT_IP_SECRET and identity CSRF key must be different",
+    );
+    expect(() =>
+      parseConfig({ ...production, MATCHDAY_CLIENT_IP_SECRET: "scoring-access-rate-limit-secret-32" }),
+    ).toThrow("MATCHDAY_CLIENT_IP_SECRET and rate-limit HMAC secret must be different");
+
+    const config = parseConfig({ ...production, ...clientIpConfig });
+    expect(config.clientIpForwarding).toEqual({ secret: clientIpConfig.MATCHDAY_CLIENT_IP_SECRET });
+    const summary = JSON.stringify(safeConfigSummary(config));
+    expect(summary).toContain('"clientIpForwardingConfigured":true');
+    expect(summary).not.toContain(clientIpConfig.MATCHDAY_CLIENT_IP_SECRET);
+  });
+
+  it("keeps the maintenance token separate from the deep-health token and reads Stripe settings", () => {
+    const deep = "d".repeat(40);
+    expect(() => parseConfig({ DEEP_HEALTH_TOKEN: deep, MATCHDAY_MAINTENANCE_TOKEN: deep })).toThrow(
+      "MATCHDAY_MAINTENANCE_TOKEN and deep health token must be different",
+    );
+    expect(() => parseConfig({ MATCHDAY_MAINTENANCE_TOKEN: "short" })).toThrow();
+    const config = parseConfig({
+      DEEP_HEALTH_TOKEN: deep,
+      MATCHDAY_MAINTENANCE_TOKEN: "m".repeat(40),
+      STRIPE_SECRET_KEY: "sk_test_secret_value",
+      STRIPE_WEBHOOK_SECRET: "whsec_secret_value",
+      STRIPE_PRICE_ID_EVENT_PASS: "price_event",
+      STRIPE_API_TIMEOUT_MS: "5000",
+    });
+    expect(config.maintenanceToken).toBe("m".repeat(40));
+    expect(config.stripe).toEqual({
+      secretKey: "sk_test_secret_value",
+      webhookSecret: "whsec_secret_value",
+      prices: { eventPass: "price_event" },
+      timeoutMs: 5000,
+    });
+    const summary = JSON.stringify(safeConfigSummary(config));
+    expect(summary).not.toContain("sk_test_secret_value");
+    expect(summary).not.toContain("whsec_secret_value");
+    expect(summary).not.toContain("m".repeat(40));
+    expect(parseConfig({}).stripe).toBeUndefined();
   });
 });

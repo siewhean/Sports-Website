@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
 
@@ -318,14 +319,14 @@ export async function getFormatBuilderDocument(input: {
     );
   try {
     const [response, competitionResponse] = await Promise.all([
-      fetch(
+      apiFetch(
         new URL(
           `/api/v1/competitions/${encodeURIComponent(input.competitionId)}/divisions/${encodeURIComponent(input.divisionId)}/format-builder`,
           base,
         ),
         { cache: "no-store", headers: { accept: "application/json", cookie } },
       ),
-      fetch(new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}`, base), {
+      apiFetch(new URL(`/api/v1/competitions/${encodeURIComponent(input.competitionId)}`, base), {
         cache: "no-store",
         headers: { accept: "application/json", cookie },
       }),
@@ -377,7 +378,7 @@ export async function getFormatBuilderDocument(input: {
       );
 
     let templates = [] as FormatBuilderPageDocument["templates"];
-    const templateResponse = await fetch(
+    const templateResponse = await apiFetch(
       new URL(`/api/v1/organisations/${encodeURIComponent(context.organisationId)}/format-templates`, base),
       { cache: "no-store", headers: { accept: "application/json", cookie } },
     );

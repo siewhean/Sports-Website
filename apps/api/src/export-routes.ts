@@ -3,6 +3,9 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { IdentityRequestContext } from "./identity-routes.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 import type { ExportRuntime } from "./export-runtime.js";
+import { ApiError, ErrorCode } from "./errors.js";
+import { requireMutationSession } from "./mutation-guard.js";
+import { ARCHIVE_LIMITS, CompetitionArchiveSchema } from "./competition-archive-schema.js";
 
 const Id = Type.String({ format: "uuid" });
 const Json = Type.Unknown();
@@ -11,14 +14,17 @@ const ErrorResponse = Type.Object(
   { additionalProperties: false },
 );
 const ReadResponses = { 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse };
+const MutationResponses = { 400: ErrorResponse, 413: ErrorResponse, ...ReadResponses };
 
 export async function registerExportRoutes(
   app: FastifyInstance,
   options: {
     runtime: ExportRuntime;
     identityRequests?: IdentityRequestContext | undefined;
+    allowedOrigins?: readonly string[] | undefined;
   },
 ) {
+  const allowedOrigins = options.allowedOrigins ?? [];
   const tryActor = async (request: FastifyRequest): Promise<Phase3Actor | undefined> => {
     if (!options.identityRequests) return undefined;
     try {
@@ -140,9 +146,10 @@ export async function registerExportRoutes(
   app.post<{ Body: { archive: unknown } }>(
     "/api/v1/competitions/exports/validate-archive",
     {
+      bodyLimit: ARCHIVE_LIMITS.bodyBytes,
       schema: {
-        body: Type.Object({ archive: Json }),
-        response: { 200: Json, ...ReadResponses },
+        body: Type.Object({ archive: CompetitionArchiveSchema }, { additionalProperties: false }),
+        response: { 200: Json, ...MutationResponses },
         tags: ["exports"],
       },
     },
@@ -158,15 +165,26 @@ export async function registerExportRoutes(
   }>(
     "/api/v1/organisations/:organisationId/competitions/import-archive",
     {
+      bodyLimit: ARCHIVE_LIMITS.bodyBytes,
       schema: {
         params: Type.Object({ organisationId: Id }),
-        body: Type.Object({ archive: Json, renameSuffix: Type.Optional(Type.String()) }),
-        response: { 200: Json, ...ReadResponses },
+        body: Type.Object(
+          {
+            archive: CompetitionArchiveSchema,
+            renameSuffix: Type.Optional(Type.String({ minLength: 1, maxLength: 40 })),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: Json, ...MutationResponses },
         tags: ["exports"],
       },
     },
     async (request) => {
-      const actor = await requireActor(request);
+      // Import writes a whole competition: same Origin + CSRF guard as every other cookie mutation.
+      if (!options.identityRequests)
+        throw new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Authentication required");
+      const session = await requireMutationSession(request, options.identityRequests, allowedOrigins);
+      const actor = { accountId: session.account.id };
       return options.runtime.importCompetitionArchive(
         actor,
         request.params.organisationId,
