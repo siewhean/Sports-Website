@@ -174,7 +174,7 @@ jobs:
           pnpm openapi:check
           test -s apps/api/openapi.generated.json
           test -s artifacts/deployment-manifest.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.shard == '1/2'
         with:
           name: verified-contracts-and-deployment
@@ -305,7 +305,7 @@ jobs:
       - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium webkit
       - name: Generate linux baselines
         run: pnpm --filter @matchday/web exec env -u NO_COLOR playwright test --grep 'visual baseline(s)?' --update-snapshots
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: visual-baselines-linux
           path: apps/web/tests/**/*-linux.png
