@@ -117,6 +117,32 @@ describe("SmtpEmailProvider", () => {
     );
   });
 
+  it("sets Reply-To only when configured and rejects an invalid reply-to mailbox", async () => {
+    const message = {
+      to: "organiser@example.test",
+      subject: "Test",
+      text: "Test body",
+      html: "<p>Test body</p>",
+      template: { id: "test", version: 1 },
+      idempotencyKey: "email-reply-to",
+      notificationId: "notification-reply-to",
+    };
+    const sendMail = vi.fn<SmtpTransport["sendMail"]>().mockResolvedValue({ messageId: "m1" });
+
+    await new SmtpEmailProvider({ sendMail }, { ...MAILPIT_SMTP_DEFAULTS, replyTo: "support@example.test" }).send(
+      message,
+    );
+    expect(sendMail).toHaveBeenLastCalledWith(expect.objectContaining({ replyTo: "support@example.test" }));
+
+    await new SmtpEmailProvider({ sendMail }, MAILPIT_SMTP_DEFAULTS).send(message);
+    expect(sendMail.mock.calls.at(-1)?.[0]).not.toHaveProperty("replyTo");
+
+    expect(
+      () =>
+        new SmtpEmailProvider({ sendMail }, { ...MAILPIT_SMTP_DEFAULTS, replyTo: "a@example.test, b@example.test" }),
+    ).toThrow("exactly one mailbox");
+  });
+
   it("rejects multiple recipients without calling the SMTP transport", async () => {
     const sendMail = vi.fn<SmtpTransport["sendMail"]>();
     const provider = new SmtpEmailProvider({ sendMail }, MAILPIT_SMTP_DEFAULTS);

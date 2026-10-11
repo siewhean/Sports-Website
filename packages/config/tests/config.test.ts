@@ -30,6 +30,16 @@ const edgeCacheConfig = {
 const clientIpConfig = { MATCHDAY_CLIENT_IP_SECRET: "client-ip-forwarding-secret-32-bytes" };
 
 describe("configuration", () => {
+  it("accepts an optional single SMTP reply-to address", () => {
+    expect(parseConfig({}).smtp.replyTo).toBeUndefined();
+    expect(parseConfig({ SMTP_REPLY_TO: "" }).smtp.replyTo).toBeUndefined();
+    const configured = parseConfig({ SMTP_REPLY_TO: "support@example.test" });
+    expect(configured.smtp.replyTo).toBe("support@example.test");
+    expect(safeConfigSummary(configured).smtp.replyToConfigured).toBe(true);
+    expect(() => parseConfig({ SMTP_REPLY_TO: "not-an-email" })).toThrow("single email address");
+    expect(() => parseConfig({ SMTP_REPLY_TO: "a@example.test, b@example.test" })).toThrow("single email address");
+  });
+
   it("provides safe local defaults", () => {
     const config = parseConfig({});
     expect(config.environment).toBe("local");
@@ -617,6 +627,7 @@ describe("configuration", () => {
       port: 587,
       secure: true,
       from: "Matchday Notifications <notify@matchday.test>",
+      replyToConfigured: false,
       authConfigured: true,
     });
     expect(JSON.stringify(summary)).not.toContain("super-secret-mail-password");
