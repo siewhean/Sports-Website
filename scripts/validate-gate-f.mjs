@@ -14,6 +14,11 @@ export const GATE_F_SCHEMA_VERSION = "2026.09.gate-f-production";
 export const GATE_F_ASSURANCE_PROFILE = "automated-only-owner-waived-v2";
 
 export const REQUIRED_HOSTED_CI_JOBS = ["secrets", "quality-fast", "integration", "browser-e2e", "gate-d-real-e2e"];
+export const REQUIRED_PRODUCTION_OPERATIONS = Array.from(
+  { length: 18 },
+  (_, index) => `OPS-${String(index + 1).padStart(3, "0")}`,
+);
+
 export const REQUIRED_WAIVERS = [
   "independent_manual_pentest",
   "independent_gate_f_reviewer",
@@ -135,42 +140,36 @@ export async function validateGateF(candidateSha, options = {}) {
     throw new Error("Simulation-only evidence cannot certify production");
   requireExact(sim.verdict, "PASS", "Simulation verdict");
   requireSha(sim.candidate_sha, "Simulation candidate_sha", expectedSha);
-  requireHash(sim.receipt_sha256, "Simulation receipt_sha256");
+  const { receipt_sha256: simulationHash, ...simulationPayload } = requireObject(sim, "Simulation receipt");
+  const actualSimulationHash = createHash("sha256")
+    .update(JSON.stringify(simulationPayload, null, 2))
+    .digest("hex");
+  requireExact(
+    requireHash(simulationHash, "Simulation receipt_sha256"),
+    actualSimulationHash,
+    "Simulation receipt checksum",
+  );
 
   await validateProductionBackup(cert, expectedSha, artifactsDir, certFile);
 
-  // Validate that simulation receipts match expected results and simulation cannot certify production
-  if (cert.simulation?.receipts) {
-    const receipts = cert.simulation.receipts;
-    for (const [key, val] of Object.entries(receipts)) {
-      if (cert.simulation.conclusion === "PASS") {
-        const allowedSuccess = ["PASS", "PASS_AUTOMATED_SCOPE", "PASS_TECHNICAL_PACKAGE_WITH_DEFERMENT"];
-        if (!allowedSuccess.includes(val)) {
-          throw new Error(`Gate F simulation declared PASS but component ${key} has nonpassing status: ${val}`);
-        }
-      }
-    }
-  }
-
-  return {
-    valid: true,
-    gate: "F",
-    candidate_sha: expectedSha,
-    production_hostname: prod.hostname,
-    assurance_profile: GATE_F_ASSURANCE_PROFILE,
-  };
+  // ADR-0005 requires every machine-verifiable operation. The current input
+  // format independently validates backup only: CI/deployment and other OPS
+  // statuses remain declarations, even when their checksums are consistent.
+  // Fail closed until retained operational captures and exact hosted/deployed
+  // identity have independent semantic validators. Source audits remain usable.
+  const error = new Error(
+    "Gate F production certification unsupported: independent hosted CI, deployed identity, " +
+      `and retained operational evidence for ${REQUIRED_PRODUCTION_OPERATIONS.join(", ")} ` +
+      "are not fully validated. Backup proof, simulation receipts and declared PASS statuses " +
+      "cannot certify production; source certification remains separate.",
+  );
+  error.code = "GATE_F_PRODUCTION_EVIDENCE_UNSUPPORTED";
+  throw error;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  validateGateF(process.argv[2] ?? process.env.CANDIDATE_SHA)
-    .then((report) => {
-      console.log("✓ GATE F PRODUCTION CERTIFICATION VERIFIED");
-      console.log(`  Candidate SHA: ${report.candidate_sha}`);
-      console.log(`  Hostname: ${report.production_hostname}`);
-      console.log(`  Assurance Profile: ${report.assurance_profile}`);
-    })
-    .catch((error) => {
-      console.error(`✗ GATE F VALIDATION FAILED: ${error.message}`);
-      process.exit(1);
-    });
+  validateGateF(process.argv[2] ?? process.env.CANDIDATE_SHA).catch((error) => {
+    console.error(`✗ GATE F VALIDATION FAILED: ${error.message}`);
+    process.exit(1);
+  });
 }
