@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
@@ -74,7 +75,7 @@ export async function forwardGateCC4BinaryMutation(request: NextRequest, path: s
   if (!cookie) return error(401, "AUTH_REQUIRED", "An authenticated session is required");
 
   try {
-    const identityResponse = await fetch(new URL("/api/v1/identity/me", base), {
+    const identityResponse = await apiFetch(new URL("/api/v1/identity/me", base), {
       cache: "no-store",
       headers: { accept: "application/json", cookie },
     });
@@ -84,7 +85,7 @@ export async function forwardGateCC4BinaryMutation(request: NextRequest, path: s
     const csrf = csrfToken(await identityResponse.json().catch(() => null));
     if (!csrf) return error(502, "IDENTITY_RESPONSE_INVALID", "The identity service returned an invalid response");
 
-    const upstream = await fetch(new URL(path, base), {
+    const upstream = await apiFetch(new URL(path, base), {
       method: "POST",
       cache: "no-store",
       headers: {

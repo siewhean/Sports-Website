@@ -78,7 +78,7 @@ export function createProductionFreezeProvider(env = {}, options = {}) {
       const sql = `SELECT json_build_object(
         'timestamp', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
         'competitions', COALESCE((SELECT json_agg(json_build_object('id', id, 'name', name, 'status', status)) FROM competitions), '[]'::json),
-        'scoringMatches', COALESCE((SELECT json_agg(json_build_object('id', id, 'competition_id', competition_id, 'state', state)) FROM matches WHERE state = 'in_progress'), '[]'::json)
+        'scoringMatches', COALESCE((SELECT json_agg(json_build_object('id', m.id, 'competition_id', m.competition_id, 'state', m.state)) FROM matches m WHERE m.state = 'in_progress' AND EXISTS (SELECT 1 FROM competitions c WHERE c.id = m.competition_id AND c.status IN ('active', 'live'))), '[]'::json)
       );`;
 
       const composeArgs = [

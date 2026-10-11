@@ -20,7 +20,7 @@ export type SourceStatus = "SOURCE_COMPLETE" | "SOURCE_PARTIAL" | "SOURCE_MISSIN
 export type OperationalEvidenceStatus =
   "PRODUCTION_EVIDENCE_PENDING" | "EXTERNAL_PROVIDER_PENDING" | "VERIFIED" | "NOT_REQUIRED";
 
-export type OpsRequirementId = "OPS-004" | "OPS-005" | "OPS-006" | "OPS-007" | "OPS-008" | "OPS-016";
+export type OpsRequirementId = "OPS-004" | "OPS-005" | "OPS-006" | "OPS-007" | "OPS-008" | "OPS-016" | "OPS-018";
 
 export interface OperationalItemClassification {
   readonly reqId: OpsRequirementId;
@@ -83,7 +83,7 @@ export const OPERATIONAL_CONTROLS_INVENTORY: readonly OperationalItemClassificat
   {
     reqId: "OPS-004",
     name: "Monitoring Dashboards",
-    sourceStatus: "SOURCE_COMPLETE",
+    sourceStatus: "SOURCE_PARTIAL",
     operationalStatus: "PRODUCTION_EVIDENCE_PENDING",
     priority: "P0",
     description:
@@ -104,13 +104,15 @@ export const OPERATIONAL_CONTROLS_INVENTORY: readonly OperationalItemClassificat
   {
     reqId: "OPS-005",
     name: "Alerting Rules",
-    sourceStatus: "SOURCE_COMPLETE",
+    sourceStatus: "SOURCE_PARTIAL",
     operationalStatus: "PRODUCTION_EVIDENCE_PENDING",
     priority: "P0",
     description:
       "Alerting rules across critical operational conditions: service unavailable, latency breach, worker dead, and backup failure.",
     sourceComponents: [
       "packages/observability/src/error-reporter.ts (Sanitized exception capture & propagation)",
+      "packages/observability/src/sentry.ts (Opt-in scrubbed API/worker error delivery)",
+      "apps/web/lib/sentry-config.ts (Opt-in scrubbed browser/server error delivery)",
       "scripts/run-gate-f-ops-audit.mjs (Configured alert routes & drill verification)",
     ],
     pendingPrerequisites: [
@@ -153,7 +155,7 @@ export const OPERATIONAL_CONTROLS_INVENTORY: readonly OperationalItemClassificat
   {
     reqId: "OPS-008",
     name: "Synthetic Health Monitoring",
-    sourceStatus: "SOURCE_COMPLETE",
+    sourceStatus: "SOURCE_PARTIAL",
     operationalStatus: "PRODUCTION_EVIDENCE_PENDING",
     priority: "P0",
     description:
@@ -172,7 +174,7 @@ export const OPERATIONAL_CONTROLS_INVENTORY: readonly OperationalItemClassificat
   {
     reqId: "OPS-016",
     name: "Cost Monitoring & Controls",
-    sourceStatus: "SOURCE_COMPLETE",
+    sourceStatus: "SOURCE_PARTIAL",
     operationalStatus: "EXTERNAL_PROVIDER_PENDING",
     priority: "P1",
     description:
@@ -183,6 +185,24 @@ export const OPERATIONAL_CONTROLS_INVENTORY: readonly OperationalItemClassificat
     pendingPrerequisites: [
       "Cloud provider billing account budget alert setup",
       "Provider billing anomaly detection receipt conforming to validate-external-evidence.mjs",
+    ],
+  },
+  {
+    reqId: "OPS-018",
+    name: "Feature Flag Administration",
+    sourceStatus: "SOURCE_COMPLETE",
+    operationalStatus: "PRODUCTION_EVIDENCE_PENDING",
+    priority: "P0",
+    description:
+      "Privileged administration UI, persistent overrides and audit logging; production operator proof remains required.",
+    sourceComponents: [
+      "apps/web/app/internal/feature-flags/page.tsx",
+      "apps/web/components/phase3/FeatureFlagsAdmin.tsx",
+      "apps/api/src/admin-routes.ts",
+      "packages/feature-flags/src/postgres-storage.ts",
+    ],
+    pendingPrerequisites: [
+      "Exact-release production operator access, authorization-denial and audited toggle evidence",
     ],
   },
 ] as const;
@@ -217,7 +237,8 @@ export const ALERT_ROUTE_DEFINITIONS: readonly AlertRouteDefinition[] = [
     target: "ops_alerts",
     severity: "S2_HIGH",
     description: "Daily scheduled database backup failure or WAL archive pipeline error",
-    threshold: "backup_exit_code != 0 OR wal_archive_lag > 30m",
+    threshold:
+      "backup_exit_code != 0 OR missing daily success heartbeat; WAL archival remains a separate unmet requirement",
   },
 ] as const;
 

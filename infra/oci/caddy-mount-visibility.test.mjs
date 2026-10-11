@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, rmSync, existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 
-const PINNED_CADDY_IMAGE = "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d";
+const PINNED_CADDY_IMAGE = "caddy:2.11-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f";
 const TIMEOUT_MS = 15000;
 
 test("Docker-backed: Caddy directory bind-mount atomic replacement visibility", async (t) => {

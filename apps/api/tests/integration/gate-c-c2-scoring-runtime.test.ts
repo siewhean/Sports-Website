@@ -1090,8 +1090,15 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
       { event_type: "result.corrected", count: 1 },
       { event_type: "result.finalised", count: 1 },
       { event_type: "result.reopened", count: 1 },
-      { event_type: "scoring_event.appended", count: 3 },
+      // Per-point outbox rows are coalesced to one per match (latest aggregate
+      // version); audit_events above keeps one immutable row per point.
+      { event_type: "scoring_event.appended", count: 1 },
     ]);
+    const [appendedOutbox] = await sql<{ aggregate_version: number }[]>`
+      SELECT (payload->>'aggregate_version')::integer aggregate_version FROM outbox_events
+      WHERE aggregate_id=${match.id} AND event_type='scoring_event.appended'`;
+    // The coalesced row carries the newest of the three appended versions.
+    expect(appendedOutbox?.aggregate_version).toBeGreaterThanOrEqual(3);
     expect(
       await sql`SELECT schedule_version,result_version FROM competition_publications
         WHERE competition_id=${competition.id}`,

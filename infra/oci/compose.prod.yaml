@@ -1,8 +1,11 @@
 name: matchday-prod
 
+# Application images (api, web, worker, migrate) are built and pushed to GHCR by CI and pulled by
+# deploy-prod.sh by exact-SHA tag. The build: blocks remain only for `deploy-prod.sh --build-locally`.
+
 services:
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+    image: otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6
     profiles: [observability]
     restart: unless-stopped
     user: "0:0"
@@ -51,7 +54,7 @@ services:
         ipv4_address: 172.31.0.2
 
   redis:
-    image: redis:8.2-alpine@sha256:30abb90e62f14b737010746def3ba99cc79fe19dcdb3d37b41f21fc62e7da19d
+    image: redis:8.10-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
     restart: unless-stopped
     mem_limit: 768m
     cpus: 0.5
@@ -70,6 +73,7 @@ services:
         ipv4_address: 172.31.0.3
 
   migrate:
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-migrate:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -92,6 +96,7 @@ services:
     profiles: [migration]
 
   api:
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-api:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -133,6 +138,7 @@ services:
           - matchday-prod-api
 
   web:
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-web:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -141,6 +147,7 @@ services:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
         BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
         MATCHDAY_PUBLIC_ORIGIN: ${MATCHDAY_PUBLIC_ORIGIN}
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
     restart: unless-stopped
     mem_limit: 1536m
     cpus: 1.0
@@ -148,9 +155,22 @@ services:
       APP_ENV: ${APP_ENV}
       NODE_ENV: production
       PORT: 3000
+      # Sentry stays off while these are blank. api/worker receive SENTRY_DSN via env_file.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
       MATCHDAY_PUBLIC_ORIGIN: ${MATCHDAY_PUBLIC_ORIGIN}
       MATCHDAY_API_BASE_URL: https://${OCI_PUBLIC_HOSTNAME}
       SCORING_SESSION_SEAL_KEY: ${SCORING_SESSION_SEAL_KEY}
+      # Signs the end-user IP on BFF->API calls; must equal the API's value (.env.prod).
+      MATCHDAY_CLIENT_IP_SECRET: ${MATCHDAY_CLIENT_IP_SECRET:?MATCHDAY_CLIENT_IP_SECRET is required}
+      # Caddy is the only ingress; the right-most X-Forwarded-For hop is Caddy's.
+      MATCHDAY_CLIENT_IP_SOURCE: proxy
+    # Resolve the public hostname to Caddy on the internal bridge so BFF->API
+    # calls keep a valid TLS name and Caddy's blue/green routing, but never
+    # hairpin through the VM's public NAT (extra latency, NAT-dependent, and
+    # every call arriving from one opaque public address).
+    extra_hosts:
+      - "${OCI_PUBLIC_HOSTNAME}:172.31.0.10"
     depends_on:
       api: { condition: service_healthy }
     expose: ["3000"]
@@ -173,6 +193,7 @@ services:
           - matchday-prod-web
 
   api-green:
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-api:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -214,6 +235,7 @@ services:
           - matchday-prod-api-green
 
   web-green:
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-web:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -222,6 +244,7 @@ services:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
         BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
         MATCHDAY_PUBLIC_ORIGIN: ${MATCHDAY_PUBLIC_ORIGIN}
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
     restart: unless-stopped
     mem_limit: 1536m
     cpus: 1.0
@@ -229,9 +252,22 @@ services:
       APP_ENV: ${APP_ENV}
       NODE_ENV: production
       PORT: 3000
+      # Sentry stays off while these are blank. api/worker receive SENTRY_DSN via env_file.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
       MATCHDAY_PUBLIC_ORIGIN: ${MATCHDAY_PUBLIC_ORIGIN}
       MATCHDAY_API_BASE_URL: https://${OCI_PUBLIC_HOSTNAME}
       SCORING_SESSION_SEAL_KEY: ${SCORING_SESSION_SEAL_KEY}
+      # Signs the end-user IP on BFF->API calls; must equal the API's value (.env.prod).
+      MATCHDAY_CLIENT_IP_SECRET: ${MATCHDAY_CLIENT_IP_SECRET:?MATCHDAY_CLIENT_IP_SECRET is required}
+      # Caddy is the only ingress; the right-most X-Forwarded-For hop is Caddy's.
+      MATCHDAY_CLIENT_IP_SOURCE: proxy
+    # Resolve the public hostname to Caddy on the internal bridge so BFF->API
+    # calls keep a valid TLS name and Caddy's blue/green routing, but never
+    # hairpin through the VM's public NAT (extra latency, NAT-dependent, and
+    # every call arriving from one opaque public address).
+    extra_hosts:
+      - "${OCI_PUBLIC_HOSTNAME}:172.31.0.10"
     depends_on:
       api-green: { condition: service_healthy }
     expose: ["3000"]
@@ -255,6 +291,7 @@ services:
 
   worker:
     stop_grace_period: 70s
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-worker:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -284,6 +321,7 @@ services:
 
   worker-green:
     stop_grace_period: 70s
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-worker:${CANDIDATE_SHA}
     build:
       context: ../..
       dockerfile: infra/oci/Dockerfile
@@ -310,6 +348,62 @@ services:
         aliases:
           - prod-worker-green
           - matchday-prod-worker-green
+
+  # One-shot backup/restore tooling (profile `backup`). Scheduled by the host systemd timer in
+  # infra/oci/backup/ (docker compose run --rm backup backup); never started by `up`.
+  # Image = the digest-pinned Postgres base + bash/curl/age (see infra/oci/backup/Dockerfile).
+  backup:
+    build:
+      context: ./backup
+      dockerfile: Dockerfile
+      labels:
+        org.opencontainers.image.revision: ${CANDIDATE_SHA}
+        org.opencontainers.image.source: https://github.com/siewhean/Sports-Website
+    # Built and pushed by CI like the application images. The timer runs without CANDIDATE_SHA, hence :latest (main).
+    image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-backup:${CANDIDATE_SHA:-latest}
+    profiles: [backup]
+    restart: "no"
+    user: "${MATCHDAY_BACKUP_UID:-1000}:${MATCHDAY_BACKUP_GID:-1000}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 0.5
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      BACKUP_DIR: /backups
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-us-phoenix-1}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-postgres}
+      BACKUP_S3_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      BACKUP_S3_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:-}
+      BACKUP_ALLOW_PLAINTEXT: ${BACKUP_ALLOW_PLAINTEXT:-0}
+      BACKUP_RETAIN_DAILY: ${BACKUP_RETAIN_DAILY:-14}
+      BACKUP_RETAIN_WEEKLY: ${BACKUP_RETAIN_WEEKLY:-8}
+      BACKUP_RETAIN_PREMIGRATION: ${BACKUP_RETAIN_PREMIGRATION:-10}
+      BACKUP_MAX_TOTAL_BYTES: ${BACKUP_MAX_TOTAL_BYTES:-16106127360}
+      BACKUP_HEARTBEAT_URL: ${BACKUP_HEARTBEAT_URL:-}
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      # The postgres base image declares this path a VOLUME; keep it from creating anonymous volumes.
+      - /var/lib/postgresql:size=1m
+    volumes:
+      - type: bind
+        source: ${MATCHDAY_BACKUP_DIR:-/var/lib/matchday/backups}
+        target: /backups
+        bind:
+          create_host_path: false
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks:
+      backend:
+        ipv4_address: 172.31.0.15
 
 volumes:
   matchday-prod-postgres:

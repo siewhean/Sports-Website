@@ -654,17 +654,18 @@ describe("Phase 2 transactional Canoe Polo runtime", () => {
           (SELECT before_state IS NULL FROM audit_events
              WHERE request_id=${goalRequestId}
                AND action='scoring_event.appended') AS audit_before_state_is_null,
+          -- Per-point outbox rows are coalesced into one row per match.
           (SELECT count(*)::integer FROM outbox_events
-             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}
+             WHERE idempotency_key=${`scoring_event.appended:match:${firstMatch.id}`}
                AND event_type='scoring_event.appended'
                AND aggregate_type='match'
                AND aggregate_id=${firstMatch.id}) AS outbox_count,
           (SELECT jsonb_typeof(payload) FROM outbox_events
-             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}) AS outbox_payload_type,
+             WHERE idempotency_key=${`scoring_event.appended:match:${firstMatch.id}`}) AS outbox_payload_type,
           (SELECT payload->>'competition_id' FROM outbox_events
-             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}) AS outbox_competition_id,
+             WHERE idempotency_key=${`scoring_event.appended:match:${firstMatch.id}`}) AS outbox_competition_id,
           (SELECT payload->>'match_id' FROM outbox_events
-             WHERE idempotency_key=${`${goalRequestId}:scoring_event.appended:${firstMatch.id}`}) AS outbox_match_id
+             WHERE idempotency_key=${`scoring_event.appended:match:${firstMatch.id}`}) AS outbox_match_id
       `,
     ).toEqual([
       {

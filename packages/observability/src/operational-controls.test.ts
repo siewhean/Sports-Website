@@ -18,7 +18,7 @@ describe("operational controls inventory and taxonomy", () => {
     const inventory = getOperationalControlsInventory();
     const reqIds = inventory.map((item) => item.reqId);
 
-    expect(reqIds).toEqual(["OPS-004", "OPS-005", "OPS-006", "OPS-007", "OPS-008", "OPS-016"]);
+    expect(reqIds).toEqual(["OPS-004", "OPS-005", "OPS-006", "OPS-007", "OPS-008", "OPS-016", "OPS-018"]);
   });
 
   it("strictly complies with the required source and evidence taxonomies", () => {
@@ -33,19 +33,19 @@ describe("operational controls inventory and taxonomy", () => {
     }
   });
 
-  it("classifies OPS-004 correctly as SOURCE_COMPLETE with PRODUCTION_EVIDENCE_PENDING", () => {
+  it("classifies OPS-004 correctly as SOURCE_PARTIAL with PRODUCTION_EVIDENCE_PENDING", () => {
     const item = getOperationalControl("OPS-004");
     expect(item).toBeDefined();
-    expect(item?.sourceStatus).toBe("SOURCE_COMPLETE");
+    expect(item?.sourceStatus).toBe("SOURCE_PARTIAL");
     expect(item?.operationalStatus).toBe("PRODUCTION_EVIDENCE_PENDING");
     expect(item?.priority).toBe("P0");
     expect(item?.sourceComponents.length).toBeGreaterThan(0);
   });
 
-  it("classifies OPS-005 correctly as SOURCE_COMPLETE with PRODUCTION_EVIDENCE_PENDING", () => {
+  it("classifies OPS-005 correctly as SOURCE_PARTIAL with PRODUCTION_EVIDENCE_PENDING", () => {
     const item = getOperationalControl("OPS-005");
     expect(item).toBeDefined();
-    expect(item?.sourceStatus).toBe("SOURCE_COMPLETE");
+    expect(item?.sourceStatus).toBe("SOURCE_PARTIAL");
     expect(item?.operationalStatus).toBe("PRODUCTION_EVIDENCE_PENDING");
     expect(item?.priority).toBe("P0");
     expect(item?.sourceComponents.length).toBeGreaterThan(0);
@@ -70,19 +70,19 @@ describe("operational controls inventory and taxonomy", () => {
     expect(item?.sourceComponents.length).toBeGreaterThan(0);
   });
 
-  it("classifies OPS-008 correctly as SOURCE_COMPLETE with PRODUCTION_EVIDENCE_PENDING", () => {
+  it("classifies OPS-008 correctly as SOURCE_PARTIAL with PRODUCTION_EVIDENCE_PENDING", () => {
     const item = getOperationalControl("OPS-008");
     expect(item).toBeDefined();
-    expect(item?.sourceStatus).toBe("SOURCE_COMPLETE");
+    expect(item?.sourceStatus).toBe("SOURCE_PARTIAL");
     expect(item?.operationalStatus).toBe("PRODUCTION_EVIDENCE_PENDING");
     expect(item?.priority).toBe("P0");
     expect(item?.sourceComponents.length).toBeGreaterThan(0);
   });
 
-  it("classifies OPS-016 correctly as SOURCE_COMPLETE with EXTERNAL_PROVIDER_PENDING", () => {
+  it("classifies OPS-016 correctly as SOURCE_PARTIAL with EXTERNAL_PROVIDER_PENDING", () => {
     const item = getOperationalControl("OPS-016");
     expect(item).toBeDefined();
-    expect(item?.sourceStatus).toBe("SOURCE_COMPLETE");
+    expect(item?.sourceStatus).toBe("SOURCE_PARTIAL");
     expect(item?.operationalStatus).toBe("EXTERNAL_PROVIDER_PENDING");
     expect(item?.priority).toBe("P1");
     expect(item?.sourceComponents.length).toBeGreaterThan(0);

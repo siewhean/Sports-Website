@@ -1,18 +1,18 @@
 import { SiteHeader, SiteFooter } from "@/components/foundation/SiteChrome";
 import { messages } from "@matchday/ui";
 import styles from "./PricingPage.module.css";
-import { readCurrentIdentitySession } from "@/lib/identity-session.server";
 
 export const metadata = {
   title: messages.metadata.pricingTitle,
   description: messages.metadata.pricingDescription,
+  alternates: { canonical: "/pricing" },
 };
 
 const TIERS = [
   {
     name: messages.pricing.starterName,
     tier: "free",
-    price: "$0",
+    price: messages.pricing.freePrice,
     period: messages.pricing.forever,
     description: messages.pricing.starterDescription,
     features: messages.pricing.freeFeatures,
@@ -22,7 +22,7 @@ const TIERS = [
   {
     name: messages.pricing.eventPassName,
     tier: "event_pass",
-    price: "$49",
+    price: messages.pricing.eventPassPrice,
     period: messages.pricing.perEvent,
     badge: messages.pricing.eventPassBadge,
     description: messages.pricing.eventPassDescription,
@@ -33,19 +33,20 @@ const TIERS = [
   {
     name: messages.pricing.proName,
     tier: "organiser_pro",
-    price: "$99",
+    price: messages.pricing.proPrice,
     period: messages.pricing.perMonth,
     badge: messages.pricing.proBadge,
     description: messages.pricing.proDescription,
     features: messages.pricing.proFeatures,
-    cta: messages.pricing.subscribePro,
-    href: "/organiser",
+    cta: messages.pricing.contactUs,
+    // There is no self-serve subscription flow yet, so Organiser Pro is sales-assisted.
+    href: messages.pricing.contactHref,
   },
 ];
 
-export default async function PricingPage() {
-  const session = await readCurrentIdentitySession();
-  const viewer = session.status === "authenticated" ? session.identity : null;
+export default function PricingPage() {
+  // Identical for every visitor: the signed-in name is filled in client-side by IdentityStatus.
+  const viewer = null;
   return (
     <div className={styles.container}>
       <SiteHeader viewer={viewer} />

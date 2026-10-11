@@ -130,7 +130,10 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
       type: "checkout.session.completed",
       data: {
         object: {
+          id: `cs_${randomUUID()}`,
+          payment_status: "paid",
           customer: "cus_123",
+          customer_details: { email: "buyer@example.test", name: "Buyer Name", phone: "+6500000000" },
           metadata: {
             organisation_id: organisationId,
             competition_id: competitionA,
@@ -153,6 +156,16 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
 
     // Replay should be ignored idempotently
     const replayResult = await entitlementRuntime.processBillingWebhook(sigHeader, rawPayload, webhookPayload, secret);
+    // Only the allow-listed projection is retained: no customer PII at rest.
+    const [stored] = await client<{ payload: Record<string, unknown>; kind: string }[]>`
+      SELECT payload, jsonb_typeof(payload) AS kind FROM billing_webhook_receipts WHERE provider_event_id=${eventId}`;
+    expect(stored?.kind).toBe("object");
+    expect(JSON.stringify(stored?.payload)).not.toContain("buyer@example.test");
+    expect(JSON.stringify(stored?.payload)).not.toContain("customer_details");
+    expect(stored?.payload).toMatchObject({
+      id: eventId,
+      data: { object: { amount_total: 4900, currency: "usd", payment_status: "paid", customer: "cus_123" } },
+    });
     expect(replayResult.processed).toBe(false);
 
     const [tierA, tierB] = await client<{ tier: string }[]>`

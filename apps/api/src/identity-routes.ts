@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { calculatePKCECodeChallenge, randomNonce, randomPKCECodeVerifier, randomState } from "openid-client";
 import { ApiError, ErrorCode } from "./errors.js";
 import { IdentityFlowSealer, identityFlowTtlMs } from "./identity-flow.js";
+import { requireMutationSession as requireSharedMutationSession } from "./mutation-guard.js";
 import { IdentityProviderEventVerifier, type IdentityProviderRevocationEvent } from "./identity-provider-events.js";
 import {
   IdentityApiRuntime,
@@ -216,15 +217,8 @@ export async function registerIdentityRoutes(
     providerEvents?: ProviderEventPolicy;
   },
 ): Promise<void> {
-  const requireMutationSession = async (request: FastifyRequest) => {
-    requireAllowedOrigin(request, options.allowedOrigins);
-    const session = await options.requests.authenticate(request);
-    const csrf = request.headers["x-csrf-token"];
-    if (typeof csrf !== "string" || !options.runtime.verifyCsrfToken(session.sessionToken, csrf)) {
-      throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
-    }
-    return session;
-  };
+  const requireMutationSession = (request: FastifyRequest) =>
+    requireSharedMutationSession(request, options.requests, options.allowedOrigins);
 
   if (options.oidc) {
     const callbackPath = new URL(options.oidc.callbackUri).pathname;

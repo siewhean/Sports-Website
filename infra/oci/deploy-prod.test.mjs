@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -58,7 +67,7 @@ function createFixture(t, options = {}) {
 
   const envContent =
     options.environment ||
-    `OCI_PUBLIC_HOSTNAME=matchday.poladex.shop\nAPP_ENV=production\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-override-secret-123456\n`;
+    `OCI_PUBLIC_HOSTNAME=matchday.example.test\nAPP_ENV=production\nPOSTGRES_USER=matchday_prod\nPOSTGRES_DB=matchday_prod\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-override-secret-123456\n`;
   writeFileSync(path.join(repository, "infra/oci/.env.prod"), envContent, { mode: 0o600 });
   writeFileSync(path.join(repository, "infra/oci/.env.oci"), envContent, { mode: 0o600 });
 
@@ -81,6 +90,7 @@ function createFixture(t, options = {}) {
 
   const deployLockFile = path.join(directory, "deploy.lock");
   const log = path.join(directory, "mock-calls.jsonl");
+  const backupDir = path.join(directory, "backups");
 
   const mock = path.join(directory, "mock.mjs");
   writeFileSync(
@@ -108,7 +118,15 @@ function signalIfMatches(op) {
 }
 
 if (tool === "docker") {
-  if (args.includes("build")) {
+  if (args.includes("pull")) {
+    hangIfMatches("pull");
+    signalIfMatches("pull");
+    if (process.env.MOCK_PULL_FAILS === "1") {
+      console.error("manifest unknown");
+      process.exit(1);
+    }
+    process.exit(0);
+  } else if (args.includes("build")) {
     hangIfMatches("build");
     signalIfMatches("build");
     process.exit(0);
@@ -163,6 +181,7 @@ if (tool === "docker") {
       process.exit(0);
     } else if (args.some(a => a.includes("Config.Env"))) {
       console.log("GIT_SHA=" + process.env.CANDIDATE_SHA);
+      console.log("OCI_PROD_HOSTNAME=" + (process.env.MOCK_CADDY_ENV_MISMATCH === "1" ? "other.example.test" : process.env.OCI_PUBLIC_HOSTNAME));
       process.exit(0);
     } else if (args.some(a => a.includes("revision"))) {
       console.log(process.env.MOCK_LABEL_MISMATCH === "1" ? "wrong-sha" : process.env.CANDIDATE_SHA);
@@ -223,6 +242,19 @@ if (tool === "docker") {
         } catch {}
       }
       if (process.env.MOCK_CADDY_RELOAD_FAILS === "1") process.exit(1);
+      process.exit(0);
+    }
+    if (args.includes("pg_dump")) {
+      if (process.env.MOCK_DUMP_FAILS === "1") {
+        process.stderr.write("pg_dump: error: connection to server failed\\n");
+        process.exit(1);
+      }
+      if (process.env.MOCK_DUMP_EMPTY === "1") process.exit(0);
+      process.stdout.write("PGDMP-mock-custom-format-archive\\n");
+      process.exit(0);
+    }
+    if (args.includes("pg_restore")) {
+      if (process.env.MOCK_DUMP_LIST_FAILS === "1") process.exit(1);
       process.exit(0);
     }
     if (args.includes("postgres") && (args.includes("psql") || args.includes("-c"))) {
@@ -346,7 +378,7 @@ if (tool === "docker") {
       console.log(JSON.stringify({ git_sha: isRollback ? activeSha : process.env.CANDIDATE_SHA }));
     }
     process.exit(0);
-  } else if (args.some(a => a.includes("https://matchday.poladex.shop/"))) {
+  } else if (args.some(a => a.includes("https://matchday.example.test/"))) {
     if (!isRollback && process.env.MOCK_ROUTED_WEB_FAILS === "1") process.exit(28);
     if (isRollback && process.env.MOCK_ROLLBACK_ROUTED_WEB_FAILS === "1") process.exit(28);
     if (args.includes("-D")) {
@@ -371,8 +403,8 @@ if (tool === "docker") {
     });
   }
 
-  const run = (extraEnv = {}) => {
-    return spawnSync("bash", ["infra/oci/deploy-prod.sh"], {
+  const run = (extraEnv = {}, scriptArgs = []) => {
+    return spawnSync("bash", ["infra/oci/deploy-prod.sh", ...scriptArgs], {
       cwd: repository,
       encoding: "utf8",
       timeout: 30_000,
@@ -380,7 +412,7 @@ if (tool === "docker") {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
         CANDIDATE_SHA: ret.sha,
-        OCI_PUBLIC_HOSTNAME: "matchday.poladex.shop",
+        OCI_PUBLIC_HOSTNAME: "matchday.example.test",
         MATCHDAY_ACTIVE_SLOT_FILE: activeSlotFile,
         MATCHDAY_DEPLOY_LOCK_FILE: deployLockFile,
         MATCHDAY_RUNTIME_CADDYFILE_PATH: runtimeCaddyfile,
@@ -390,13 +422,27 @@ if (tool === "docker") {
         MATCHDAY_SERVICE_CONTROL_TIMEOUT: "2",
         MATCHDAY_MIGRATION_TIMEOUT: "2",
         MATCHDAY_BUILD_TIMEOUT: "2",
+        MATCHDAY_DUMP_TIMEOUT: "5",
+        MATCHDAY_BACKUP_DIR: backupDir,
+        MATCHDAY_PULL_TIMEOUT: "2",
         MOCK_LOG: log,
         ...extraEnv,
       },
     });
   };
 
-  const ret = { directory, repository, sha, git, activeSlotFile, runtimeCaddyfile, deployLockFile, run, log };
+  const ret = {
+    directory,
+    repository,
+    sha,
+    git,
+    activeSlotFile,
+    runtimeCaddyfile,
+    deployLockFile,
+    run,
+    log,
+    backupDir,
+  };
   return ret;
 }
 
@@ -611,7 +657,7 @@ p = subprocess.run(['bash', 'infra/oci/deploy-prod.sh'], cwd='${f.repository}', 
   os.environ,
   PATH='${f.repository}/../bin:' + os.environ['PATH'],
   CANDIDATE_SHA='${f.sha}',
-  OCI_PUBLIC_HOSTNAME='matchday.poladex.shop',
+  OCI_PUBLIC_HOSTNAME='matchday.example.test',
   MATCHDAY_ACTIVE_SLOT_FILE='${f.activeSlotFile}',
   MATCHDAY_DEPLOY_LOCK_FILE='${f.deployLockFile}',
   MATCHDAY_RUNTIME_CADDYFILE_PATH='${f.runtimeCaddyfile}'
@@ -860,12 +906,100 @@ test("36. Docker inspect timeout exits nonzero", (t) => {
   assert.match(result.stderr, /Command timed out after .* docker/);
 });
 
-test("37. Candidate build timeout exits nonzero and triggers rollback", (t) => {
+test("37. Candidate image pull timeout exits nonzero and triggers rollback", (t) => {
   const f = createFixture(t, { initialSlot: "blue" });
-  const result = f.run({ MOCK_TIMEOUT_OPERATION: "build", MATCHDAY_BUILD_TIMEOUT: "0.5" });
+  const result = f.run({ MOCK_TIMEOUT_OPERATION: "pull", MATCHDAY_PULL_TIMEOUT: "0.5" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Command timed out after .* docker/);
+  assert.match(result.stderr, /Failed pulling candidate images within timeout/);
+});
+
+test("37b. --build-locally fallback builds on the host and a build timeout triggers rollback", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_TIMEOUT_OPERATION: "build", MATCHDAY_BUILD_TIMEOUT: "0.5" }, ["--build-locally"]);
+  assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Failed building candidate services within timeout/);
+});
+
+test("37c. Default deploy pulls CI-built images and never builds on the VM", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+  const calls = readFileSync(f.log, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  const dockerCalls = calls.filter((c) => c.tool === "docker");
+  assert.equal(dockerCalls.filter((c) => c.args.includes("build")).length, 0, "default path must not build");
+  const pulls = dockerCalls.filter((c) => c.args.includes("pull"));
+  assert.equal(pulls.length, 1);
+  assert.deepEqual(pulls[0].args.slice(-5), ["api-green", "web-green", "worker-green", "migrate", "backup"]);
+  const labelChecks = dockerCalls.filter(
+    (c) =>
+      c.args.includes("image") &&
+      c.args.includes("inspect") &&
+      c.args.some((a) => a.includes("org.opencontainers.image.revision")),
+  );
+  for (const name of ["api", "web", "worker", "migrate"]) {
+    assert.ok(
+      labelChecks.some((c) => c.args.includes(`ghcr.io/siewhean/matchday-${name}:${f.sha}`)),
+      `revision label of matchday-${name} must be verified`,
+    );
+  }
+});
+
+test("37d. --build-locally uses compose build and still verifies revision labels", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({}, ["--build-locally"]);
+  assert.equal(result.status, 0, result.stderr);
+  const calls = readFileSync(f.log, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  assert.equal(calls.filter((c) => c.tool === "docker" && c.args.includes("pull")).length, 0);
+  assert.equal(calls.filter((c) => c.tool === "docker" && c.args.includes("build")).length, 1);
+});
+
+test("37e. Pull failure or image revision-label mismatch aborts before migration and traffic switch", (t) => {
+  for (const env of [{ MOCK_PULL_FAILS: "1" }, { MOCK_LABEL_MISMATCH: "1" }]) {
+    const f = createFixture(t, { initialSlot: "blue" });
+    const result = f.run(env);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Failed pulling candidate images|revision label 'wrong-sha' does not match requested/);
+    const calls = readFileSync(f.log, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+    assert.equal(
+      calls.filter((c) => c.tool === "docker" && c.args.includes("run") && c.args.includes("migrate")).length,
+      0,
+    );
+    assert.equal(calls.filter((c) => c.tool === "docker" && c.args.includes("reload")).length, 0);
+    assert.match(readFileSync(f.activeSlotFile, "utf8"), /ACTIVE_SLOT=blue/);
+  }
+});
+
+test("37f. Unknown deploy arguments are rejected", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({}, ["--bogus"]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Unknown argument/);
+});
+
+test("37g. Caddy container hostname env must match OCI_PUBLIC_HOSTNAME when the Caddyfile is config-driven", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_CADDY_ENV_MISMATCH: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Caddy container OCI_PROD_HOSTNAME does not match OCI_PUBLIC_HOSTNAME/);
+  const calls = readFileSync(f.log, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  assert.equal(calls.filter((c) => c.tool === "docker" && c.args.includes("pull")).length, 0);
 });
 
 test("38. Migration timeout exits nonzero and triggers rollback", (t) => {
@@ -906,7 +1040,7 @@ test("41. Candidate worker start timeout restores previous active worker", (t) =
 
 test("42. SIGTERM before promotion preserves active slot and cleans candidate", (t) => {
   const f = createFixture(t, { initialSlot: "blue" });
-  const result = f.run({ MOCK_SEND_SIGNAL_ON: "build", MOCK_SIGNAL_TYPE: "SIGTERM" });
+  const result = f.run({ MOCK_SEND_SIGNAL_ON: "pull", MOCK_SIGNAL_TYPE: "SIGTERM" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /CAUGHT SIGNAL SIGTERM during phase CANDIDATE_START/);
 
@@ -943,7 +1077,7 @@ test("45. SIGINT during worker handover restores previous active worker", (t) =>
 
 test("46. SIGHUP during candidate start preserves active slot", (t) => {
   const f = createFixture(t, { initialSlot: "blue" });
-  const result = f.run({ MOCK_SEND_SIGNAL_ON: "build", MOCK_SIGNAL_TYPE: "SIGHUP" });
+  const result = f.run({ MOCK_SEND_SIGNAL_ON: "pull", MOCK_SIGNAL_TYPE: "SIGHUP" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /CAUGHT SIGNAL SIGHUP during phase CANDIDATE_START/);
 });
@@ -981,9 +1115,16 @@ test("49. Rollback itself executes with bounded operations and cannot hang indef
 test("50. Pinned Caddy image digest contract is enforced for candidate validation", (t) => {
   const scriptContent = readFileSync(deployScriptPath, "utf8");
   assert.ok(
-    scriptContent.includes("sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"),
+    scriptContent.includes("sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f"),
     "deploy-prod.sh must pin the exact Caddy digest",
   );
+  // The candidate Caddyfile must be validated by the same Caddy that serves it (compose.yaml), or a
+  // Caddy upgrade could promote a config the running version rejects (or vice versa).
+  const tag = scriptContent.match(/^CADDY_IMAGE="([^"]+)"/m)?.[1];
+  const digest = scriptContent.match(/^CADDY_IMAGE_DIGEST="([^"]+)"/m)?.[1];
+  const composeContent = readFileSync(path.join(path.dirname(deployScriptPath), "compose.yaml"), "utf8");
+  const served = composeContent.match(/^\s*image:\s*(caddy:[^\s]+)/m)?.[1];
+  assert.equal(`${tag}@${digest}`, served, "deploy-prod.sh Caddy validation image must match compose.yaml");
 });
 
 test("51. Rollback previous Caddyfile restore failure is detected and logged, receipt records FAILED_CADDY_RESTORE and backup is preserved", (t) => {
@@ -1180,6 +1321,11 @@ test("66. Rejected mount prevents candidate build, migration, and traffic promot
 
   // Verify candidate build was never invoked
   const buildCalls = calls.filter((c) => c.tool === "docker" && c.args.includes("build"));
+  assert.equal(
+    calls.filter((c) => c.tool === "docker" && c.args.includes("pull")).length,
+    0,
+    "Candidate images must not be pulled before gates pass",
+  );
   assert.equal(buildCalls.length, 0, "Candidate build must not be invoked on mount rejection");
 
   // Verify database migration was never invoked
@@ -1228,6 +1374,11 @@ test("69. Active competition triggers deployment freeze and halts before candida
         .map((l) => JSON.parse(l))
     : [];
   const buildCalls = calls.filter((c) => c.tool === "docker" && c.args.includes("build"));
+  assert.equal(
+    calls.filter((c) => c.tool === "docker" && c.args.includes("pull")).length,
+    0,
+    "Candidate images must not be pulled before gates pass",
+  );
   const migrateCalls = calls.filter((c) => c.tool === "docker" && c.args.includes("migrate"));
   assert.equal(buildCalls.length, 0, "Candidate build must not run when freeze is active");
   assert.equal(migrateCalls.length, 0, "Migrations must not run when freeze is active");
@@ -1245,6 +1396,11 @@ test("70. Live match scoring in progress triggers deployment freeze and halts be
         .map((l) => JSON.parse(l))
     : [];
   const buildCalls = calls.filter((c) => c.tool === "docker" && c.args.includes("build"));
+  assert.equal(
+    calls.filter((c) => c.tool === "docker" && c.args.includes("pull")).length,
+    0,
+    "Candidate images must not be pulled before gates pass",
+  );
   assert.equal(buildCalls.length, 0, "Candidate build must not run during active scoring");
 });
 
@@ -1386,4 +1542,100 @@ test("80. Repeated clean deployment with zero active competitions completes prom
   const result = f.run();
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Promoted Slot:\s+green/);
+});
+
+// ---- Pre-migration snapshot (backup safety net) ----
+
+const readCalls = (f) =>
+  existsSync(f.log)
+    ? readFileSync(f.log, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+    : [];
+const isMigrateRun = (c) => c.tool === "docker" && c.args.includes("run") && c.args.includes("migrate");
+const isDump = (c) => c.tool === "docker" && c.args.includes("pg_dump");
+const snapshotFiles = (f) => {
+  const dir = path.join(f.backupDir, "premigration");
+  return existsSync(dir) ? readdirSync(dir) : [];
+};
+
+test("81. Pre-migration pg_dump runs before migrations and leaves a validated local snapshot", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+
+  const calls = readCalls(f);
+  const dumpIndex = calls.findIndex(isDump);
+  const migrateIndex = calls.findIndex(isMigrateRun);
+  assert.ok(dumpIndex >= 0, "pg_dump must be invoked");
+  assert.ok(migrateIndex >= 0, "migrations must be invoked");
+  assert.ok(dumpIndex < migrateIndex, "pg_dump must run before migrations");
+  const listIndex = calls.findIndex(
+    (c) => c.tool === "docker" && c.args.includes("pg_restore") && c.args.includes("--list"),
+  );
+  assert.ok(
+    listIndex > dumpIndex && listIndex < migrateIndex,
+    "archive validation must sit between dump and migrations",
+  );
+  assert.ok(calls[dumpIndex].args.includes("--format=custom"));
+
+  const snapshots = snapshotFiles(f);
+  assert.equal(snapshots.length, 1);
+  assert.match(snapshots[0], new RegExp(`^premigration-.*-${f.sha.slice(0, 12)}\\.dump$`));
+  assert.match(readFileSync(path.join(f.backupDir, "premigration", snapshots[0]), "utf8"), /^PGDMP/);
+  assert.match(result.stdout, /Pre-migration snapshot complete/);
+  // Object Storage is not configured in this fixture: no upload attempted.
+  assert.equal(calls.filter((c) => c.args.includes("upload-snapshot")).length, 0);
+});
+
+test("82. Failed pre-migration pg_dump aborts the deploy before migrations or promotion", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MOCK_DUMP_FAILS: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Pre-migration database snapshot failed/);
+  assert.equal(readCalls(f).filter(isMigrateRun).length, 0, "migrations must not run after a failed dump");
+  assert.match(readFileSync(f.activeSlotFile, "utf8"), /ACTIVE_SLOT=blue/);
+  assert.deepEqual(snapshotFiles(f), []);
+});
+
+test("83. Empty or unreadable pre-migration dump also aborts the deploy", (t) => {
+  for (const env of [{ MOCK_DUMP_EMPTY: "1" }, { MOCK_DUMP_LIST_FAILS: "1" }]) {
+    const f = createFixture(t, { initialSlot: "blue" });
+    const result = f.run(env);
+    assert.notEqual(result.status, 0, JSON.stringify(env));
+    assert.match(result.stderr, /Pre-migration database snapshot failed/);
+    assert.equal(readCalls(f).filter(isMigrateRun).length, 0);
+    assert.deepEqual(snapshotFiles(f), []);
+  }
+});
+
+test("84. MATCHDAY_SKIP_PREMIGRATION_BACKUP=1 skips the snapshot explicitly and loudly", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MATCHDAY_SKIP_PREMIGRATION_BACKUP: "1", MOCK_DUMP_FAILS: "1" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /SKIPPING the pre-migration database snapshot/);
+  const calls = readCalls(f);
+  assert.equal(calls.filter(isDump).length, 0);
+  assert.equal(calls.filter(isMigrateRun).length, 1);
+});
+
+test("85. Ambiguous skip-flag values fail closed instead of silently skipping", (t) => {
+  const f = createFixture(t, { initialSlot: "blue" });
+  const result = f.run({ MATCHDAY_SKIP_PREMIGRATION_BACKUP: "true" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /MATCHDAY_SKIP_PREMIGRATION_BACKUP must be 0 or 1/);
+  assert.equal(readCalls(f).filter(isMigrateRun).length, 0);
+});
+
+test("86. Snapshot is uploaded off-host before migrations when Object Storage is configured", (t) => {
+  const environment =
+    "OCI_PUBLIC_HOSTNAME=matchday.example.test\nAPP_ENV=production\nPOSTGRES_USER=matchday_prod\nPOSTGRES_DB=matchday_prod\nBACKUP_S3_BUCKET=matchday-backups\nDEPLOY_FREEZE_OVERRIDE_SECRET=test-override-secret-123456\n";
+  const f = createFixture(t, { initialSlot: "blue", environment });
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+  const calls = readCalls(f);
+  assert.ok(calls.find(isDump).args.join(" ").includes("--username matchday_prod --dbname matchday_prod"));
+  const upload = calls.findIndex((c) => c.args.includes("upload-snapshot"));
+  assert.ok(upload > calls.findIndex(isDump) && upload < calls.findIndex(isMigrateRun));
 });

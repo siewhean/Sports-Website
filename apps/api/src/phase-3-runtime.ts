@@ -13,6 +13,7 @@ import {
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
+import { assertDivisionInCompetition } from "./tenant-scope.js";
 import type { Phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import {
   CompetitionRepository,
@@ -2779,6 +2780,8 @@ export class Phase3Runtime {
   ) {
     const competition = await this.competitionAccess(tx, competitionId, actor, true);
     this.assertMutable(competition);
+    // Prove the division belongs to the authorised competition before any division_id-only query or row lock.
+    await assertDivisionInCompetition(tx, divisionId, competitionId);
     const publication = required(
       await tx.unsafe<{ result_version: number }>(
         `SELECT result_version FROM competition_publications WHERE competition_id=$1 FOR UPDATE`,

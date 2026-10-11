@@ -70,6 +70,21 @@ function redactSensitiveSelectorValue(value: string): string {
 }
 
 export async function assertNoWcagAOrAaViolations(page: Page): Promise<void> {
+  // Scan the settled UI: mid-transition opacity (e.g. a dialog fading in) makes axe report false
+  // colour-contrast failures. Finite animations only; infinite ones (spinners, live pulses) are ignored.
+  await page
+    .waitForFunction(
+      () =>
+        document
+          .getAnimations()
+          .every(
+            (animation) =>
+              animation.playState !== "running" || animation.effect?.getComputedTiming().endTime === Infinity,
+          ),
+      undefined,
+      { timeout: 5_000 },
+    )
+    .catch(() => undefined);
   const results = await new AxeBuilder({ page })
     .options({
       runOnly: { type: "tag", values: [...WCAG_A_AND_AA_TAGS] },

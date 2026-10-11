@@ -1,4 +1,5 @@
 import "server-only";
+import { apiFetch } from "./client-ip.server";
 
 import { cookies, headers } from "next/headers";
 import { SPORT_PACKS, type SportId, type SportPackOverride } from "@matchday/domain";
@@ -122,7 +123,7 @@ async function readSettings(context: SportSettingsContext): Promise<SportSetting
   if (!cookie) return documentForState(context, "permission");
   try {
     const suffix = context.divisionId ? `/divisions/${encodeURIComponent(context.divisionId)}/settings` : "/settings";
-    const response = await fetch(
+    const response = await apiFetch(
       new URL(`/api/v1/competitions/${encodeURIComponent(context.competitionId)}${suffix}`, base),
       { cache: "no-store", headers: { accept: "application/json", cookie } },
     );
@@ -209,7 +210,7 @@ export async function getSportDefaultsAdminDocument(
     const sportIds = Object.keys(SPORT_PACKS) as SportId[];
     const indexResponses = await Promise.all(
       sportIds.map((sportId) =>
-        fetch(new URL(`/api/v1/admin/sport-packs/${encodeURIComponent(sportId)}`, base), {
+        apiFetch(new URL(`/api/v1/admin/sport-packs/${encodeURIComponent(sportId)}`, base), {
           cache: "no-store",
           headers: { accept: "application/json", cookie },
         }),
@@ -230,7 +231,7 @@ export async function getSportDefaultsAdminDocument(
     );
     const detailResponses = await Promise.all(
       targets.map((target) =>
-        fetch(
+        apiFetch(
           new URL(
             `/api/v1/admin/sport-packs/${encodeURIComponent(target.sportCode)}/${encodeURIComponent(target.summary.version)}`,
             base,

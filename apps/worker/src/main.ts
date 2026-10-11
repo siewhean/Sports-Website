@@ -1,5 +1,5 @@
 import { loadConfig } from "@matchday/config";
-import { createLogger } from "@matchday/observability";
+import { createErrorReporter, createLogger, initSentryNode } from "@matchday/observability";
 
 import { createWorkerEdgeCachePurgePort } from "./edge-cache.js";
 import { createProductionEmailOutboxWorker } from "./email-outbox-worker.js";
@@ -20,6 +20,8 @@ const logger = createLogger({
   level: config.logLevel,
   service: workerServiceName,
 });
+// Inert unless SENTRY_DSN is set; also installs uncaughtException/unhandledRejection capture.
+const errorReporter = createErrorReporter(initSentryNode({ service: workerServiceName }));
 const { telemetry, metrics } = await startWorkerTelemetry({
   ...config.telemetry,
   environment: config.environment,
@@ -35,7 +37,18 @@ const runtime = new WorkerRuntime({
   metrics,
   hooks: {
     onHealthChange: (health) => logger.info({ health }, "worker health changed"),
-    onJobDeadLettered: (event) => logger.error({ event }, "worker job dead-lettered"),
+    onJobDeadLettered: (event) => {
+      logger.error({ event }, "worker job dead-lettered");
+      // Dead-lettering happens only after the final retry. The queue event is
+      // payload-free by design, so report a synthetic error grouped per job name.
+      void errorReporter.reportError(
+        new Error(`Job ${event.jobName} failed after ${event.attemptsMade} attempts and was dead-lettered`),
+        {
+          attributes: { job_name: event.jobName, job_id: event.jobId, attempts_made: event.attemptsMade },
+          fingerprint: ["worker-job-dead-lettered", event.jobName],
+        },
+      );
+    },
   },
   ...(edgeCache ? { handleEdgePurge: (payload) => edgeCache.purge(payload) } : {}),
   handleProbe: async (payload, context) => {
@@ -69,7 +82,13 @@ const stop = createWorkerShutdown({
 
 let shuttingDown = false;
 const shutdown = createWorkerSignalShutdown({
-  stop,
+  stop: async () => {
+    try {
+      await stop();
+    } finally {
+      await errorReporter.flush(2_000);
+    }
+  },
   deadlineMs: WORKER_WHOLE_PROCESS_SHUTDOWN_DEADLINE_MS,
   onRequested: (signal) => {
     shuttingDown = true;

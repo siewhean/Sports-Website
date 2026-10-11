@@ -40,15 +40,17 @@ export default defineConfig({
   retries: 0,
   expect: {
     toHaveScreenshot: {
-      pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-darwin{ext}",
-      threshold: 0.25,
-      maxDiffPixelRatio: 0.15,
+      // {platform} keeps macOS (darwin) and CI (linux) baselines apart; generate linux baselines with the
+      // "Visual baselines (linux)" workflow_dispatch workflow instead of updating them inside normal CI.
+      pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-{platform}{ext}",
+      threshold: 0.2,
+      maxDiffPixelRatio: 0.05,
       animations: "disabled",
       caret: "hide",
       scale: "css",
     },
   },
-  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-darwin{ext}",
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-{platform}{ext}",
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: `http://127.0.0.1:${nextPort}`,

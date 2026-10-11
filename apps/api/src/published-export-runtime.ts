@@ -2,12 +2,10 @@ import type { PostgresJsSql } from "@matchday/identity";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 import { ApiError, ErrorCode } from "./errors.js";
 import { ExportRuntime } from "./export-runtime.js";
+import { escapeCsvCell } from "./csv-escape.js";
 
-const escapeCsv = (value: string | number | null | undefined): string => {
-  if (value === null || value === undefined) return "";
-  const text = String(value);
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-};
+// Formula-injection-safe CSV cell escaping (see csv-escape.ts).
+const escapeCsv = escapeCsvCell;
 
 type PublicExportContext = {
   scheduleRevisionId: string;
@@ -65,7 +63,10 @@ export class PublishedExportRuntime extends ExportRuntime {
   }
 
   override async generateCompetitionCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    if (actor) return super.generateCompetitionCsv(competitionId, actor);
+    // Only privileged organisers/admins get the draft-capable path; every other caller, signed in or
+    // not, receives the published-only projection below (anonymous callers can never be privileged).
+    const access = actor ? await this.assertExportAccess(competitionId, actor) : null;
+    if (access?.privileged) return this.buildCompetitionCsv(competitionId, access);
     const context = await this.publicContext(competitionId);
     const rows = await this.publishedSql.unsafe<{
       division_name: string;
@@ -136,7 +137,10 @@ export class PublishedExportRuntime extends ExportRuntime {
   }
 
   override async generateStandingsCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    if (actor) return super.generateStandingsCsv(competitionId, actor);
+    // Only privileged organisers/admins get the draft-capable path; every other caller, signed in or
+    // not, receives the published-only projection below (anonymous callers can never be privileged).
+    const access = actor ? await this.assertExportAccess(competitionId, actor) : null;
+    if (access?.privileged) return this.buildStandingsCsv(competitionId, access);
     const context = await this.publicContext(competitionId);
     const rows = await this.publishedSql.unsafe<{
       division_name: string;
@@ -238,7 +242,10 @@ export class PublishedExportRuntime extends ExportRuntime {
   }
 
   override async generateBracketCsv(competitionId: string, actor?: Phase3Actor): Promise<string> {
-    if (actor) return super.generateBracketCsv(competitionId, actor);
+    // Only privileged organisers/admins get the draft-capable path; every other caller, signed in or
+    // not, receives the published-only projection below (anonymous callers can never be privileged).
+    const access = actor ? await this.assertExportAccess(competitionId, actor) : null;
+    if (access?.privileged) return this.buildBracketCsv(competitionId, access);
     const context = await this.publicContext(competitionId);
     const rows = await this.publishedSql.unsafe<{
       division_name: string;
@@ -277,7 +284,8 @@ export class PublishedExportRuntime extends ExportRuntime {
   }
 
   override async generateCompetitionJson(competitionId: string, actor?: Phase3Actor): Promise<Record<string, unknown>> {
-    if (actor) return super.generateCompetitionJson(competitionId, actor);
+    const access = actor ? await this.assertExportAccess(competitionId, actor) : null;
+    if (access?.privileged) return this.buildCompetitionJson(competitionId, access);
     const context = await this.publicContext(competitionId);
     const comp = (
       await this.publishedSql.unsafe<{

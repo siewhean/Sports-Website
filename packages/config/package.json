@@ -8,6 +8,10 @@
       "types": "./src/index.ts",
       "import": "./dist/index.js"
     },
+    "./retention": {
+      "types": "./src/retention.ts",
+      "import": "./dist/retention.js"
+    },
     "./authentication-assurance": {
       "types": "./src/authentication-assurance.ts",
       "import": "./dist/authentication-assurance.js"

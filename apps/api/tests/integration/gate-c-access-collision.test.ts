@@ -160,6 +160,7 @@ describe("Gate C fallback-code collision safety", () => {
     const exchanged = await runtimeWithCodes(["999999999999"]).exchangeAccess(
       {
         shortCode: oneCollision.short_code,
+        expectedMatchId: fourthMatch,
         deviceId: randomUUID(),
         deviceLabel: "Collision-safe viewer",
         ipAddress: "198.51.100.90",

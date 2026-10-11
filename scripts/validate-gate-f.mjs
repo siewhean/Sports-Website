@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
+import { productionHostname } from "./lib/hostnames.mjs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,7 +109,7 @@ export async function validateGateF(candidateSha, options = {}) {
   const prod = requireObject(cert.production_deployment, "Gate F production_deployment");
   requireSha(prod.deployed_sha, "Gate F production deployed_sha", expectedSha);
   requireExact(prod.conclusion, "PASS", "Gate F production conclusion");
-  requireExact(prod.hostname, "matchday.poladex.shop", "Gate F production hostname");
+  requireExact(prod.hostname, productionHostname(), "Gate F production hostname");
 
   const hostedCi = requireObject(cert.hosted_ci, "Gate F hosted_ci");
   requireSha(hostedCi.head_sha, "Gate F hosted_ci.head_sha", expectedSha);

@@ -1,38 +1,19 @@
 #!/usr/bin/env node
-import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { productionOrigin } from "./lib/hostnames.mjs";
 import { createHash } from "node:crypto";
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadAndValidateEvidence } from "./validate-external-evidence.mjs";
+import { loadAndValidateEvidence, isValidUtcTimestamp } from "./validate-external-evidence.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function resolveCandidateSha(value) {
-  if (value && /^[0-9a-f]{40}$/i.test(value)) {
-    return value.toLowerCase();
-  }
-  if (process.env.CANDIDATE_SHA && /^[0-9a-f]{40}$/i.test(process.env.CANDIDATE_SHA)) {
-    return process.env.CANDIDATE_SHA.toLowerCase();
-  }
-  try {
-    const gitSha = execSync("git rev-parse HEAD", { cwd: root, encoding: "utf8" }).trim();
-    if (/^[0-9a-f]{40}$/i.test(gitSha)) {
-      return gitSha.toLowerCase();
-    }
-  } catch {
-    // git rev-parse failure falls through
-  }
-  return value;
-}
-
 function requireSha(value) {
-  const resolved = resolveCandidateSha(value);
-  if (!resolved || !/^[0-9a-f]{40}$/i.test(resolved)) {
+  if (!value || !/^[0-9a-f]{40}$/i.test(value)) {
     throw new Error(`Ops audit requires an exact 40-character candidate SHA; got ${value}`);
   }
-  return resolved.toLowerCase();
+  return value.toLowerCase();
 }
 
 function computeReceiptHash(receipt) {
@@ -52,13 +33,37 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
   const sloValidation = await loadAndValidateEvidence(sha, sloEvidenceFile, {
     allowedEvidenceClasses: ["PRODUCTION_LIVE_PROBE", "PROVIDER_RECEIPT", "OPERATOR_CAPTURE"],
     requireProductionEnvironment: true,
+    requiredFiles: ["provider_capture"],
   });
+  const window = sloValidation.evidence?.observation_window;
+  const validWindow =
+    isValidUtcTimestamp(window?.started_at) &&
+    isValidUtcTimestamp(window?.completed_at) &&
+    Date.parse(window.started_at) < Date.parse(window.completed_at) &&
+    Date.parse(window.completed_at) <= Date.now();
   const isSloPass =
     sloValidation.errors.length === 0 &&
-    Boolean(sloValidation.evidence?.probe_id) &&
-    sloValidation.evidence?.availability_observed_percent >= 99.9 &&
-    sloValidation.evidence?.scoring_p95_observed_ms <= 500 &&
-    sloValidation.evidence?.public_read_p95_observed_ms <= 2500;
+    validWindow &&
+    Number.isInteger(sloValidation.evidence?.observation_sample_count) &&
+    sloValidation.evidence.observation_sample_count > 0 &&
+    Boolean(sloValidation.evidence?.dashboard_id) &&
+    Array.isArray(sloValidation.evidence?.observed_metrics) &&
+    ["api_latency", "error_rate", "queue_depth", "active_scoring_sessions", "public_reads"].every((metric) =>
+      sloValidation.evidence?.observed_metrics?.includes(metric),
+    ) &&
+    Number.isFinite(sloValidation.evidence?.result_propagation_observed_ms) &&
+    sloValidation.evidence.result_propagation_observed_ms >= 0 &&
+    sloValidation.evidence.result_propagation_observed_ms <= 2000 &&
+    Number.isFinite(sloValidation.evidence?.availability_observed_percent) &&
+    sloValidation.evidence.availability_observed_percent >= 99.9 &&
+    Number.isFinite(sloValidation.evidence?.scoring_p95_observed_ms) &&
+    sloValidation.evidence.scoring_p95_observed_ms >= 0 &&
+    sloValidation.evidence.scoring_p95_observed_ms <= 500 &&
+    Number.isFinite(sloValidation.evidence?.public_read_p95_observed_ms) &&
+    sloValidation.evidence.public_read_p95_observed_ms >= 0 &&
+    sloValidation.evidence.public_read_p95_observed_ms <= 2500 &&
+    sloValidation.evidence.availability_observed_percent <= 100;
+  if (!isSloPass) sloValidation.errors.push("dashboard_metrics_and_slo_observations_required");
 
   const sloBaseline = {
     qa_item: "OPS-004",
@@ -75,8 +80,8 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
       result_propagation_target_ms: 2000,
       availability_target_percent: 99.9,
     },
-    source_status: "SOURCE_COMPLETE",
-    operational_status: "PRODUCTION_EVIDENCE_PENDING",
+    source_status: "SOURCE_PARTIAL",
+    operational_status: isSloPass ? "VERIFIED" : "PRODUCTION_EVIDENCE_PENDING",
     protocol_verification: "SOURCE_PASS",
     verdict: isSloPass ? "PASS" : "PENDING",
     pending_reasons: isSloPass ? [] : sloValidation.errors,
@@ -95,12 +100,20 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
   const alertValidation = await loadAndValidateEvidence(sha, alertEvidenceFile, {
     allowedEvidenceClasses: ["PROVIDER_RECEIPT", "OPERATOR_CAPTURE"],
     requireProductionEnvironment: true,
+    requiredFiles: ["provider_capture"],
   });
   const isAlertPass =
     alertValidation.errors.length === 0 &&
     Boolean(alertValidation.evidence?.alert_drill_id) &&
     alertValidation.evidence?.all_routes_verified === true &&
-    alertValidation.evidence?.delivery_acknowledged === true;
+    alertValidation.evidence?.delivery_acknowledged === true &&
+    Array.isArray(alertValidation.evidence?.routes) &&
+    ["service_unavailable", "scoring_latency_breach", "worker_dead", "backup_failed"].every((condition) =>
+      alertValidation.evidence.routes?.some(
+        (route) => route.condition === condition && route.delivery_acknowledged === true && Boolean(route.receipt_id),
+      ),
+    );
+  if (!isAlertPass) alertValidation.errors.push("all_four_alert_route_delivery_receipts_required");
 
   const alertRouting = {
     qa_item: "OPS-005",
@@ -111,8 +124,8 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
       { condition: "worker_dead", target: "infra_alerts" },
       { condition: "backup_failed", target: "ops_alerts" },
     ],
-    source_status: "SOURCE_COMPLETE",
-    operational_status: "PRODUCTION_EVIDENCE_PENDING",
+    source_status: "SOURCE_PARTIAL",
+    operational_status: isAlertPass ? "VERIFIED" : "PRODUCTION_EVIDENCE_PENDING",
     protocol_verification: "SOURCE_PASS",
     verdict: isAlertPass ? "PASS" : "PENDING",
     pending_reasons: isAlertPass ? [] : alertValidation.errors,
@@ -164,12 +177,18 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
   const costValidation = await loadAndValidateEvidence(sha, costEvidenceFile, {
     allowedEvidenceClasses: ["PROVIDER_RECEIPT", "OPERATOR_CAPTURE"],
     requireProductionEnvironment: true,
+    requiredFiles: ["provider_capture"],
   });
   const isCostPass =
     costValidation.errors.length === 0 &&
     Boolean(costValidation.evidence?.billing_account_id) &&
     costValidation.evidence?.budget_alerts_configured === true &&
-    costValidation.evidence?.anomaly_detection_active === true;
+    costValidation.evidence?.anomaly_detection_active === true &&
+    Array.isArray(costValidation.evidence?.monitored_categories) &&
+    ["compute_a1_flex", "block_storage", "object_storage", "network_egress", "transactional_email"].every((category) =>
+      costValidation.evidence.monitored_categories?.includes(category),
+    );
+  if (!isCostPass) costValidation.errors.push("budget_anomaly_and_all_five_cost_categories_required");
 
   const costControls = {
     qa_item: "OPS-016",
@@ -181,8 +200,8 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
       "network_egress",
       "transactional_email",
     ],
-    source_status: "SOURCE_COMPLETE",
-    operational_status: "EXTERNAL_PROVIDER_PENDING",
+    source_status: "SOURCE_PARTIAL",
+    operational_status: isCostPass ? "VERIFIED" : "EXTERNAL_PROVIDER_PENDING",
     protocol_verification: "SOURCE_PASS",
     verdict: isCostPass ? "PASS" : "PENDING",
     pending_reasons: isCostPass ? [] : costValidation.errors,
@@ -197,6 +216,57 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
   await writeFile(path.join(artifactsDir, "gate-f-cost-controls.json"), JSON.stringify(costControls, null, 2));
 
   // 5. Synthetic Health Monitoring (OPS-008)
+  const syntheticValidation = await loadAndValidateEvidence(sha, options.syntheticEvidenceFile, {
+    allowedEvidenceClasses: ["PRODUCTION_LIVE_PROBE", "PROVIDER_RECEIPT", "OPERATOR_CAPTURE"],
+    requireProductionEnvironment: true,
+    requiredFiles: ["provider_capture"],
+  });
+  const probeTargetMatches = (probe) => {
+    try {
+      const target = new URL(probe.target_url);
+      if (target.origin !== productionOrigin() || target.search || target.hash || target.username || target.password)
+        return false;
+      const paths = { homepage: "/", health_ready: "/health/ready", meta_build: "/api/v1/meta/build" };
+      if (probe.name === "public_competition_read") {
+        const id = syntheticValidation.evidence?.public_competition_id;
+        return (
+          typeof id === "string" &&
+          id.length > 0 &&
+          probe.observed_competition_id === id &&
+          target.pathname === `/api/v1/competitions/${encodeURIComponent(id)}`
+        );
+      }
+      return (
+        target.pathname === paths[probe.name] && (probe.name !== "meta_build" || probe.observed_candidate_sha === sha)
+      );
+    } catch {
+      return false;
+    }
+  };
+  const isSyntheticPass =
+    syntheticValidation.errors.length === 0 &&
+    Array.isArray(syntheticValidation.evidence?.probes) &&
+    syntheticValidation.evidence?.serving_sha === sha &&
+    [
+      ["homepage", 60],
+      ["health_ready", 30],
+      ["meta_build", 60],
+      ["public_competition_read", 60],
+    ].every(([name, interval]) =>
+      syntheticValidation.evidence?.probes?.some(
+        (probe) =>
+          probeTargetMatches(probe) &&
+          probe.name === name &&
+          probe.external === true &&
+          probe.status === 200 &&
+          Number.isFinite(probe.interval_sec) &&
+          probe.interval_sec > 0 &&
+          probe.interval_sec <= interval &&
+          Boolean(probe.provider_monitor_id),
+      ),
+    );
+  if (!isSyntheticPass)
+    syntheticValidation.errors.push("all_four_external_probe_captures_and_required_intervals_required");
   const syntheticProbes = {
     qa_item: "OPS-008",
     candidate_sha: sha,
@@ -233,16 +303,16 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
       result_propagation_target_ms: 2000,
       availability_target_percent: 99.9,
     },
-    source_status: "SOURCE_COMPLETE",
-    operational_status: "PRODUCTION_EVIDENCE_PENDING",
+    source_status: "SOURCE_PARTIAL",
+    operational_status: isSyntheticPass ? "VERIFIED" : "PRODUCTION_EVIDENCE_PENDING",
     protocol_verification: "SOURCE_PASS",
-    verdict: isSloPass ? "PASS" : "PENDING",
-    pending_reasons: isSloPass ? [] : sloValidation.errors,
-    ...(sloValidation.evidenceSha256
-      ? { input_evidence_sha256: sloValidation.evidenceSha256, evidence_reference: sloEvidenceFile }
+    verdict: isSyntheticPass ? "PASS" : "PENDING",
+    pending_reasons: isSyntheticPass ? [] : syntheticValidation.errors,
+    ...(syntheticValidation.evidenceSha256
+      ? { input_evidence_sha256: syntheticValidation.evidenceSha256, evidence_reference: options.syntheticEvidenceFile }
       : {}),
-    verified_evidence_files: sloValidation.verifiedFiles,
-    ...(isSloPass ? { production_observations: sloValidation.evidence } : {}),
+    verified_evidence_files: syntheticValidation.verifiedFiles,
+    ...(isSyntheticPass ? { production_observations: syntheticValidation.evidence } : {}),
     generated_at: new Date().toISOString(),
   };
   syntheticProbes.receipt_sha256 = computeReceiptHash(syntheticProbes);
@@ -296,56 +366,14 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
       source_states: ["SOURCE_COMPLETE", "SOURCE_PARTIAL", "SOURCE_MISSING"],
       operational_states: ["PRODUCTION_EVIDENCE_PENDING", "EXTERNAL_PROVIDER_PENDING", "VERIFIED", "NOT_REQUIRED"],
     },
-    items: [
-      {
-        req_id: "OPS-004",
-        name: "Monitoring Dashboards",
-        priority: "P0",
-        source_status: "SOURCE_COMPLETE",
-        operational_status: "PRODUCTION_EVIDENCE_PENDING",
-        verdict: sloBaseline.verdict,
-      },
-      {
-        req_id: "OPS-005",
-        name: "Alerting Rules",
-        priority: "P0",
-        source_status: "SOURCE_COMPLETE",
-        operational_status: "PRODUCTION_EVIDENCE_PENDING",
-        verdict: alertRouting.verdict,
-      },
-      {
-        req_id: "OPS-006",
-        name: "External Status Page",
-        priority: "P0",
-        source_status: "SOURCE_MISSING",
-        operational_status: "EXTERNAL_PROVIDER_PENDING",
-        verdict: statusPage.verdict,
-      },
-      {
-        req_id: "OPS-007",
-        name: "Log Aggregation & Retention",
-        priority: "P0",
-        source_status: "SOURCE_PARTIAL",
-        operational_status: "PRODUCTION_EVIDENCE_PENDING",
-        verdict: logRetention.verdict,
-      },
-      {
-        req_id: "OPS-008",
-        name: "Synthetic Health Monitoring",
-        priority: "P0",
-        source_status: "SOURCE_COMPLETE",
-        operational_status: "PRODUCTION_EVIDENCE_PENDING",
-        verdict: syntheticProbes.verdict,
-      },
-      {
-        req_id: "OPS-016",
-        name: "Cost Monitoring & Controls",
-        priority: "P1",
-        source_status: "SOURCE_COMPLETE",
-        operational_status: "EXTERNAL_PROVIDER_PENDING",
-        verdict: costControls.verdict,
-      },
-    ],
+    items: [sloBaseline, alertRouting, statusPage, logRetention, syntheticProbes, costControls, featureFlags].map(
+      (item) => ({
+        req_id: item.qa_item,
+        source_status: item.source_status,
+        operational_status: item.operational_status,
+        verdict: item.verdict,
+      }),
+    ),
     generated_at: new Date().toISOString(),
   };
   inventory.receipt_sha256 = computeReceiptHash(inventory);
@@ -364,9 +392,7 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const strictMode = process.argv.includes("--strict") || process.env.STRICT_GATE_F === "1";
-  const rawArg = process.argv.slice(2).find((arg) => !arg.startsWith("--"));
-  const sha = resolveCandidateSha(rawArg);
+  const sha = process.argv[2] ?? process.env.CANDIDATE_SHA;
   runGateFOpsAudit(sha)
     .then((res) => {
       console.log(`Gate F ops audit completed for ${res.sloBaseline.candidate_sha}:`);
@@ -380,11 +406,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       console.log(`  Cost Controls (OPS-016): ${res.costControls.verdict} [${res.costControls.source_status}]`);
       console.log(`  Feature Flags (OPS-018): ${res.featureFlags.verdict}`);
       if (
-        strictMode &&
-        (res.sloBaseline.verdict !== "PASS" ||
-          res.alertRouting.verdict !== "PASS" ||
-          res.featureFlags.verdict !== "PASS" ||
-          res.costControls.verdict !== "PASS")
+        res.sloBaseline.verdict !== "PASS" ||
+        res.alertRouting.verdict !== "PASS" ||
+        res.featureFlags.verdict !== "PASS" ||
+        res.costControls.verdict !== "PASS" ||
+        res.syntheticProbes.verdict !== "PASS" ||
+        res.statusPage.verdict !== "PASS" ||
+        res.logRetention.verdict !== "PASS"
       ) {
         process.exitCode = 1;
       }

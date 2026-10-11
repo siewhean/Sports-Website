@@ -60,3 +60,8 @@ export function edgeCacheEnvironment(): NodeJS.ProcessEnv {
     EDGE_CACHE_PURGE_BEARER_TOKEN: "e".repeat(32),
   };
 }
+
+/** Required in production: the shared secret for the web BFF's signed client-IP header. */
+export function clientIpEnvironment(): NodeJS.ProcessEnv {
+  return { MATCHDAY_CLIENT_IP_SECRET: "test-client-ip-forwarding-secret-32-bytes" };
+}

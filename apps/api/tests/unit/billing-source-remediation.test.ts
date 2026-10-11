@@ -1,8 +1,7 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { BillingWebhookPayload } from "@matchday/contracts";
 import type { PostgresJsSql } from "@matchday/identity";
-import { EntitlementRuntime } from "../../src/entitlement-runtime.js";
+import { EntitlementRuntime, type StripeWebhookEvent } from "../../src/entitlement-runtime.js";
 
 describe("Phase 6 billing source remediation", () => {
   it("claims a Stripe event before applying checkout effects", async () => {
@@ -16,11 +15,12 @@ describe("Phase 6 billing source remediation", () => {
       }) as PostgresJsSql["unsafe"],
       begin: async <T>(callback: (tx: PostgresJsSql) => Promise<T>) => callback(sql as unknown as PostgresJsSql),
     } as unknown as PostgresJsSql;
-    const payload: BillingWebhookPayload = {
+    const payload: StripeWebhookEvent = {
       id: "evt_atomic",
       type: "checkout.session.completed",
       data: {
         object: {
+          payment_status: "paid",
           metadata: { organisation_id: "org-1", purchase_type: "ai_top_up", top_up_units: "5" },
         },
       },
@@ -64,7 +64,9 @@ describe("Phase 6 billing source remediation", () => {
         cancelUrl: params.cancelUrl,
       }),
     };
-    const result = await new EntitlementRuntime(sql, stripe).createCheckoutSession({ accountId: "actor-1" }, "org-1", {
+    const result = await new EntitlementRuntime(sql, stripe, {
+      checkoutRedirectOrigins: ["https://example.com", "https://example.test", "https://matchday.test"],
+    }).createCheckoutSession({ accountId: "actor-1" }, "org-1", {
       purchaseType: "ai_top_up",
       topUpUnits: 5,
       successUrl: "https://example.test/success",
@@ -86,7 +88,7 @@ describe("Phase 6 billing source remediation", () => {
       }) as PostgresJsSql["unsafe"],
       begin: async <T>(callback: (tx: PostgresJsSql) => Promise<T>) => callback(sql as unknown as PostgresJsSql),
     } as unknown as PostgresJsSql;
-    const payload: BillingWebhookPayload = {
+    const payload: StripeWebhookEvent = {
       id: "evt_lifecycle",
       type: "customer.subscription.updated",
       data: { object: { id: "sub-1", status: "past_due", current_period_start: 10, current_period_end: 20 } },

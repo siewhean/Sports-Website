@@ -36,7 +36,7 @@ test("runGateFRollbackDrill verifies automated rollback steps but stays PENDING 
     const res = await runGateFRollbackDrill(SHA, { artifactsDir });
     assert.equal(res.verdict, "PENDING");
     assert.equal(res.simulation_result, "SIMULATION_PASS");
-    assert.equal(res.scoring_availability, "PRESERVED");
+    assert.equal(res.scoring_availability, "UNKNOWN");
   });
 });
 
@@ -341,9 +341,9 @@ test("recertifications audit returns PENDING for DNS/TLS, SEO, Email when extern
     assert.equal(res.dnsTls.verdict, "PENDING");
     assert.equal(res.seo.verdict, "PENDING");
     assert.equal(res.email.verdict, "PENDING");
-    assert.equal(res.security.verdict, "PASS_AUTOMATED_SCOPE");
-    assert.equal(res.a11y.verdict, "PASS_AUTOMATED_SCOPE");
-    assert.equal(res.legal.verdict, "PASS_TECHNICAL_PACKAGE_WITH_DEFERMENT");
+    assert.equal(res.security.verdict, "PENDING_TEST_EVIDENCE");
+    assert.equal(res.a11y.verdict, "PENDING_TEST_EVIDENCE");
+    assert.equal(res.legal.verdict, "PENDING_TEST_EVIDENCE");
   });
 });
 
