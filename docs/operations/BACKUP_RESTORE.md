@@ -60,6 +60,9 @@ Production is one VM running Docker Compose. Backups are implemented in `infra/o
 
 ## Restore drill (owner, one time, then quarterly)
 
+**Quick path (recommended):** from your own machine, which holds the age private key, run
+`infra/oci/backup/restore-drill.sh`. It stages the key in the VM's RAM only, takes a fresh backup, restores the newest daily into a scratch database, compares exact per-table row counts with production, cleans up (scratch database and key) even on failure, and prints `RESTORE_DRILL=PASS` or `FAIL`. Options: `--key`, `--host`, `--ssh-key`, `--latest daily|weekly|premigration`. The manual steps below are what it automates.
+
 Run on the VM (or any host with Docker and network access to the bucket, using a scratch Postgres). Never restore into `matchday_prod` during a drill.
 
 ```sh
