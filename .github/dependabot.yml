@@ -27,6 +27,11 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 3
+    ignore:
+      # Node majors change the runtime (e.g. Node 26 dropped bundled Corepack) and must move together with
+      # package.json engines and .nvmrc, so they are upgraded deliberately rather than by Dependabot.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: docker-compose
     directory: /infra/oci
