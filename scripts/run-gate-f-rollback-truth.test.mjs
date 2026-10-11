@@ -46,6 +46,7 @@ async function fixture(dir, mutate = () => {}) {
     ],
     scoring_checks: [
       { availability: "AVAILABLE", observed_at: at(11) },
+      { availability: "AVAILABLE", observed_at: at(7) },
       { availability: "AVAILABLE", observed_at: at(3) },
     ],
   };
@@ -105,6 +106,32 @@ test("valid retained capture supplies the production observation fields", () =>
   }));
 
 for (const [name, mutate, error] of [
+  [
+    "fresh metadata cannot revive ancient events",
+    (c) => {
+      c.observed_steps.forEach((step, i) => {
+        step.observed_at = new Date(Date.UTC(2020, 0, 1, 0, 0, i)).toISOString();
+      });
+      c.scoring_checks.forEach((check, i) => {
+        check.observed_at = new Date(Date.UTC(2020, 0, 1, 0, 0, i)).toISOString();
+      });
+    },
+    "observed_event_outside_capture_window",
+  ],
+  [
+    "events after capture cannot certify already completed proof",
+    (c) => {
+      c.captured_at = at(9);
+    },
+    "observed_event_outside_capture_window",
+  ],
+  [
+    "before and after scoring checks cannot prove availability during rollback",
+    (c) => {
+      c.scoring_checks.splice(1, 1);
+    },
+    "observed_scoring_checks_required",
+  ],
   [
     "wrong exact SHA",
     (c) => {
