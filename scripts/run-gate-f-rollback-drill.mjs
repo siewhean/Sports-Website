@@ -53,6 +53,15 @@ export async function runGateFRollbackDrill(candidateSha, options = {}) {
       require(isNonEmptyString(observations.rollback_drill_id), "rollback_drill_id_required");
       require(observations.observed_result === "PASS", "observed_rollback_not_pass");
       require(observations.scoring_availability === "PRESERVED", "scoring_availability_not_preserved");
+      const capturedTimes = [observations.captured_at, validation.evidence?.captured_at, capture.captured_at];
+      const validCaptureTimes = capturedTimes.every(isValidUtcTimestamp);
+      const captureEnd = validCaptureTimes ? Math.min(...capturedTimes.map(Date.parse)) : NaN;
+      const freshnessFloor = Date.now() - 24 * 60 * 60 * 1000;
+      const withinCaptureWindow = (event) =>
+        isValidUtcTimestamp(event?.observed_at) &&
+        Date.parse(event.observed_at) >= freshnessFloor &&
+        Date.parse(event.observed_at) <= captureEnd;
+      require(validCaptureTimes, "observation_capture_timestamps_required");
       const steps = observations.observed_steps;
       const names = [
         "baseline_health_check",
@@ -62,6 +71,7 @@ export async function runGateFRollbackDrill(candidateSha, options = {}) {
       ];
       require(Array.isArray(steps) && steps.length === names.length, "observed_steps_required");
       if (Array.isArray(steps) && steps.length === names.length) {
+        require(steps.every(withinCaptureWindow), "observed_event_outside_capture_window");
         require(steps.every(
           (step, i) =>
             step?.step === names[i] &&
@@ -80,7 +90,13 @@ export async function runGateFRollbackDrill(candidateSha, options = {}) {
           steps[3].active_version === steps[2].restored_version, "restored_revision_health_required");
         const checks = observations.scoring_checks;
         require(Array.isArray(checks) &&
-          checks.length >= 2 &&
+          checks.length >= 3 &&
+          checks.every(withinCaptureWindow) &&
+          checks.some(
+            (check) =>
+              Date.parse(check.observed_at) > Date.parse(steps[1].observed_at) &&
+              Date.parse(check.observed_at) < Date.parse(steps[2].observed_at),
+          ) &&
           checks.every(
             (check) =>
               check?.availability === "AVAILABLE" &&
