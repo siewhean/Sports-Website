@@ -5,7 +5,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { productionHostname } from "./lib/hostnames.mjs";
-import { validateGateF, REQUIRED_HOSTED_CI_JOBS, REQUIRED_WAIVERS } from "./validate-gate-f.mjs";
+import {
+  validateGateF,
+  REQUIRED_HOSTED_CI_JOBS,
+  REQUIRED_WAIVERS,
+  REQUIRED_PRODUCTION_OPERATIONS,
+} from "./validate-gate-f.mjs";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const digest = (value) => createHash("sha256").update(value).digest("hex");
@@ -53,6 +58,14 @@ async function certificateFixture(artifactsDir) {
       postgresql_version: "18.4",
       created_at: at(9),
       recovered_through_at: at(10),
+      schedule: {
+        frequency: "daily_full",
+        wal_archiving_interval_minutes: 15,
+        retention_days: 30,
+        weekly_retention_days: 90,
+        restore_test_frequency: "monthly",
+        schedule_reference: "backup-schedule-contract-reference",
+      },
       storage: {
         class: "object_storage",
         reference: "restricted-backup-object",
@@ -61,6 +74,9 @@ async function certificateFixture(artifactsDir) {
         encryption_reference: "managed-key-reference",
         access_control_reference: "restricted-policy-reference",
         retention_days: 30,
+        weekly_retention_days: 90,
+        cross_region_replicated: true,
+        cross_region_reference: "cross-region-replica-bucket",
         retention_reference: "retention-policy-reference",
       },
     },
@@ -129,6 +145,7 @@ async function certificateFixture(artifactsDir) {
     evidence_reference: evidenceFile,
     generated_at: at(1),
   };
+  const simulation = { candidate_sha: SHA, verdict: "PASS" };
   async function persist() {
     const raw = JSON.stringify(evidence, null, 2);
     await writeFile(evidenceFile, raw);
@@ -138,22 +155,22 @@ async function certificateFixture(artifactsDir) {
     receipt.receipt_sha256 = digest(JSON.stringify(receipt, null, 2));
     await writeJson(path.join(artifactsDir, "gate-f-certification.json"), cert);
     await writeJson(path.join(artifactsDir, "gate-f-backup-restore.json"), receipt);
-    await writeJson(path.join(artifactsDir, "gate-f-production-simulation.json"), {
-      candidate_sha: SHA,
-      verdict: "PASS",
-      receipt_sha256: "a".repeat(64),
-    });
+    delete simulation.receipt_sha256;
+    simulation.receipt_sha256 = digest(JSON.stringify(simulation, null, 2));
+    await writeJson(path.join(artifactsDir, "gate-f-production-simulation.json"), simulation);
   }
   await persist();
-  return { cert, receipt, evidence, evidenceFile, persist };
+  return { cert, receipt, evidence, evidenceFile, simulation, persist };
 }
 
-test("validateGateF accepts internally consistent backup evidence fixtures", async () => {
+test("validateGateF cannot certify production from internally consistent backup proof alone", async () => {
   await withArtifacts(async (artifactsDir) => {
     await certificateFixture(artifactsDir);
-    const result = await validateGateF(SHA, { artifactsDir });
-    assert.equal(result.valid, true);
-    assert.equal(result.production_hostname, productionHostname());
+    await assert.rejects(validateGateF(SHA, { artifactsDir }), (error) => {
+      assert.equal(error.code, "GATE_F_PRODUCTION_EVIDENCE_UNSUPPORTED");
+      for (const operation of REQUIRED_PRODUCTION_OPERATIONS) assert.match(error.message, new RegExp(operation));
+      return true;
+    });
   });
 });
 
@@ -207,7 +224,12 @@ for (const kind of [
       }
       if (kind === "altered backup bytes")
         await writeFile(path.join(artifactsDir, "backup_artifact"), "tampered backup");
-      await assert.rejects(validateGateF(SHA, { artifactsDir }));
+      await assert.rejects(validateGateF(SHA, { artifactsDir }), (error) => {
+        // Invalid backup/identity evidence must fail its own checks, not merely
+        // reach the final unsupported aggregate barrier.
+        assert.notEqual(error.code, "GATE_F_PRODUCTION_EVIDENCE_UNSUPPORTED");
+        return true;
+      });
     });
   });
 }
@@ -237,5 +259,30 @@ test("validateGateF rejects certification declaring simulation-only evidence", a
     fixture.cert.simulation = { conclusion: "PASS", production_certification: false };
     await fixture.persist();
     await assert.rejects(validateGateF(SHA, { artifactsDir }), /Simulation-only evidence/);
+  });
+});
+
+for (const receipts of [undefined, {}, Object.fromEntries(REQUIRED_PRODUCTION_OPERATIONS.map((id) => [id, "PASS"]))]) {
+  test(`validateGateF blocks production with ${receipts ? Object.keys(receipts).length : "absent"} declared OPS receipts`, async () => {
+    await withArtifacts(async (artifactsDir) => {
+      const fixture = await certificateFixture(artifactsDir);
+      fixture.cert.simulation = { conclusion: "PASS", production_certification: true, receipts };
+      fixture.simulation.production_certification = true;
+      fixture.simulation.components = receipts;
+      await fixture.persist();
+      await assert.rejects(validateGateF(SHA, { artifactsDir }), {
+        code: "GATE_F_PRODUCTION_EVIDENCE_UNSUPPORTED",
+      });
+    });
+  });
+}
+
+test("validateGateF rejects altered aggregate bytes despite a plausible checksum string", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    const fixture = await certificateFixture(artifactsDir);
+    fixture.simulation.components = { backup_restore: "PASS", zero_downtime_rollback: "PASS" };
+    // Retain the previous digest: a syntactically valid hash is not integrity proof.
+    await writeJson(path.join(artifactsDir, "gate-f-production-simulation.json"), fixture.simulation);
+    await assert.rejects(validateGateF(SHA, { artifactsDir }), /Simulation receipt checksum/);
   });
 });
