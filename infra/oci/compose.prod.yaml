@@ -5,7 +5,7 @@ name: matchday-prod
 
 services:
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+    image: otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6
     profiles: [observability]
     restart: unless-stopped
     user: "0:0"
@@ -54,7 +54,7 @@ services:
         ipv4_address: 172.31.0.2
 
   redis:
-    image: redis:8.2-alpine@sha256:30abb90e62f14b737010746def3ba99cc79fe19dcdb3d37b41f21fc62e7da19d
+    image: redis:8.10-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
     restart: unless-stopped
     mem_limit: 768m
     cpus: 0.5
