@@ -70,3 +70,41 @@ for (const failure of ["none", "remote", "cleanup", "stage"]) {
     else assert.doesNotMatch(result.stdout, /RESTORE_DRILL=PASS/);
   });
 }
+
+test("restore rehearsal rejects SHA suffixes and embedded newlines before any backup command", (t) => {
+  const f = fixture(t);
+  f.fake(
+    "ssh",
+    `case "$*" in
+    *"umask 077"*) cat >/dev/null; exit 0;;
+    *"cleanup_failed=0"*) exit 0;;
+    *)
+      for arg do command=$arg; done
+      guard="$(printf '%s\\n' "$command" | sed -n '/^  \\[\\[/p')"
+      [ -n "$guard" ] || exit 99
+      bash -c "$guard" || exit 2
+      printf 'BACKUP_STATUS=ok\\nRESTORE_STATUS=ok\\nCOUNTS=MATCH\\n'
+      exit 0;;
+  esac`,
+  );
+  for (const sha of ["a".repeat(40), "a".repeat(40) + "suffix", "a".repeat(40) + "\ninvalid", "a".repeat(40) + "\n"]) {
+    const result = spawnSync(
+      "bash",
+      [
+        path.join(here, "restore-drill.sh"),
+        "--key",
+        path.join(f.dir, "age-key"),
+        "--ssh-key",
+        path.join(f.dir, "ssh-key"),
+        "--host",
+        "test-only.invalid",
+      ],
+      {
+        env: { ...f.env, ACTIVE_SHA: sha },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(result.status, sha.length === 40 ? 0 : 1, result.stderr);
+    if (sha.length !== 40) assert.doesNotMatch(result.stdout, /BACKUP_STATUS=ok|RESTORE_DRILL=PASS/);
+  }
+});

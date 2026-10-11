@@ -61,7 +61,7 @@ echo "[drill] running fresh backup, restore of newest '$KIND' into $SCRATCH_DB, 
 # shellcheck disable=SC2016  # expanded on the VM, not locally
 if result="$("${SSH[@]}" "set -euo pipefail; cd $REMOTE_DIR
   . /var/lib/matchday/deploy/active-slot.env
-  printf %s \"\$ACTIVE_SHA\" | grep -Eq \"^[0-9a-f]{40}\"
+  [[ \"\$ACTIVE_SHA\" =~ ^[0-9a-f]{40}$ ]]
   export CANDIDATE_SHA=\"\$ACTIVE_SHA\" BUILD_TIMESTAMP=drill
   C='docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile backup run --rm --no-deps'
   R=\"\$C -v /dev/shm/matchday-backup.agekey:/identity/key.txt:ro --entrypoint /opt/matchday-backup/restore-postgres.sh backup\"

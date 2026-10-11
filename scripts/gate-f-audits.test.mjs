@@ -635,6 +635,10 @@ test("migration screening preserves SQL quoting and rejects misleading DEFAULT l
     "ALTER TABLE accounts ADD COLUMN amount numeric(10,2) NOT NULL;",
     "DO $$ BEGIN ALTER TABLE accounts ADD COLUMN required_name text NOT NULL CHECK (required_name <> 'DEFAULT'); END $$;",
     "ALTER TABLE accounts ADD COLUMN required_name TEXT NOT NULL CHECK (required_name <> $$DEFAULT$$);",
+    "DROP TABLE IF EXISTS test_probe, accounts;",
+    "DROP SCHEMA IF EXISTS test_probe, public;",
+    "ALTER TABLE accounts ADD COLUMN x text NOT NULL DEFAULT NULL;",
+    "ALTER TABLE accounts ADD COLUMN x text NOT NULL DEFAULT (NULL);",
     "/* unclosed comment",
   ];
   for (const sql of unsafe) {
