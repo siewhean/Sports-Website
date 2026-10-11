@@ -1,40 +1,33 @@
 # Uptime monitoring
 
-**Status:** documentation only. No monitor exists until the owner creates the checks below. Nothing in this repository calls these services.
+**Status:** source contracts and setup instructions. No external monitor or status page is certified until exact-release provider evidence is retained. Owner authorization is required for account configuration and alert drills. See [provider setup and verification](observability-provider-verification.md) and ADR 0005.
 
-Free tiers of UptimeRobot (50 monitors, 5-minute interval) or Better Stack (10 monitors, 3-minute interval) are sufficient. Use one provider, or both for independent coverage. Check current free-tier limits on the provider's pricing page before relying on them.
+## Required probes
 
-## Checks to create
+| Name                    | Target                                                    | Maximum interval | Timeout   | Healthy result                                    |
+| ----------------------- | --------------------------------------------------------- | ---------------- | --------- | ------------------------------------------------- |
+| homepage                | `${PRODUCTION_ORIGIN}/`                                   | 60 seconds       | 5 seconds | HTTP 200                                          |
+| health_ready            | `${PRODUCTION_ORIGIN}/health/ready`                       | 30 seconds       | 3 seconds | HTTP 200; database and Redis ready                |
+| meta_build              | `${PRODUCTION_ORIGIN}/api/v1/meta/build`                  | 60 seconds       | 5 seconds | HTTP 200 and expected exact deployed SHA          |
+| public_competition_read | `${PRODUCTION_ORIGIN}/api/v1/competitions/<published-id>` | 60 seconds       | 5 seconds | HTTP 200 and expected public competition identity |
 
-| #   | Name                                | Type                                         | URL / target                                                                    | Interval                       | Healthy when                                                                         |
-| --- | ----------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------ |
-| 1   | MATCHDAY API ready                  | HTTPS                                        | `https://matchday.poladex.shop/health/ready`                                    | 3-5 min                        | HTTP 200 (the endpoint reflects database and Redis readiness)                        |
-| 2   | MATCHDAY public page                | HTTPS keyword                                | `https://matchday.poladex.shop/competitions/<slug>` for a published competition | 5 min                          | HTTP 200 and a keyword that always appears on the page, such as the competition name |
-| 3   | MATCHDAY home                       | HTTPS                                        | `https://matchday.poladex.shop/`                                                | 5 min                          | HTTP 200                                                                             |
-| 4   | TLS certificate                     | Provider SSL-expiry monitor on the same host | n/a                                                                             | daily                          | more than 14 days remaining                                                          |
-| 5   | Nightly backup heartbeat (optional) | Heartbeat / cron monitor                     | URL goes into `BACKUP_HEARTBEAT_URL` in `infra/oci/.env.prod`                   | expected every 24 h, grace 2 h | pinged by the backup job on success; `<url>/fail` on failure                         |
+Use the approved production origin from `scripts/lib/hostnames.mjs` and actual public competition ID. Do not expose `/health/deep` tokens or put credentials in monitor URLs. An organiser-facing published web page, daily TLS expiry check (more than 14 days remaining) and nightly backup success heartbeat can supplement the four required probes.
 
-Notes:
+A provider's 3–5-minute free polling tier does not meet OPS-008's 30/60-second requirements. The owner must select a plan that meets the contract and approve any cost. Do not weaken intervals to certify a free tier.
 
-- `/health/ready` is the real readiness gate used by `deploy-prod.sh`. `/health/deep` is private (token protected) and must not be monitored from a third party.
-- Check 2 proves the web container, the API behind it and Caddy are all serving. Pick a competition that stays published; update the monitor if it is archived.
-- Do not put tokens or secrets in monitor URLs, headers or bodies.
+## Alerting and public status
 
-## Alerting
+Configure service-unavailable, scoring-latency breach (>500ms p95), dead-worker and backup-failed routes with named on-call owners. Agree threshold windows and delivery contacts in the provider before the authorized drill. During an active competition, account for the deployment freeze and avoid disruptive tests. Verify both failure and recovery delivery; retain provider delivery IDs and acknowledgements, not only configuration screenshots.
 
-- Contacts: at least two, for example the owner's email and an SMS (UptimeRobot SMS and Better Stack phone alerts have free-tier limits, and some regions are paid-only; email is the dependable baseline).
-- Alert after 2 consecutive failures (about 6-10 minutes) to avoid paging on a single blip. During an active competition (see the deployment freeze policy) lower this to 1 failure.
-- Enable "recovery" notifications so an outage is closed out in the same thread.
-- Create a public or private status page only if useful for organisers; it is not required.
+OPS-006 requires an independent public status page and component/incident history. Host it outside the primary application infrastructure and verify accessibility while the origin is unavailable. The application readiness endpoint alone does not establish an independent status page.
 
-## When an alert fires
+## Incident response
 
-1. Open `https://matchday.poladex.shop/health/ready` from a phone on mobile data to rule out the monitor's network.
-2. If it is down, follow `docs/runbooks/incident-response.md`. On the VM: `docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml ps` and `logs --tail=100 api web`.
-3. If only check 5 fires, the backup failed: `journalctl -u matchday-backup --since "26 hours ago"` and see `docs/operations/BACKUP_RESTORE.md`. Do not run migrations or deploys until a fresh backup succeeds.
+Check the readiness endpoint from an independent network, compare the exact build SHA, and follow [incident response](incident-response.md). Operator access and any recovery/migration/restart remain separately authorized. A backup-heartbeat incident requires the [backup runbook](../operations/BACKUP_RESTORE.md); do not infer success from a timer definition.
 
-## Verifying the setup
+## Verification receipts
 
-After creating the checks, confirm each by pausing it, then temporarily pointing it at a non-existent path (for example `/health/ready-test`) and verifying that an alert arrives at both contacts. Restore the real URL and note the date of the test below.
+Record external provider monitor IDs, observed intervals, target/path, HTTP results, UTC observation window and the actual serving SHA. Retain redacted provider exports with SHA-256 digests and operator identity. Submit a separate synthetic receipt: passing aggregate SLO numbers do not prove the required monitors exist. Never deliberately break a production URL or send a real test alert without authorization.
 
-Last alert test: _not yet conducted_
+Last external monitoring/status verification: **not independently verified by this source change**.
+Last authorized alert drill: **not executed by this source change**.

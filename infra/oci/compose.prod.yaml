@@ -356,6 +356,9 @@ services:
     build:
       context: ./backup
       dockerfile: Dockerfile
+      labels:
+        org.opencontainers.image.revision: ${CANDIDATE_SHA}
+        org.opencontainers.image.source: https://github.com/siewhean/Sports-Website
     # Built and pushed by CI like the application images. The timer runs without CANDIDATE_SHA, hence :latest (main).
     image: ${MATCHDAY_IMAGE_REGISTRY:-ghcr.io/siewhean}/matchday-backup:${CANDIDATE_SHA:-latest}
     profiles: [backup]

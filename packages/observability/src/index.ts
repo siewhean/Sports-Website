@@ -13,3 +13,4 @@ export * from "./pilot-telemetry.js";
 export * from "./runtime.js";
 export * from "./sentry-scrub.js";
 export * from "./sentry.js";
+export * from "./operational-controls.js";
