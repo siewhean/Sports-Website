@@ -27,7 +27,7 @@ Production is one VM running Docker Compose. Backups are implemented in `infra/o
 
 **Failure signalling.** Any failure exits non-zero, logs `ERROR: BACKUP_STATUS=failed ...` to stderr (visible with `journalctl -u matchday-backup`), writes `status/status.json` with `"status":"failed"`, does not touch `status/last-success`, and pings `BACKUP_HEARTBEAT_URL/fail` when configured. Success logs `BACKUP_STATUS=ok`, refreshes `status/last-success` and pings `BACKUP_HEARTBEAT_URL`. Wire either an uptime/heartbeat monitor (see `docs/runbooks/uptime-monitoring.md`) or a check such as `find /var/lib/matchday/backups/status/last-success -mmin -1560` (26 h) into alerting.
 
-**Retention and the 20 GB free tier.** Script-side pruning keeps 14 dailies, 8 weeklies and 10 pre-migration snapshots (`BACKUP_RETAIN_*`), about 32 objects. The run fails if usage under the prefix exceeds `BACKUP_MAX_TOTAL_BYTES` (15 GiB), which allows compressed dumps up to roughly 450 MB each. Add an Object Storage lifecycle rule as a second line of defence (below).
+**Retention and the 20 GB free tier.** Script-side pruning keeps 14 dailies, 8 weeklies and 10 pre-migration snapshots (`BACKUP_RETAIN_*`), about 32 backup payloads plus checksum sidecars. The run fails if usage under the prefix exceeds `BACKUP_MAX_TOTAL_BYTES` (15 GiB), which allows compressed dumps up to roughly 450 MB each. Add an Object Storage lifecycle rule as a second line of defence (below).
 
 **Skipping the pre-migration snapshot.** Only `MATCHDAY_SKIP_PREMIGRATION_BACKUP=1` skips it (for example if the snapshot disk is full and the migration is known to be trivially safe). It prints a loud warning; any value other than `0`/`1` aborts the deploy. Do not leave it set.
 
@@ -58,10 +58,10 @@ Production is one VM running Docker Compose. Backups are implemented in `infra/o
    ```
    The `.env.prod` placeholders (`CHANGE_ME...`) are rejected by `scripts/validate-production-config.mjs`, so a deploy will not proceed until the backup block is filled in.
 
-## Restore drill (owner, one time, then quarterly)
+## Restore rehearsal (authorised operator; monthly Gate F requirement)
 
 **Quick path (recommended):** from your own machine, which holds the age private key, run
-`infra/oci/backup/restore-drill.sh`. It stages the key in the VM's RAM only, takes a fresh backup, restores the newest daily into a scratch database, compares exact per-table row counts with production, cleans up (scratch database and key) even on failure, and prints `RESTORE_DRILL=PASS` or `FAIL`. Options: `--key`, `--host`, `--ssh-key`, `--latest daily|weekly|premigration`. The manual steps below are what it automates.
+`infra/oci/backup/restore-drill.sh`. It stages the key in the VM's RAM only, takes a fresh backup, restores the newest daily into a scratch database, compares exact per-table row counts with production, cleans up (scratch database and key) even on failure, and prints scoped `RESTORE_DRILL=PASS` or `FAIL` after successful remote execution and cleanup. This is a same-host row-count rehearsal, not independently retained Gate F production certification. Options: `--key`, `--host`, `--ssh-key`, `--latest daily|weekly|premigration`. The manual steps below are what it automates.
 
 Run on the VM (or any host with Docker and network access to the bucket, using a scratch Postgres). Never restore into `matchday_prod` during a drill.
 
@@ -105,8 +105,8 @@ Implemented in the repository and exercised by tests with test doubles (`infra/o
 
 Still unproved or not provided:
 
-- **No live proof yet.** Nothing has run against a real OCI bucket, real Customer Secret Keys, the real `age` binary, or the production database. The owner's first manual run and restore drill above are the proof; until step 6 is recorded, treat recovery as unproved.
-- **No continuous WAL archiving / point-in-time recovery.** Worst-case data loss is up to about 24 hours (or back to the last pre-migration snapshot for migration faults).
+- **Live proof is not independently verified.** [PR #88](https://github.com/siewhean/Sports-Website/pull/88) claims a production restore rehearsal passed. The available PR body, comments/reviews and source contain no retained backup/checksum, consistent-snapshot fingerprint, independent-host restore, operator authorisation or recovery measurements sufficient for the evidence validator below. This review neither disproves the claim nor treats it as certification. Obtain the original captures before making a live recovery claim. The current helper checks row counts in a scratch database on the production host, which does not satisfy the independent-host restore contract.
+- **No continuous WAL archiving / point-in-time recovery.** The nominal full-backup recovery interval is up to about 24 hours only while every nightly job and remote verification succeeds; failures can extend it indefinitely (or back to the last pre-migration snapshot for migration faults).
 - **No cross-region copy.** Free-tier single-region Object Storage protects against VM or disk loss, not against loss of the whole Phoenix region or the tenancy.
 - **No immutable retention.** The backup credential can delete objects, so a compromised VM could delete backups. Rotating that key and keeping the age private key offline limits, but does not remove, this risk. Restore uses the same credential; there is no separate read-only restore identity.
 - **Alerting is a signal, not a service.** The heartbeat URL, `status/last-success` file and failed systemd unit exist; the owner must attach them to a monitor (`docs/runbooks/uptime-monitoring.md`).
@@ -136,3 +136,13 @@ The input contract is `schema_version: production-backup-v1` and `evidence_class
 Chronology must be consistent and captures cannot be future dated. The validator's explicit freshness policy defaults to 24 hours for the backup and source observation; this is an evidence acceptance limit, not an implemented backup schedule. A read-only loader accepts a positive `maxEvidenceAgeMs` only when the caller deliberately applies a separately approved policy.
 
 Hashes establish retained-byte integrity, **not authenticity or authorization**. An infrastructure owner must review the original captures, confirm the production identities and authorization, and validate the claimed mechanisms before setting `production_operator_review: PASS` in the certification record. Unit tests generate temporary fixtures only; they do not prove any infrastructure exists. Do not commit backup bytes, credentials, private keys, or production PII. WAL/PITR, monitoring, immutable retention and cross-region DR remain unproved until their own operational evidence is captured.
+
+## Binding Gate F requirements and owner decision
+
+[BACKUP_GATE_F_GAP.md](BACKUP_GATE_F_GAP.md) records the original requirements, current source, missing operational evidence and an unapproved remediation proposal. The nightly timer, 14 daily/8 weekly count defaults and a quarterly historical procedure do not satisfy 15-minute WAL recovery, 30-day daily/90-day weekly retention, monthly verified restoration and cross-region recovery. ADR-0005 does not waive these machine-verifiable requirements. OPS-011 and OPS-012 remain blocked until the requirements and independent evidence are met; no architecture exception has been approved.
+
+The nightly unit now rejects missing/malformed `ACTIVE_SHA` before invoking Docker and binds `CANDIDATE_SHA` to the deployed release. The image tag is a source control, not proof of the VM's active unit, pulled digest or signed artifact. An authorised operator must retain `systemctl cat matchday-backup.service`, the active-slot SHA, image revision/digest and successful timer journal, with credentials redacted. No timer was activated or backup executed in this source review.
+
+Before any approved live rehearsal, require a fresh signed read-only object-list preflight from the authorised operator. A historical 10 October 2026 preflight reported `SignatureDoesNotMatch`; this task did not recheck authentication and does not assert that the current credential still fails. Keep secret values out of receipts and chat.
+
+Production evidence must now include a nonempty `backup.schedule` (or top-level `schedule`) with `schedule_reference`, daily-full cadence, WAL interval at most 15 minutes, daily retention at least 30 days, weekly retention at least 90 days and monthly restoration. Missing schedule cannot certify a backup. The declared schedule and storage policies must be supported by the retained captures and operator review; their labels alone establish neither authenticity nor actual WAL/PITR operation.

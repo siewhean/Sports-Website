@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Quarterly restore drill, run from the operator's machine (the age private key never leaves it except
+# Monthly restore rehearsal (not Gate F production certification), run from the operator's machine (the age private key never leaves it except
 # into the VM's RAM-backed /dev/shm for the duration of the drill).
 #
 #   infra/oci/backup/restore-drill.sh [--key ~/matchday-backup.agekey] [--host opc@129.146.6.204]
@@ -35,14 +35,23 @@ case "$KIND" in daily|weekly|premigration) ;; *) echo "--latest must be daily, w
 
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=15 -i "$SSH_KEY" "$HOST")
 
+CLEANED_UP=0
 cleanup() {
+  [ "$CLEANED_UP" -eq 0 ] || return 0
   # Always remove the staged key and the scratch database, even after a failure.
-  "${SSH[@]}" "cd $REMOTE_DIR && docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T postgres \
-      sh -c 'dropdb --if-exists -U \"\$POSTGRES_USER\" $SCRATCH_DB' >/dev/null 2>&1; \
-    shred -u /dev/shm/matchday-backup.agekey 2>/dev/null || rm -f /dev/shm/matchday-backup.agekey; \
-    rm -f /tmp/drill-counts-prod.txt /tmp/drill-counts-restored.txt" 2>/dev/null || true
+  "${SSH[@]}" "cleanup_failed=0; cd $REMOTE_DIR || exit 1; docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml exec -T postgres \
+      sh -c 'dropdb --if-exists -U \"\$POSTGRES_USER\" $SCRATCH_DB' >/dev/null 2>&1 || cleanup_failed=1; \
+    shred -u /dev/shm/matchday-backup.agekey 2>/dev/null || rm -f /dev/shm/matchday-backup.agekey || cleanup_failed=1; \
+    rm -f /tmp/drill-counts-prod.txt /tmp/drill-counts-restored.txt || cleanup_failed=1; exit \$cleanup_failed" 2>/dev/null || return 1
+  CLEANED_UP=1
 }
-trap cleanup EXIT
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  cleanup || { echo "RESTORE_DRILL=FAIL cleanup failed; operator must remove staged key and scratch database" >&2; rc=1; }
+  exit "$rc"
+}
+trap on_exit EXIT
 
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "[drill] $started staging key in VM RAM (/dev/shm)"
@@ -50,8 +59,9 @@ echo "[drill] $started staging key in VM RAM (/dev/shm)"
 
 echo "[drill] running fresh backup, restore of newest '$KIND' into $SCRATCH_DB, and row-count comparison"
 # shellcheck disable=SC2016  # expanded on the VM, not locally
-result="$("${SSH[@]}" "set -euo pipefail; cd $REMOTE_DIR
+if result="$("${SSH[@]}" "set -euo pipefail; cd $REMOTE_DIR
   . /var/lib/matchday/deploy/active-slot.env
+  printf %s \"\$ACTIVE_SHA\" | grep -Eq \"^[0-9a-f]{40}\"
   export CANDIDATE_SHA=\"\$ACTIVE_SHA\" BUILD_TIMESTAMP=drill
   C='docker compose --env-file infra/oci/.env.prod -f infra/oci/compose.prod.yaml --profile backup run --rm --no-deps'
   R=\"\$C -v /dev/shm/matchday-backup.agekey:/identity/key.txt:ro --entrypoint /opt/matchday-backup/restore-postgres.sh backup\"
@@ -63,12 +73,16 @@ result="$("${SSH[@]}" "set -euo pipefail; cd $REMOTE_DIR
   \$R --counts-only --target-db $SCRATCH_DB > /tmp/drill-counts-restored.txt 2>/dev/null
   echo \"TABLES=\$(grep -c '|' /tmp/drill-counts-restored.txt)\"
   if diff -q /tmp/drill-counts-prod.txt /tmp/drill-counts-restored.txt >/dev/null; then echo COUNTS=MATCH
-  else echo COUNTS=DIFFER; diff /tmp/drill-counts-prod.txt /tmp/drill-counts-restored.txt | head -20; fi" 2>&1 \
-  | grep -v -E 'post-quantum|store now|openssh.com/pq')" || true
+  else echo COUNTS=DIFFER; diff /tmp/drill-counts-prod.txt /tmp/drill-counts-restored.txt | head -20; fi" 2>&1)"; then
+  remote_status=0
+else
+  remote_status=$?
+fi
 
 echo "$result"
-if grep -q 'BACKUP_STATUS=ok' <<<"$result" && grep -q 'RESTORE_STATUS=ok' <<<"$result" && grep -q 'COUNTS=MATCH' <<<"$result"; then
-  echo "RESTORE_DRILL=PASS started=$started kind=$KIND"
+if [ "$remote_status" -eq 0 ] && grep -q 'BACKUP_STATUS=ok' <<<"$result" && grep -q 'RESTORE_STATUS=ok' <<<"$result" && grep -q 'COUNTS=MATCH' <<<"$result"; then
+  cleanup || { echo "RESTORE_DRILL=FAIL cleanup failed; operator must remove staged key and scratch database" >&2; exit 1; }
+  echo "RESTORE_DRILL=PASS started=$started kind=$KIND evidence_scope=same_host_row_count_rehearsal production_certification=false"
   echo "Record this result (date, restore seconds, table count) in your operations log."
   exit 0
 fi
