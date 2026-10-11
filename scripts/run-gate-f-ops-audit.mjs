@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -103,7 +104,15 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
 
   // 3. Feature Flags Admin Runbook (OPS-018)
   // Per spec OPS-018: "Implement feature flag administration. UI for toggling flags without deployment."
-  // PostgresFeatureFlagStorage exists in source, but admin UI is not implemented.
+  // The admin UI control plane (FeatureFlagsAdmin.tsx, phase3-feature-flags-admin.{ts,server.ts},
+  // /internal/feature-flags route, /api/v1/admin/feature-flags endpoints) was merged via PR #64
+  // (feat(ops-018): feature flag administration control plane and UI, merged 2026-10-07).
+  // Detect source presence at runtime rather than hardcoding to catch any future regressions.
+  const adminUiSourcePresent =
+    existsSync(path.join(root, "apps/web/components/phase3/FeatureFlagsAdmin.tsx")) &&
+    existsSync(path.join(root, "apps/web/lib/phase3-feature-flags-admin.ts")) &&
+    existsSync(path.join(root, "apps/web/lib/phase3-feature-flags-admin.server.ts"));
+
   const featureFlags = {
     qa_item: "OPS-018",
     candidate_sha: sha,
@@ -112,9 +121,13 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
     safe_defaults_enforced: true,
     emergency_killswitch_capable: true,
     privileged_entitlement_bypass_prevented: true,
-    admin_ui_present: false,
-    verdict: "PENDING_IMPLEMENTATION",
-    pending_reasons: ["feature_flag_admin_ui_not_implemented"],
+    admin_ui_present: adminUiSourcePresent,
+    source_status: adminUiSourcePresent ? "SOURCE_COMPLETE" : "SOURCE_MISSING",
+    operational_status: "PRODUCTION_EVIDENCE_PENDING",
+    verdict: adminUiSourcePresent ? "PENDING" : "PENDING_IMPLEMENTATION",
+    pending_reasons: adminUiSourcePresent
+      ? ["production_feature_flag_admin_operational_verification_pending"]
+      : ["feature_flag_admin_ui_not_implemented"],
     generated_at: new Date().toISOString(),
   };
   featureFlags.receipt_sha256 = computeReceiptHash(featureFlags);
