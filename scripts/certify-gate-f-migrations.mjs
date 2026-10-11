@@ -136,7 +136,7 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
   const destructivePatterns = [
     {
       label: "DROP TABLE",
-      regex: /\bDROP\s+TABLE\s+(?!IF\s+EXISTS\s+test_)/i,
+      regex: /\bDROP\s+TABLE\b/i,
     },
     {
       label: "DROP COLUMN",
@@ -152,7 +152,7 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
     },
     {
       label: "DROP SCHEMA",
-      regex: /\bDROP\s+SCHEMA\s+(?!IF\s+EXISTS\s+test_)/i,
+      regex: /\bDROP\s+SCHEMA\b/i,
     },
   ];
 
@@ -180,8 +180,13 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
     while ((match = addColRegex.exec(views.keywordsOnly)) !== null) {
       const colName = match[1];
       const colDef = match[2];
-      if (/\bNOT\s+NULL\b/i.test(colDef) && !/\bDEFAULT\b/i.test(colDef)) {
-        warnings.push(`Matched non-contract column addition: ADD COLUMN "${colName}" NOT NULL without DEFAULT`);
+      if (
+        /\bNOT\s+NULL\b/i.test(colDef) &&
+        (!/\bDEFAULT\b/i.test(colDef) || /\bDEFAULT\s*(?:\(\s*)?NULL\b/i.test(colDef))
+      ) {
+        warnings.push(
+          `Matched non-contract column addition: ADD COLUMN "${colName}" NOT NULL without a non-NULL DEFAULT`,
+        );
         totalDestructiveViolations++;
       }
     }
