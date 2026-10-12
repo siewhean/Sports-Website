@@ -2438,8 +2438,10 @@ export function checkFormatScheduleFeasibility(input: {
   constraints: SchedulingConstraints;
   /** Raise a required daily limit to what the format forces per day, as the workspace default does. */
   deriveDailyLimit?: boolean;
-  /** Above this many matches × slots, skip the solve (default 250 000). */
+  /** Above this many matches × slots, skip the solve and only run diagnostics (default 60 000). */
   maxSolveCells?: number;
+  /** Above this many matches (or 5 000 slots), skip diagnostics too (default 600). */
+  maxCheckMatches?: number;
 }): FormatScheduleCheck {
   const notChecked: FormatScheduleCheck = { status: "not_checked", warningCodes: [], diagnostics: [] };
   if (input.slots.length === 0) return notChecked;
@@ -2490,8 +2492,14 @@ export function checkFormatScheduleFeasibility(input: {
     ),
     diagnostics,
   });
+  // Hard size bound for request paths: beyond it, even the analytic diagnostics are skipped.
+  if (problem.matches.length > (input.maxCheckMatches ?? 600) || problem.slots.length > 5_000) {
+    return problem.matches.length > problem.slots.length
+      ? { status: "infeasible", warningCodes: ["SCHEDULE_CAPACITY"], diagnostics: [] }
+      : notChecked;
+  }
   if (problem.matches.length > problem.slots.length) return infeasible(diagnoseScheduleInfeasibility(problem));
-  if (problem.matches.length * problem.slots.length > (input.maxSolveCells ?? 250_000)) {
+  if (problem.matches.length * problem.slots.length > (input.maxSolveCells ?? 60_000)) {
     const diagnostics = diagnoseScheduleInfeasibility(problem);
     return diagnostics.length > 0 ? infeasible(diagnostics) : notChecked;
   }

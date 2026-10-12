@@ -188,6 +188,10 @@ function workspaceDefaultScheduleConstraints(input: {
 
 /** Interactive budget for checking suggested formats against the venue; later ones stay not_checked. */
 const RECOMMENDATION_SCHEDULE_CHECK_BUDGET_MS = 1_500;
+const RECOMMENDATION_SCHEDULE_CHECK_MAX_FORMATS = 5;
+/** Largest matches × slots solved in a request (~0.1-0.3 s worst case including relaxation rungs). */
+const RECOMMENDATION_SCHEDULE_CHECK_MAX_SOLVE_CELLS = 60_000;
+const RECOMMENDATION_SCHEDULE_CHECK_MAX_MATCHES = 600;
 
 /** Cuts availability windows into whole match slots, skipping any slot that touches an unavailable interval. */
 function capacityMatchSlots(
@@ -1027,10 +1031,17 @@ export class Phase4Runtime {
         areaCount: areaRows.length,
       }),
     );
+    // Request-path bounds: at most N formats, a shared time budget checked before each, and a
+    // per-format size cap (matches, slots, matches × slots) so no single check is unbounded.
     const startedAt = performance.now();
+    let checked = 0;
     return (divisions) => {
-      if (performance.now() - startedAt > RECOMMENDATION_SCHEDULE_CHECK_BUDGET_MS)
+      if (
+        checked >= RECOMMENDATION_SCHEDULE_CHECK_MAX_FORMATS ||
+        performance.now() - startedAt > RECOMMENDATION_SCHEDULE_CHECK_BUDGET_MS
+      )
         return { status: "not_checked", warningCodes: [] };
+      checked += 1;
       const result = checkFormatScheduleFeasibility({
         timeZone: access.timezone,
         slots,
@@ -1038,6 +1049,8 @@ export class Phase4Runtime {
         divisions,
         constraints,
         deriveDailyLimit: true,
+        maxSolveCells: RECOMMENDATION_SCHEDULE_CHECK_MAX_SOLVE_CELLS,
+        maxCheckMatches: RECOMMENDATION_SCHEDULE_CHECK_MAX_MATCHES,
       });
       return { status: result.status, warningCodes: result.warningCodes };
     };

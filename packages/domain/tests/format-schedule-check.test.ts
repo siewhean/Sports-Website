@@ -123,6 +123,17 @@ describe("schedule-aware format suggestions", () => {
         maxSolveCells: 10,
       }).status,
     ).toBe("not_checked");
+    // Above the match cap even the analytic diagnostics are skipped (request-path bound).
+    expect(
+      checkFormatScheduleFeasibility({
+        timeZone: "Asia/Singapore",
+        slots: courtSlots(2, 18),
+        durationMinutes: 30,
+        divisions: [{ divisionId: "open", graph }],
+        constraints: { ...workspaceDefaults, maximumMatchesPerDay: setting("required", { matches: 1 }) },
+        maxCheckMatches: 10,
+      }),
+    ).toEqual({ status: "not_checked", warningCodes: [], diagnostics: [] });
   });
 
   it("finds QA scenario 2 (canoe polo 16/12/8/16, 4 courts, 2 days) schedulable before materialisation", () => {
