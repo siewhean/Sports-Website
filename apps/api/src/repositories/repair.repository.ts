@@ -705,6 +705,27 @@ export class RepairRepository {
     );
   }
 
+  async reconcileStaleCases(competitionId: string, executor: SqlExecutor = this.sql): Promise<void> {
+    await executor.unsafe(
+      `INSERT INTO result_repair_case_events(result_repair_case_id, competition_id, event_type, actor_account_id, occurred_at, metadata)
+       SELECT older_case.id, older_case.competition_id, 'superseded', older_case.created_by_account_id, now(),
+              jsonb_build_object('superseded_by_result_version', newer_case.source_result_version)
+       FROM result_repair_cases older_case
+       JOIN result_repair_cases newer_case
+         ON newer_case.competition_id = older_case.competition_id
+        AND newer_case.corrected_match_id = older_case.corrected_match_id
+        AND newer_case.source_result_version > older_case.source_result_version
+       WHERE older_case.competition_id = $1
+         AND NOT EXISTS (
+           SELECT 1 FROM result_repair_case_events ev
+           WHERE ev.result_repair_case_id = older_case.id
+             AND ev.event_type IN ('published', 'superseded')
+         )
+       ON CONFLICT DO NOTHING`,
+      [competitionId],
+    );
+  }
+
   async listPendingCases(
     competitionId: string,
     executor: SqlExecutor = this.sql,
@@ -725,6 +746,17 @@ export class RepairRepository {
          ON schedule_case.result_repair_case_id = result_case.id
        WHERE result_case.competition_id = $1
          AND schedule_case.id IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM result_repair_case_events ev
+           WHERE ev.result_repair_case_id = result_case.id
+             AND ev.event_type IN ('published', 'superseded')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM result_repair_cases newer_case
+           WHERE newer_case.competition_id = result_case.competition_id
+             AND newer_case.corrected_match_id = result_case.corrected_match_id
+             AND newer_case.source_result_version > result_case.source_result_version
+         )
        ORDER BY result_case.created_at, result_case.id`,
       [competitionId],
     );

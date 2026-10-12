@@ -1562,7 +1562,7 @@ async function runScenario7(ctx: SimContext): Promise<void> {
 
   // Mid-day court closure: replace capacity with revision: 2, keeping both Court 1 and Court 2
   // so existing scheduled_matches foreign keys remain valid, but closing Court 2 (availability: [])
-  await ctx.request({
+  const capRes = await ctx.request({
     method: "PUT",
     url: `/api/v1/competitions/${comp.id}/capacity`,
     payload: {
@@ -1587,6 +1587,11 @@ async function runScenario7(ctx: SimContext): Promise<void> {
     },
     expectedStatuses: [200],
   });
+  // R2.1: closing a court with scheduled matches must flag the affected matches for re-plan.
+  const capBody = capRes.json<{ affected_matches?: Array<{ match_id: string }>; replan_required?: boolean }>();
+  if (!capBody.replan_required || (capBody.affected_matches ?? []).length === 0) {
+    throw new Error(`Expected replan_required with affected matches after closing Court 2: ${capRes.body}`);
+  }
 
   // Verify workspace detects stale input state following the capacity change
   const wsRes = await ctx.request({
@@ -1675,6 +1680,52 @@ async function runScenario7(ctx: SimContext): Promise<void> {
   console.log(
     `\n    [s7] displaced=${initialCourt2Matches.length} court-changed=${courtChanged.length} time-shifted-on-court-1=${timeOnlyMoves}`,
   );
+
+  // R2.2: running late. Push the final Court 1 match back with the schedule delay tool,
+  // publish the delayed revision, and assert the public projection reflects the shift.
+  const latest = (
+    await ctx.sql<{ published_schedule_revision_id: string; revision: number }[]>`
+      SELECT cp.published_schedule_revision_id, sr.revision
+      FROM competition_publications cp
+      JOIN schedule_revisions sr ON sr.id = cp.published_schedule_revision_id
+      WHERE cp.competition_id=${comp.id}`
+  )[0]!;
+  const lastOnCourt1 = pub.schedule
+    .filter((s) => getAreaId(s) === court1.id)
+    .reduce((a, b) => (Date.parse(a.starts_at!) >= Date.parse(b.starts_at!) ? a : b));
+  const delayRes = await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${latest.published_schedule_revision_id}/delays`,
+    payload: {
+      idempotency_key: `s7-delay-${randomUUID()}`,
+      expected_revision: latest.revision,
+      playing_area_id: court1.id,
+      from_epoch_ms: Date.parse(lastOnCourt1.starts_at!),
+      delay_minutes: 15,
+    },
+    expectedStatuses: [201],
+  });
+  const delayed = delayRes.json<{ id: string; revision: number }>();
+  await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${delayed.id}/publish`,
+    payload: { idempotency_key: `s7-delay-pub-${randomUUID()}`, expected_revision: delayed.revision },
+    expectedStatuses: [200],
+  });
+  const afterDelay = (
+    await ctx.request({
+      method: "GET",
+      url: `/api/v1/public/competitions/${comp.slug}/current`,
+      expectedStatuses: [200],
+    })
+  ).json<{ schedule: SchedMatch[] }>();
+  const shifted = afterDelay.schedule.find((s) => getMatchId(s) === getMatchId(lastOnCourt1));
+  if (!shifted || Date.parse(shifted.starts_at!) - Date.parse(lastOnCourt1.starts_at!) !== 15 * 60_000) {
+    throw new Error(`Delayed match ${getMatchId(lastOnCourt1)} was not pushed back 15 minutes in the public schedule`);
+  }
+  if (afterDelay.schedule.some((s) => getAreaId(s) === court2.id)) {
+    throw new Error("Delay re-introduced matches on closed Court 2");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1694,6 +1745,14 @@ async function runScenario8(ctx: SimContext): Promise<void> {
 
   // 1. Record walkover: away team wins
   await walkover(ctx, comp.id, targetMatch.id, "away");
+
+  // Walkover must persist a final forfeit result snapshot
+  const snapshots = await ctx.sql<{ state: string }[]>`
+    SELECT state FROM match_result_snapshots
+    WHERE match_id=${targetMatch.id} ORDER BY result_version DESC LIMIT 1`;
+  if (snapshots[0]?.state !== "final") {
+    throw new Error("Expected final match result snapshot for walkover match");
+  }
 
   // 2. Withdraw the losing home entry via lifecycle endpoint
   await ctx.request({

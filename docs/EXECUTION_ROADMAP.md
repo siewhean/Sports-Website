@@ -261,11 +261,11 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 **Checkpoint CP2 — Competition-day robustness**
 
-- [ ] Simulation scenario 7 (court closure mid-day) re-plans with only the affected matches moved and the public page updated.
-- [ ] Delay tool shifts remaining matches and the public version token changes.
-- [ ] Simulation scenario 8 (withdrawal) shows correct standings, forfeits and bracket.
-- [ ] R2.5 and R2.6 decisions recorded and implemented.
-- [ ] Notification emails arrive for each trigger.
+- [x] Simulation scenario 7 (court closure mid-day) re-plans with only the affected matches moved and the public page updated.
+- [x] Delay tool shifts remaining matches and the public version token changes.
+- [x] Simulation scenario 8 (withdrawal) shows correct standings, forfeits and bracket.
+- [x] R2.5 and R2.6 decisions recorded and implemented.
+- [x] Notification emails arrive for each trigger.
 
 ---
 

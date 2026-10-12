@@ -4649,6 +4649,241 @@ export class Phase4Runtime {
     });
   }
 
+  async delayScheduleMatches(
+    actor: Phase3Actor,
+    revisionId: string,
+    input: {
+      idempotency_key: string;
+      expected_revision: number;
+      delay_minutes?: number;
+      playing_area_id?: string;
+      target_playing_area_id?: string;
+      from_epoch_ms?: number;
+    },
+    requestId: string,
+  ) {
+    return this.transaction(async (tx) => {
+      const identity = first(
+        await tx.unsafe<{ competition_id: string }>(`SELECT competition_id FROM schedule_revisions WHERE id=$1`, [
+          revisionId,
+        ]),
+        ErrorCode.SCHEDULE_REVISION_NOT_FOUND,
+        "Schedule revision not found",
+      );
+      const access = await this.competitionAccess(tx, identity.competition_id, actor, false);
+      await this.lockIdempotency(tx, access.organisation_id, input.idempotency_key);
+      const requestHash = first(
+        await tx.unsafe<{ hash: string }>(`SELECT phase4_sha256_json($1::jsonb) hash`, [
+          { revision_id: revisionId, ...input },
+        ]),
+        ErrorCode.HASH_FAILED,
+        "Hash failed",
+      ).hash;
+      const receipt = (
+        await tx.unsafe<{ operation: string; request_hash: string; response: JsonObject | string }>(
+          `SELECT operation,request_hash,response FROM phase4_mutation_receipts WHERE organisation_id=$1 AND idempotency_key=$2`,
+          [access.organisation_id, input.idempotency_key],
+        )
+      )[0];
+      if (receipt) {
+        if (receipt.operation !== "schedule.delay" || receipt.request_hash !== requestHash)
+          throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
+        const replay = decoded<{ revision_id: string; delayed_count: number }>(receipt.response);
+        return {
+          ...(await this.revisionDetail(tx, replay.revision_id)),
+          idempotent_replay: true,
+          delayed_count: replay.delayed_count,
+        };
+      }
+      if (access.status === "archived")
+        throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
+      await this.lockScheduleMutation(tx, access.id);
+      const parent = first(
+        await tx.unsafe<{
+          id: string;
+          competition_id: string;
+          format_revision_id: string;
+          revision: number;
+          source_job_id: string | null;
+          input_hash: string;
+          status: string;
+          quality: JsonObject | string | null;
+        }>(`SELECT * FROM schedule_revisions WHERE id=$1 FOR UPDATE`, [revisionId]),
+        ErrorCode.SCHEDULE_REVISION_NOT_FOUND,
+        "Schedule revision not found",
+      );
+      if (parent.revision !== input.expected_revision)
+        throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Schedule revision changed; refresh and retry");
+      if (!["draft", "ready_for_review", "published"].includes(parent.status))
+        throw new ApiError(409, ErrorCode.SCHEDULE_REVISION_IMMUTABLE, "Schedule revision is immutable");
+
+      const delayMinutes = input.delay_minutes ?? 0;
+      if (delayMinutes < 0 || delayMinutes > 720)
+        throw new ApiError(422, ErrorCode.SCHEDULE_INVALID, "Delay minutes must be between 0 and 720");
+      if (delayMinutes === 0 && !input.target_playing_area_id)
+        throw new ApiError(
+          422,
+          ErrorCode.SCHEDULE_INVALID,
+          "Either delay_minutes > 0 or target_playing_area_id must be provided",
+        );
+
+      if (input.target_playing_area_id) {
+        const targetArea = (
+          await tx.unsafe<{ id: string }>(`SELECT id FROM playing_areas WHERE id=$1 AND competition_id=$2`, [
+            input.target_playing_area_id,
+            parent.competition_id,
+          ])
+        )[0];
+        if (!targetArea) throw new ApiError(404, ErrorCode.NOT_FOUND, "Target playing area not found");
+      }
+
+      const scheduledMatches = await tx.unsafe<{
+        match_id: string;
+        playing_area_id: string;
+        starts_at: Date | string;
+        ends_at: Date | string;
+        state: string;
+      }>(
+        `SELECT sm.match_id, sm.playing_area_id, sm.starts_at, sm.ends_at, m.state
+         FROM scheduled_matches sm
+         JOIN matches m ON m.id = sm.match_id
+         WHERE sm.schedule_revision_id = $1
+         ORDER BY sm.starts_at ASC, sm.match_id ASC`,
+        [revisionId],
+      );
+
+      const delayMs = delayMinutes * 60_000;
+      let delayedCount = 0;
+      const newAssignments = scheduledMatches.map((sm) => {
+        const startEpoch = new Date(sm.starts_at).getTime();
+        const endEpoch = new Date(sm.ends_at).getTime();
+        const isStartedOrDone = ["in_progress", "final", "corrected"].includes(sm.state);
+        const matchArea = !input.playing_area_id || sm.playing_area_id === input.playing_area_id;
+        const matchFromTime = input.from_epoch_ms === undefined || startEpoch >= input.from_epoch_ms;
+
+        if (!isStartedOrDone && matchArea && matchFromTime) {
+          delayedCount += 1;
+          return {
+            match_id: sm.match_id,
+            playing_area_id: input.target_playing_area_id ?? sm.playing_area_id,
+            start_epoch_ms: startEpoch + delayMs,
+            end_epoch_ms: endEpoch + delayMs,
+          };
+        }
+        return {
+          match_id: sm.match_id,
+          playing_area_id: sm.playing_area_id,
+          start_epoch_ms: startEpoch,
+          end_epoch_ms: endEpoch,
+        };
+      });
+
+      const nextId = randomUUID();
+      const nextRevision = first(
+        await tx.unsafe<{ revision: number }>(
+          `SELECT COALESCE(max(revision),0)::int+1 revision FROM schedule_revisions WHERE competition_id=$1`,
+          [parent.competition_id],
+        ),
+        ErrorCode.REVISION_FAILED,
+        "Revision could not be allocated",
+      ).revision;
+
+      const formatRevisionId = parent.format_revision_id;
+
+      let sourceJobId: string | null = parent.source_job_id;
+      if (sourceJobId) {
+        const { current } = await this.scheduleJobCurrentState(tx, sourceJobId, false);
+        if (!current) {
+          sourceJobId = null;
+        }
+      }
+
+      await tx.unsafe(
+        `INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,parent_revision_id,source_job_id,quality)
+           VALUES($1,$2,$3,$4,phase4_sha256_json($5::jsonb),'draft',$6,$7,$8,$9::jsonb)`,
+        [
+          nextId,
+          parent.competition_id,
+          formatRevisionId,
+          nextRevision,
+          { parent_revision_id: revisionId, assignments: newAssignments },
+          actor.accountId,
+          revisionId,
+          sourceJobId,
+          parent.quality ?? {},
+        ],
+      );
+
+      await tx.unsafe(
+        `INSERT INTO schedule_revision_formats(schedule_revision_id,competition_id,division_id,format_revision_id)
+           SELECT $1,competition_id,division_id,format_revision_id FROM schedule_revision_formats WHERE schedule_revision_id=$2
+         ON CONFLICT DO NOTHING`,
+        [nextId, revisionId],
+      );
+      await tx.unsafe(
+        `INSERT INTO schedule_revision_formats(schedule_revision_id,competition_id,division_id,format_revision_id)
+           SELECT $1,competition_id,division_id,id FROM format_revisions WHERE id=$2
+         ON CONFLICT DO NOTHING`,
+        [nextId, formatRevisionId],
+      );
+
+      for (const assignment of newAssignments) {
+        await tx.unsafe(
+          `INSERT INTO scheduled_matches(schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at)
+             VALUES($1,$2,$3,$4,to_timestamp($5::double precision/1000),to_timestamp($6::double precision/1000))`,
+          [
+            nextId,
+            assignment.match_id,
+            parent.competition_id,
+            assignment.playing_area_id,
+            assignment.start_epoch_ms,
+            assignment.end_epoch_ms,
+          ],
+        );
+      }
+
+      await tx.unsafe(`SELECT set_config('matchday.phase4_accept_schedule','on',true)`);
+      await tx.unsafe(
+        `UPDATE schedule_revisions SET assignment_hash=phase4_schedule_assignment_hash(id),status='ready_for_review',updated_at=now() WHERE id=$1`,
+        [nextId],
+      );
+      await tx.unsafe(`SELECT set_config('matchday.phase4_accept_schedule','off',true)`);
+
+      await tx.unsafe(
+        `INSERT INTO phase4_mutation_receipts(organisation_id,idempotency_key,operation,request_hash,response) VALUES($1,$2,'schedule.delay',$3,$4::jsonb)`,
+        [
+          access.organisation_id,
+          input.idempotency_key,
+          requestHash,
+          { revision_id: nextId, delayed_count: delayedCount },
+        ],
+      );
+
+      await this.evidence(
+        tx,
+        actor,
+        access.organisation_id,
+        requestId,
+        "schedule.delayed",
+        "schedule_revision",
+        nextId,
+        {
+          parent_revision_id: revisionId,
+          delay_minutes: delayMinutes,
+          playing_area_id: input.playing_area_id,
+          target_playing_area_id: input.target_playing_area_id,
+          delayed_count: delayedCount,
+        },
+      );
+
+      return {
+        ...(await this.revisionDetail(tx, nextId)),
+        idempotent_replay: false,
+        delayed_count: delayedCount,
+      };
+    });
+  }
+
   async lockScheduleAssignment(
     actor: Phase3Actor,
     revisionId: string,

@@ -72,6 +72,7 @@ export class GateCC4LifecycleOperations {
     competitionId: string,
   ): Promise<readonly GateCC4PendingResultRepairCase[]> {
     await this.access(this.sql, actor, competitionId, false);
+    await this.repairRepo.reconcileStaleCases(competitionId, this.sql);
     const rows = await this.repairRepo.listPendingCases(competitionId, this.sql);
     return rows.map((row: PendingRepairCaseRecord) => ({
       ...row,
