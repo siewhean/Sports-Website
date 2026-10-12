@@ -23,6 +23,7 @@ export const NOTIFICATION_PREFERENCE_TYPES = [
   "result_conflict",
   "billing_receipt",
   "competition-published",
+  "result-published",
 ] as const;
 const NotificationTypeParams = Type.Object({
   notificationType: Type.Union(NOTIFICATION_PREFERENCE_TYPES.map((value) => Type.Literal(value))),

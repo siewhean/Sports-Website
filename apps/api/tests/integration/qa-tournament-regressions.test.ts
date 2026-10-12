@@ -10,6 +10,12 @@ import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../../src/phase-3-runtime.js";
+import { MatchReminderSweeper } from "../../src/match-notifications.js";
+import {
+  EmailOutboxProcessor,
+  PostgresNotificationRepository,
+  createNodemailerSmtpEmailProvider,
+} from "@matchday/notifications";
 
 // Regressions from the mock-tournament QA run: walkover results, mid-group
 // withdrawal, manual standings recalculation of knockout slots, and 422s for
@@ -348,5 +354,110 @@ describeInfrastructure("QA mock-tournament regressions", () => {
       code: "SCORE_EVENT_REJECTED",
       message: expect.stringContaining("participant_id"),
     });
+  });
+});
+
+// Track R2.7: real triggers (scoring finalisation, published-schedule reminders) through the
+// transactional outbox and SMTP delivery into Mailpit.
+describeInfrastructure("competition-day notifications are delivered", () => {
+  const mailpitApiUrl = process.env.MAILPIT_API_URL ?? "http://127.0.0.1:8025";
+
+  /** Messages Mailpit received for this test's organiser whose subject contains `text`. */
+  async function delivered(text: string): Promise<Array<{ ID: string; Subject: string }>> {
+    const email = (await sql<{ primary_email: string }[]>`SELECT primary_email FROM accounts WHERE id=${accountId}`)[0]!
+      .primary_email;
+    // Mailpit indexes asynchronously after SMTP acceptance; poll briefly.
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await fetch(`${mailpitApiUrl}/api/v1/search?query=${encodeURIComponent(`subject:"${text}"`)}`);
+      expect(response.ok, `Mailpit API at ${mailpitApiUrl} must be reachable`).toBe(true);
+      const body = (await response.json()) as {
+        messages: Array<{ ID: string; Subject: string; To: Array<{ Address: string }> }>;
+      };
+      const mine = body.messages.filter((message) => message.To.some((to) => to.Address === email));
+      if (mine.length > 0 || attempt >= 20) return mine;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
+  async function messageText(id: string): Promise<string> {
+    const response = await fetch(`${mailpitApiUrl}/api/v1/message/${encodeURIComponent(id)}`);
+    return ((await response.json()) as { Text: string }).Text;
+  }
+
+  async function deliverOutbox() {
+    const processor = new EmailOutboxProcessor(
+      new PostgresNotificationRepository(sql),
+      createNodemailerSmtpEmailProvider({
+        host: process.env.SMTP_HOST ?? "127.0.0.1",
+        port: Number(process.env.SMTP_PORT ?? 1025),
+        secure: false,
+        from: "Matchday <no-reply@matchday.test>",
+      }),
+      // Reminders are enqueued at a simulated pre-match instant in 2027; deliver as of after it.
+      { now: () => new Date("2028-01-01T00:00:00Z"), createLeaseToken: randomUUID },
+    );
+    // Drain every due item: earlier tests in this file queue results for the same organiser.
+    let delivered = 0;
+    for (;;) {
+      const batch = await processor.processDue(50);
+      delivered += batch.delivered;
+      if (batch.claimed === 0) return { delivered };
+    }
+  }
+
+  it("emails the organiser a W/O result when a walkover is finalised", async () => {
+    const event = await championshipEvent("badminton");
+    const match = (await event.nextPlayable())!;
+    const competitionName = `Notify ${randomUUID().slice(0, 8)}`;
+    await sql`UPDATE competitions SET name=${competitionName} WHERE id=${event.competitionId}`;
+    await walkover(event.competitionId, match.id, "away");
+    const queued = await sql<{ type: string }[]>`
+      SELECT type FROM notifications WHERE account_id=${accountId} AND (payload #>> '{}')::jsonb->>'match_id'=${match.id}`;
+    expect(queued.map((row) => row.type)).toEqual(["result-published"]);
+    expect((await deliverOutbox()).delivered).toBeGreaterThanOrEqual(1);
+    const code = (await sql<{ code: string }[]>`SELECT code FROM matches WHERE id=${match.id}`)[0]!.code;
+    const result = (await delivered(competitionName)).find(
+      (message) => message.Subject === `Final result for ${code} in ${competitionName}`,
+    );
+    expect(result, "result-published email delivered").toBeDefined();
+    expect(await messageText(result!.ID)).toContain("W/O (Forfeit score:");
+  });
+
+  it("sends match reminders ahead of the published start once, honouring the match_reminder preference", async () => {
+    const event = await championshipEvent("basketball");
+    const [first] = await sql<{ match_id: string; starts_at: Date }[]>`
+      SELECT scheduled.match_id,scheduled.starts_at
+      FROM competition_publications publication
+      JOIN scheduled_matches scheduled ON scheduled.schedule_revision_id=publication.published_schedule_revision_id
+      WHERE publication.competition_id=${event.competitionId}
+      ORDER BY scheduled.starts_at LIMIT 1`;
+    const now = () => new Date(first!.starts_at.getTime() - 10 * 60_000);
+    const logger = { info: () => undefined, error: () => undefined };
+    const sweeper = new MatchReminderSweeper(
+      sql as unknown as PostgresJsSql,
+      { enabled: true, intervalMs: 60_000, leadMinutes: 30 },
+      logger,
+      now,
+    );
+    expect(await sweeper.sweep()).toBeGreaterThan(0);
+    await sweeper.sweep();
+    const reminders = await sql<{ count: number }[]>`
+      SELECT count(*)::int count FROM notifications
+      WHERE account_id=${accountId} AND type='match_reminder' AND (payload #>> '{}')::jsonb->>'match_id'=${first!.match_id}`;
+    expect(reminders[0]!.count).toBe(1);
+    expect((await deliverOutbox()).delivered).toBeGreaterThanOrEqual(1);
+    expect((await delivered("Match reminder for")).length).toBeGreaterThan(0);
+
+    // Opting out of the match_reminder category suppresses both channels for later matches.
+    await sql`INSERT INTO notification_preferences(account_id,notification_type,in_app_enabled,email_enabled)
+      VALUES(${accountId},'match_reminder',false,false)
+      ON CONFLICT (account_id,notification_type) DO UPDATE SET in_app_enabled=false,email_enabled=false`;
+    const later = new MatchReminderSweeper(
+      sql as unknown as PostgresJsSql,
+      { enabled: true, intervalMs: 60_000, leadMinutes: 600 },
+      logger,
+      now,
+    );
+    expect(await later.sweep()).toBe(0);
   });
 });

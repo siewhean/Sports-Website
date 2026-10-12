@@ -30,6 +30,7 @@ import type { PostgresJsSql } from "@matchday/identity";
 import type { CompetitionPublicationNotifier } from "./competition-publication-notifier.js";
 import { standingsResultFromSnapshot } from "./standings-results.js";
 import { RepairRepository } from "./repositories/repair.repository.js";
+import { enqueueResultPublishedNotifications } from "./match-notifications.js";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import { applyLiveOverlay, liveOverlayRowsSql, liveOverlayUpdatedAt, parseLiveOverlay } from "./public-live-overlay.js";
 import {
@@ -5072,6 +5073,18 @@ export class Phase2Runtime {
       after: { home_score: reduced.homeScore, away_score: reduced.awayScore, result_version: resultVersion },
       eventPayload: { competition_id: match.competition_id, match_id: input.matchId, result_version: resultVersion },
     });
+    await enqueueResultPublishedNotifications(
+      tx,
+      {
+        competitionId: match.competition_id,
+        matchId: input.matchId,
+        resultVersion,
+        homeScore: reduced.homeScore,
+        awayScore: reduced.awayScore,
+        walkover: input.canonical.state.exceptionalOutcome === "walkover",
+      },
+      () => this.now(),
+    );
     return {
       match_id: input.matchId,
       home_score: reduced.homeScore,
