@@ -1,7 +1,8 @@
--- Track R2.4: Fix semifinal stage labelling
--- Replaces phase4_materialize_format_revision so that penultimate single-elimination rounds
--- and matches with semifinal purpose/identifier are correctly assigned stage = 'semifinal'
--- rather than unconditionally defaulting to 'quarterfinal'.
+-- Track R2.4: Fix semifinal stage labelling.
+-- Redefines phase4_materialize_format_revision exactly as 0034 left it, except the stage label:
+-- a single_elimination progression match in the penultimate round of its stage's championship
+-- path (round = max round - 1) is now 'semifinal' instead of 'quarterfinal'. The label is derived
+-- purely from graph structure (stage kind, purpose, round), never from match ID text.
 
 CREATE OR REPLACE FUNCTION phase4_materialize_format_revision(target_revision uuid) RETURNS integer AS $$
 DECLARE revision_row format_revisions%ROWTYPE; graph_match jsonb; source jsonb; new_match_id uuid; source_uuid uuid;
@@ -29,9 +30,11 @@ BEGIN
     FROM jsonb_array_elements(revision_row.definition->'stages') stage
     WHERE stage->>'id'=graph_match->>'stageId';
 
+    -- Championship-path depth of this stage; placement/classification matches are excluded so a
+    -- bronze or classification match can never shift which round counts as the semifinal.
     SELECT max((m->>'round')::integer) INTO stage_max_round
     FROM jsonb_array_elements(revision_row.definition->'matches') m
-    WHERE m->>'stageId'=graph_match->>'stageId';
+    WHERE m->>'stageId'=graph_match->>'stageId' AND m->>'purpose' IN ('progression','championship');
 
     INSERT INTO matches(id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal,
       graph_match_id,graph_stage_id,graph_pool_id,graph_purpose)
@@ -40,12 +43,10 @@ BEGIN
       CASE
         WHEN graph_match->>'purpose'='championship' THEN 'final'
         WHEN graph_match->>'purpose'='placement' THEN 'bronze'
-        WHEN graph_match->>'purpose'='semifinal'
-             OR graph_match->>'id' LIKE '%semifinal%'
-             OR graph_match->>'id' LIKE '%semi-final%' THEN 'semifinal'
         WHEN stage_kind='single_elimination' THEN
           CASE
-            WHEN stage_max_round IS NOT NULL AND (graph_match->>'round')::integer = stage_max_round - 1 THEN 'semifinal'
+            WHEN graph_match->>'purpose'='progression'
+                 AND (graph_match->>'round')::integer = stage_max_round - 1 THEN 'semifinal'
             ELSE 'quarterfinal'
           END
         ELSE 'group'
@@ -118,22 +119,40 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Backfill existing matches with correct semifinal stage
-UPDATE matches m
-SET stage = 'semifinal'
-WHERE m.stage = 'quarterfinal'
-  AND (
-    m.code LIKE '%semifinal%'
-    OR m.code LIKE '%semi-final%'
-    OR m.graph_match_id LIKE '%semifinal%'
-    OR m.graph_match_id LIKE '%semi-final%'
-    OR (
-      m.graph_stage_id IS NOT NULL
-      AND m.round_number = (
-        SELECT max(m2.round_number) - 1
-        FROM matches m2
-        WHERE m2.format_revision_id = m.format_revision_id
-          AND m2.graph_stage_id = m.graph_stage_id
-      )
-    )
-  );
+-- Backfill already-materialised projections from the same structural rule, reading the
+-- authoritative graph (format_revisions.definition) rather than the denormalised columns.
+-- aa_matches_phase4_projection_guard rejects any stage change on a materialised projection, so
+-- the guard is disabled for this single statement only, following the sanctioned migration
+-- precedent in 0011 (DISABLE/ENABLE around a deterministic backfill). The migrator runs this file
+-- in one transaction under an ACCESS EXCLUSIVE lock taken by ALTER TABLE, so no concurrent writer
+-- can observe or exploit the window, and a failure rolls the trigger state back too.
+-- Only `stage` changes; every other guarded projection column is untouched, so
+-- phase4_materialization_is_exact stays true for every revision.
+ALTER TABLE matches DISABLE TRIGGER aa_matches_phase4_projection_guard;
+
+WITH graph_stage AS (
+  SELECT revision.id AS format_revision_id, stage->>'id' AS stage_id
+  FROM format_revisions revision
+  CROSS JOIN LATERAL jsonb_array_elements(revision.definition->'stages') stage
+  WHERE revision.graph_materialized_at IS NOT NULL
+    AND stage->>'kind'='single_elimination'
+), stage_depth AS (
+  SELECT graph_stage.format_revision_id, graph_stage.stage_id,
+    max((graph_match->>'round')::integer) AS max_round
+  FROM graph_stage
+  JOIN format_revisions revision ON revision.id=graph_stage.format_revision_id
+  CROSS JOIN LATERAL jsonb_array_elements(revision.definition->'matches') graph_match
+  WHERE graph_match->>'stageId'=graph_stage.stage_id
+    AND graph_match->>'purpose' IN ('progression','championship')
+  GROUP BY graph_stage.format_revision_id, graph_stage.stage_id
+)
+UPDATE matches match
+SET stage='semifinal'
+FROM stage_depth depth
+WHERE match.format_revision_id=depth.format_revision_id
+  AND match.graph_stage_id=depth.stage_id
+  AND match.graph_purpose='progression'
+  AND match.round_number=depth.max_round-1
+  AND match.stage='quarterfinal';
+
+ALTER TABLE matches ENABLE TRIGGER aa_matches_phase4_projection_guard;

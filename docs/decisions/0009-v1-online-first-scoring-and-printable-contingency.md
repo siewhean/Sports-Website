@@ -1,4 +1,4 @@
-# ADR 0008 — V1 Online-First Scoring Policy & Printable Fallback Contingency
+# ADR 0009 — V1 Online-First Scoring Policy & Printable Fallback Contingency
 
 **Status:** Accepted  
 **Date:** 13 October 2026  

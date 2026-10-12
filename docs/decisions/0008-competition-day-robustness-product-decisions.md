@@ -1,4 +1,4 @@
-# ADR 0007 — Competition-Day Robustness: Product & Presentation Decisions
+# ADR 0008 — Competition-Day Robustness: Product & Presentation Decisions
 
 **Status:** Accepted  
 **Date:** 13 October 2026  
