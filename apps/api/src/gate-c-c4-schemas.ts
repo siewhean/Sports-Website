@@ -213,6 +213,7 @@ const gateCC4PublicResult = gateCC4Strict({
     ),
   ),
   recorded_time_seconds: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+  walkover: Type.Optional(gateCC4Strict({ winner: Type.Union([Type.Literal("home"), Type.Literal("away")]) })),
 });
 const gateCC4PublicDivision = gateCC4Strict({
   division: gateCC4Strict({ id: gateCC4Id, name: Type.String() }),

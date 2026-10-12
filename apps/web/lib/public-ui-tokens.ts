@@ -5,5 +5,7 @@ export const publicUi = {
   push: "push",
   replace: "replace",
   locale: "en-SG",
+  home: "home",
+  away: "away",
 } as const;
 export type LiveTone = "live" | "warn" | "idle";

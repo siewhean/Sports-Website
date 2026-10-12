@@ -30,6 +30,8 @@ export type PublicMatchResult = {
   current_segment?: number;
   segments?: Array<{ number: number; home: number; away: number }>;
   recorded_time_seconds?: number | null;
+  /** Present when the match was settled by walkover/forfeit; home_score/away_score hold the forfeit scoreline. */
+  walkover?: { winner: "home" | "away" };
 };
 
 export type PublicDivisionProjection = {

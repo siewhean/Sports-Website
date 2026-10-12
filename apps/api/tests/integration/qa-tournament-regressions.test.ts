@@ -261,6 +261,38 @@ describeInfrastructure("QA mock-tournament regressions", () => {
     expect(Number(groupRow.scoreFor)).toBeGreaterThanOrEqual(42);
   });
 
+  it("flags walkover results and exposes per-group membership on the public projection", async () => {
+    const event = await championshipEvent("badminton");
+    const first = (await event.nextPlayable())!;
+    const result = await walkover(event.competitionId, first.id, "away");
+    const second = (await event.nextPlayable())!;
+    await badmintonHomeWin(event.competitionId, second.id);
+
+    const [competitionRow] = await sql<
+      { slug: string }[]
+    >`SELECT slug FROM competitions WHERE id=${event.competitionId}`;
+    const slug = competitionRow!.slug;
+    const projection = await runtime.publicCompetition(slug);
+    const division = projection.divisions.find((item) => item.division.id === event.divisionId)!;
+    const walkoverResult = division.results.find((item) => item.id === first.id)!;
+    expect(walkoverResult).toMatchObject({
+      walkover: { winner: "away" },
+      home_score: result.home_score,
+      away_score: result.away_score,
+    });
+    expect(division.results.find((item) => item.id === second.id)?.walkover).toBeUndefined();
+
+    const poolIds = new Set(
+      event.graph.matches.filter((match) => match.purpose === "pool").map((match) => match.poolId ?? match.stageId),
+    );
+    expect(poolIds.size).toBeGreaterThan(1);
+    const groups = (division.standings as { groups?: Array<{ id: string; entry_ids: string[] }> }).groups;
+    expect(groups?.map((group) => group.id).sort()).toEqual([...poolIds].sort());
+    const members = groups!.flatMap((group) => group.entry_ids);
+    expect(new Set(members).size).toBe(members.length);
+    expect(members).toEqual(expect.arrayContaining([first.home_entry_id, first.away_entry_id]));
+  });
+
   it("withdraws an entry mid-group after a completed set-sport match", async () => {
     const event = await championshipEvent("badminton");
     const first = (await event.nextPlayable())!;

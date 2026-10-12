@@ -311,6 +311,8 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
     const homeScore = nonNegativeInteger(match.home_score);
     const awayScore = nonNegativeInteger(match.away_score);
     const resultVersion = nonNegativeInteger(match.result_version);
+    const walkoverWinner =
+      match.walkover_winner === "home" || match.walkover_winner === "away" ? match.walkover_winner : null;
     return {
       id,
       label: string(match.code) ?? id,
@@ -322,6 +324,7 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
       ...(homeScore === null ? {} : { homeScore }),
       ...(awayScore === null ? {} : { awayScore }),
       ...(resultVersion === null ? {} : { resultVersion }),
+      ...(walkoverWinner && status === "final" ? { walkover: { winner: walkoverWinner } } : {}),
       status,
     };
   });
