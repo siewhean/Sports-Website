@@ -4331,7 +4331,15 @@ export class Phase4Runtime {
         ErrorCode.SCHEDULE_SLOT_INVALID,
         "Move target is not an authoritative current-capacity slot",
       );
-    const current = this.domainAssignments(revision.assignments);
+    // Revision rows do not persist lock state; the solver snapshot is the
+    // authority for which matches were fixed when this revision was generated.
+    const fixedMatchIds = new Set(
+      problem.matches.filter((match) => match.fixedAssignment !== undefined).map((match) => match.id),
+    );
+    const current = this.domainAssignments(revision.assignments).map((assignment) => ({
+      ...assignment,
+      fixed: fixedMatchIds.has(assignment.matchId),
+    }));
     const source = current.find((assignment) => assignment.matchId === input.match_id);
     if (!source) throw new ApiError(404, ErrorCode.MATCH_NOT_FOUND, "Scheduled match not found");
     const moved = current.map((assignment) =>
