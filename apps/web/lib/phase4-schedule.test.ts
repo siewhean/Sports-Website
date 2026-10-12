@@ -552,6 +552,25 @@ describe("phase 4 schedule boundary parsers", () => {
       ).toBeNull();
     });
 
+    it("accepts capacity diagnostics only with an explanation message", () => {
+      const diagnostic = {
+        code: "maximum_matches_per_day",
+        severity: "required",
+        match_ids: [matchId1],
+        message: "8 entries may have to play up to 7 matches; raise the daily limit to at least 7.",
+      };
+      expect(
+        parseScheduleJobDiagnostics({ job_id: validJobId, status: "no_solution", diagnostics: [diagnostic] })
+          ?.diagnostics,
+      ).toEqual([
+        { code: "maximum_matches_per_day", severity: "required", matchIds: [matchId1], message: diagnostic.message },
+      ]);
+      const withoutMessage = { code: diagnostic.code, severity: diagnostic.severity, match_ids: diagnostic.match_ids };
+      expect(
+        parseScheduleJobDiagnostics({ job_id: validJobId, status: "no_solution", diagnostics: [withoutMessage] }),
+      ).toBeNull();
+    });
+
     it("rejects diagnostic with invalid code or severity", () => {
       expect(
         parseScheduleJobDiagnostics({

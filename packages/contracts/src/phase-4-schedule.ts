@@ -120,7 +120,9 @@ export type ScheduleViolationCode =
   | "early_match_balance"
   | "late_match_balance"
   | "division_area_spread"
-  | "existing_schedule_moved";
+  | "existing_schedule_moved"
+  // Infeasibility diagnostics only; never part of a persisted schedule result.
+  | "insufficient_capacity";
 
 export type ScheduleViolation = {
   code: ScheduleViolationCode;
@@ -302,12 +304,20 @@ export type ScheduleCandidateRequest = {
   seed_assignments?: readonly ScheduleAssignment[];
 };
 
-export type ScheduleOfficialDiagnosticCode = "official_unavailable" | "official_overlap";
+export type ScheduleOfficialDiagnosticCode =
+  | "official_unavailable"
+  | "official_overlap"
+  | "insufficient_capacity"
+  | "maximum_matches_per_day"
+  | "minimum_rest"
+  | "dependency_order";
 
 export type ScheduleOfficialDiagnostic = Readonly<{
   code: ScheduleOfficialDiagnosticCode;
   severity: "required" | "hard";
   match_ids: readonly string[];
+  /** Organiser-facing explanation with display names; present for non-official diagnostics. */
+  message?: string;
 }>;
 
 export type ScheduleJobDiagnosticsResponse = Readonly<{

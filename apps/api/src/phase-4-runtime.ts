@@ -42,6 +42,7 @@ import {
   diagnoseScheduleInfeasibility,
   evaluateScheduleQuality,
   materialiseFormatGraph,
+  minimumFeasibleDailyMatchLimit,
   recommendCompetitionFormats,
   toScheduleJobInput,
   validateAssistedSetupStep,
@@ -1925,6 +1926,26 @@ export class Phase4Runtime {
         if (receipt.operation !== "format.publish" || receipt.request_hash !== requestHash)
           throw new ApiError(409, ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with different input");
       } else {
+        // Same arithmetic as the publish trigger, checked first so the organiser gets the real
+        // cause instead of the generic state error the trigger's exception maps to.
+        const capacity = first(
+          await tx.unsafe<{ required_slots: number; available_slots: number }>(
+            `SELECT (jsonb_array_length(definition->'matches')
+                + phase3_selected_format_required_slots(competition_id,division_id))::int required_slots,
+               phase3_available_match_slots(competition_id)::int available_slots
+             FROM format_revisions WHERE id=$1`,
+            [formatId],
+          ),
+          ErrorCode.FORMAT_NOT_FOUND,
+          "Format not found",
+        );
+        if (capacity.required_slots > capacity.available_slots)
+          throw new ApiError(
+            422,
+            ErrorCode.CAPACITY_INSUFFICIENT,
+            `Published formats need ${capacity.required_slots} match slots but the venue capacity provides ` +
+              `${capacity.available_slots}; add playing areas or time, or choose a smaller format`,
+          );
         if (!row.graph_materialized_at) await tx.unsafe(`SELECT phase4_materialize_format_revision($1)`, [formatId]);
         await tx.unsafe(`SELECT phase4_publish_format_revision($1,$2,$3)`, [formatId, actor.accountId, requestId]);
         await tx.unsafe(
@@ -3721,8 +3742,8 @@ export class Phase4Runtime {
     }
 
     const row = first(
-      await this.sql.unsafe<{ input_snapshot: JsonObject | string }>(
-        `SELECT input_snapshot FROM schedule_generation_jobs WHERE id=$1`,
+      await this.sql.unsafe<{ input_snapshot: JsonObject | string; competition_id: string }>(
+        `SELECT input_snapshot,competition_id FROM schedule_generation_jobs WHERE id=$1`,
         [jobId],
       ),
       ErrorCode.SCHEDULE_JOB_NOT_FOUND,
@@ -3731,19 +3752,42 @@ export class Phase4Runtime {
 
     const problem = this.problemFromSnapshot(row.input_snapshot);
     const violations = diagnoseScheduleInfeasibility(problem);
+    const names = new Map(
+      (
+        await this.sql.unsafe<{ id: string; name: string }>(
+          `SELECT e.id::text id,e.name FROM division_entries e JOIN divisions d ON d.id=e.division_id
+           WHERE d.competition_id=$1
+           UNION ALL SELECT id::text,name FROM playing_areas WHERE competition_id=$1
+           UNION ALL SELECT id::text,code FROM matches WHERE competition_id=$1`,
+          [row.competition_id],
+        )
+      ).map((item) => [item.id, item.name]),
+    );
+    const named = (message: string) =>
+      message.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, (id) => names.get(id) ?? id);
+    const diagnosedCodes = new Set<ScheduleOfficialDiagnostic["code"]>([
+      "official_unavailable",
+      "official_overlap",
+      "insufficient_capacity",
+      "maximum_matches_per_day",
+      "minimum_rest",
+      "dependency_order",
+    ]);
 
     const diagnosticsMap = new Map<string, ScheduleOfficialDiagnostic>();
     for (const v of violations) {
-      if (v.code === "official_unavailable" || v.code === "official_overlap") {
-        const sortedMatchIds = [...v.matchIds].sort();
-        const key = `${v.code}:${sortedMatchIds.join(",")}`;
-        if (!diagnosticsMap.has(key)) {
-          diagnosticsMap.set(key, {
-            code: v.code,
-            severity: v.severity === "required" ? "required" : "hard",
-            match_ids: sortedMatchIds,
-          });
-        }
+      const code = v.code as ScheduleOfficialDiagnostic["code"];
+      if (!diagnosedCodes.has(code)) continue;
+      const sortedMatchIds = [...v.matchIds].sort();
+      const key = `${code}:${sortedMatchIds.join(",")}`;
+      if (!diagnosticsMap.has(key)) {
+        diagnosticsMap.set(key, {
+          code,
+          severity: v.severity === "required" ? "required" : "hard",
+          match_ids: sortedMatchIds,
+          // Official diagnostics keep their established id-only shape; the web names them itself.
+          ...(code === "official_unavailable" || code === "official_overlap" ? {} : { message: named(v.message) }),
+        });
       }
     }
 
@@ -4883,9 +4927,38 @@ export class Phase4Runtime {
     const authoritativeSlots = latestSnapshot?.slots ?? capacitySlots;
     const finalTarget = authoritativeSlots.at(-1)?.start_epoch_ms ?? 0;
     const featuredAreaId = areaRows[0]?.id ?? "00000000-0000-4000-8000-000000000000";
+    // Keep 4 as the welfare default, but never below what the published formats force an entry to
+    // play per day over the event's dates (an 8-team round robin in one day needs 7).
+    const publishedGraphs = await this.sql.unsafe<{ division_id: string; definition: FormatGraph | string }>(
+      `SELECT DISTINCT ON (division_id) division_id,definition FROM format_revisions
+       WHERE competition_id=$1 AND status='published' ORDER BY division_id,revision DESC,id DESC`,
+      [competitionId],
+    );
+    const formatMatches = publishedGraphs.flatMap((row) => {
+      const graph = decoded<FormatGraph>(row.definition);
+      const seeds = Object.fromEntries(
+        Array.from({ length: graph.entryCount }, (_, index) => [index + 1, `${row.division_id}:${index + 1}`]),
+      );
+      try {
+        return deriveSchedulingMatches(graph, row.division_id, seeds, 1);
+      } catch {
+        return [];
+      }
+    });
+    const defaultDailyLimit = Math.min(
+      64,
+      Math.max(
+        4,
+        minimumFeasibleDailyMatchLimit(
+          formatMatches,
+          authoritativeSlots.map((slot) => slot.start_epoch_ms),
+          competition.timezone,
+        ),
+      ),
+    );
     const defaultConstraints: ScheduleConstraints = {
       minimum_rest: { mode: "preferred", value: { minutes: 60 }, weight: 4 },
-      maximum_matches_per_day: { mode: "required", value: { matches: 4 } },
+      maximum_matches_per_day: { mode: "required", value: { matches: defaultDailyLimit } },
       preferred_final_time: {
         mode: "preferred",
         value: { target_start_epoch_ms: finalTarget, tolerance_minutes: 30 },

@@ -47,6 +47,13 @@ export function formatOverlapMatchLabels(matchIds: readonly string[], matches: r
   });
 }
 
+const capacityDiagnosticTitles: Partial<Record<ScheduleOfficialDiagnostic["code"], string>> = {
+  insufficient_capacity: phase4ScheduleCopy.insufficientCapacityTitle,
+  maximum_matches_per_day: phase4ScheduleCopy.dailyMatchLimitTitle,
+  minimum_rest: phase4ScheduleCopy.requiredRestTitle,
+  dependency_order: phase4ScheduleCopy.dependencyWindowTitle,
+};
+
 export type NoSolutionOfficialDiagnosticsProps = Readonly<{
   competitionId: string;
   matches: readonly ScheduleMatch[];
@@ -73,12 +80,22 @@ export function NoSolutionOfficialDiagnostics({
     );
   }
 
+  const hasOfficialDiagnostics = diagnostics.some(
+    (diag) => diag.code === "official_unavailable" || diag.code === "official_overlap",
+  );
+
   return (
     <div className={styles.container} aria-live="polite" data-testid="no-solution-diagnostics">
       <div className={styles.headingRow}>
-        <h3 className={styles.heading}>{phase4ScheduleCopy.officialConflictsDetected}</h3>
+        <h3 className={styles.heading}>
+          {hasOfficialDiagnostics
+            ? phase4ScheduleCopy.officialConflictsDetected
+            : phase4ScheduleCopy.schedulingConflictsDetected}
+        </h3>
       </div>
-      <p className={styles.disclaimer}>{phase4ScheduleCopy.officialConflictsDisclaimer}</p>
+      {hasOfficialDiagnostics ? (
+        <p className={styles.disclaimer}>{phase4ScheduleCopy.officialConflictsDisclaimer}</p>
+      ) : null}
       <ul className={styles.diagnosticsList} role="list">
         {diagnostics.map((diag, index) => {
           if (diag.code === "official_unavailable") {
@@ -114,6 +131,18 @@ export function NoSolutionOfficialDiagnostics({
                   >
                     {phase4ScheduleCopy.reviewOfficials}
                   </Link>
+                </div>
+              </li>
+            );
+          }
+
+          const title = capacityDiagnosticTitles[diag.code];
+          if (title && diag.message) {
+            return (
+              <li key={`${diag.code}-${index}`} className={styles.diagnosticItem}>
+                <span className={styles.conditionTitle}>{title}</span>
+                <div className={styles.matchesRow}>
+                  <span className={styles.matchLabels}>{diag.message}</span>
                 </div>
               </li>
             );

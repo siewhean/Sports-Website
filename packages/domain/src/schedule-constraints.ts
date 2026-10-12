@@ -100,7 +100,8 @@ export type ScheduleViolationCode =
   | "early_match_balance"
   | "late_match_balance"
   | "division_area_spread"
-  | "existing_schedule_moved";
+  | "existing_schedule_moved"
+  | "insufficient_capacity";
 
 export type ScheduleViolation = {
   code: ScheduleViolationCode;
@@ -1461,12 +1462,22 @@ function partialAllows(
   return true;
 }
 
+/**
+ * `preferences` ranks hard-feasible slots by preference penalty first. `bounded` keeps that
+ * ranking but only within a short horizon after the earliest hard-feasible start, so a
+ * preference (e.g. rest) can delay a match a little without consuming late capacity.
+ * `feasibility` is earliest finish first (list scheduling), with preferences as tie-breakers.
+ * Preferences never filter slots in any mode; they only order the hard-feasible ones.
+ */
+type PlacementMode = "preferences" | "bounded" | "feasibility";
+
 function candidateRank(
   problem: ScheduleProblem,
   match: SchedulingMatch,
   candidate: ScheduleAssignment,
   assigned: ReadonlyMap<string, ScheduleAssignment>,
   context: CandidateEvaluationContext,
+  placement: PlacementMode,
 ): readonly number[] {
   const matches = context.matchesById;
   const assignedValues = [...assigned.values()];
@@ -1592,6 +1603,7 @@ function candidateRank(
     preferredLateSpread * weight(problem.constraints.balanceLateMatches) +
     preferredDivisionExcess * weight(problem.constraints.keepDivisionTogether) +
     preferredPreservation * weight(problem.constraints.preserveExistingSchedule);
+  if (placement === "feasibility") return [candidate.endEpochMs, dailyLoad, preferencePenalty, -nearestRest];
   if (problem.objective === "fastest") return [preferencePenalty, candidate.endEpochMs, dailyLoad, -nearestRest];
   if (problem.objective === "balanced")
     return [preferencePenalty, candidate.endEpochMs, dailyLoad, finalDelta, -nearestRest];
@@ -1614,6 +1626,40 @@ function stableIterationIndex(iteration: number, matchId: string, candidateCount
   return (offset + iteration) % candidateCount;
 }
 
+function boundedPlacementHorizonMinutes(problem: ScheduleProblem, match: SchedulingMatch): number {
+  const { minimumRest, avoidConsecutiveMatches } = problem.constraints;
+  return (
+    match.durationMinutes +
+    Math.max(
+      minimumRest.mode === "ignored" ? 0 : minimumRest.value.minutes,
+      avoidConsecutiveMatches.mode === "ignored" ? 0 : avoidConsecutiveMatches.value.minutes,
+    )
+  );
+}
+
+/** Relaxed retries perturb only among the earliest few slots so exploration cannot starve dependants. */
+const FEASIBILITY_PERTURBATION_WINDOW = 3;
+
+/**
+ * Smallest per-entry daily match limit the matches can satisfy across the available local dates:
+ * the most matches any entry may have to play (knockout possibilities counted conservatively),
+ * spread evenly over the dates. Used to derive a default that never makes a format unschedulable.
+ */
+export function minimumFeasibleDailyMatchLimit(
+  matches: readonly SchedulingMatch[],
+  slotStartEpochMs: readonly number[],
+  timeZone: string,
+): number {
+  const dates = new Set(slotStartEpochMs.map((start) => localDateKey(start, timeZone))).size;
+  if (dates === 0) return 1;
+  const ancestors = buildTransitiveDependencies(matches);
+  let mostMatches = 1;
+  for (const entryId of new Set(matches.flatMap((match) => match.possibleEntryIds))) {
+    mostMatches = Math.max(mostMatches, maxMatchesForEntryInCollection(entryId, matches, ancestors));
+  }
+  return Math.ceil(mostMatches / dates);
+}
+
 function exceedsRequiredDailyMatchCapacity(problem: ScheduleProblem): boolean {
   if (problem.constraints.maximumMatchesPerDay.mode !== "required") return false;
   const availableDates = new Set(problem.slots.map((slot) => localDateKey(slot.startEpochMs, problem.timeZone)));
@@ -1628,7 +1674,11 @@ function exceedsRequiredDailyMatchCapacity(problem: ScheduleProblem): boolean {
   return false;
 }
 
-function generateIteration(problem: ScheduleProblem, iteration: number): ScheduleAssignment[] {
+function generateIteration(
+  problem: ScheduleProblem,
+  iteration: number,
+  placement: PlacementMode = "preferences",
+): ScheduleAssignment[] {
   validateProblem(problem);
   const slots = [...problem.slots].sort(
     (left, right) =>
@@ -1657,9 +1707,14 @@ function generateIteration(problem: ScheduleProblem, iteration: number): Schedul
       .filter((assignment) => partialAllows(problem, match, assignment, assigned, context));
     if (match.fixedAssignment)
       candidates = candidates.filter((candidate) => candidate.slotId === match.fixedAssignment!.slotId);
+    if (placement === "bounded" && candidates.length > 0) {
+      const earliest = Math.min(...candidates.map((candidate) => candidate.startEpochMs));
+      const horizon = earliest + boundedPlacementHorizonMinutes(problem, match) * MINUTE_MS;
+      candidates = candidates.filter((candidate) => candidate.startEpochMs <= horizon);
+    }
     const rankedCandidates = candidates.map((candidate) => ({
       candidate,
-      rank: candidateRank(problem, match, candidate, assigned, context),
+      rank: candidateRank(problem, match, candidate, assigned, context, placement),
     }));
     rankedCandidates.sort((left, right) => {
       const ranked = compareRank(left.rank, right.rank);
@@ -1669,7 +1724,11 @@ function generateIteration(problem: ScheduleProblem, iteration: number): Schedul
         left.candidate.slotId.localeCompare(right.candidate.slotId)
       );
     });
-    const selected = rankedCandidates[stableIterationIndex(iteration, match.id, rankedCandidates.length)]?.candidate;
+    const window =
+      placement !== "preferences"
+        ? Math.min(rankedCandidates.length, FEASIBILITY_PERTURBATION_WINDOW)
+        : rankedCandidates.length;
+    const selected = rankedCandidates[stableIterationIndex(iteration, match.id, window)]?.candidate;
     if (!selected) throw new Error(`No valid slot remains for match ${match.id}`);
     assigned.set(match.id, selected);
   }
@@ -1686,18 +1745,44 @@ function isNoValidSlotError(error: unknown): error is Error {
   return error instanceof Error && error.message.startsWith("No valid slot remains");
 }
 
-export function generateConstraintAwareSchedule(problem: ScheduleProblem): ScheduleAssignment[] {
-  try {
-    return generateIteration(problem, 0);
-  } catch (error) {
-    if (problem.objective === "fastest" || !isNoValidSlotError(error)) {
-      throw error;
+/**
+ * Preferred (soft) constraints must never turn a hard-feasible problem into no_solution. Greedy
+ * placement has no backtracking, so a preference-led choice can consume a slot a later dependant
+ * needs. Retry with preferences relaxed to tie-breakers (earliest-finish placement), first at the
+ * same iteration and then at the deterministic baseline iteration. Required constraints stay hard.
+ */
+function generateIterationWithRelaxation(problem: ScheduleProblem, iteration: number): ScheduleAssignment[] {
+  // Relaxation only changes how slots are ranked; the returned assignments are still validated
+  // and scored by callers against the original problem, so quality reports stay honest.
+  const preferredKeys = (Object.keys(problem.constraints) as (keyof SchedulingConstraints)[]).filter(
+    (key) => problem.constraints[key].mode === "preferred",
+  );
+  const relaxing = (key: keyof SchedulingConstraints): ScheduleProblem => ({
+    ...problem,
+    constraints: { ...problem.constraints, [key]: { mode: "ignored", value: problem.constraints[key].value } },
+  });
+  const attempts: [ScheduleProblem, number, PlacementMode][] = [
+    [problem, iteration, "preferences"],
+    ...preferredKeys.map((key): [ScheduleProblem, number, PlacementMode] => [relaxing(key), iteration, "preferences"]),
+    [problem, iteration, "bounded"],
+    [problem, iteration, "feasibility"],
+    ...(iteration === 0 ? [] : [[problem, 0, "feasibility"] as [ScheduleProblem, number, PlacementMode]]),
+  ];
+  let lastError: unknown;
+  for (const [attemptProblem, attemptIteration, placement] of attempts) {
+    try {
+      // Relaxing a preferred setting cannot change hard validity: required modes are untouched.
+      return generateIteration(attemptProblem, attemptIteration, placement);
+    } catch (error) {
+      if (!isNoValidSlotError(error)) throw error;
+      lastError = error;
     }
-    // Preference-led greedy placement may consume a scarce late slot. Fall
-    // back to the deterministic feasibility-first baseline; workers can then
-    // continue exploring preferred quality without losing a valid draft.
-    return generateIteration({ ...problem, objective: "fastest" }, 0);
   }
+  throw lastError;
+}
+
+export function generateConstraintAwareSchedule(problem: ScheduleProblem): ScheduleAssignment[] {
+  return generateIterationWithRelaxation(problem, 0);
 }
 
 /**
@@ -1738,18 +1823,9 @@ export function generateScheduleCandidates(
   const endExclusive = startIteration + maxIterations;
   for (let iteration = firstGeneratedIteration; iteration < endExclusive; iteration += 1) {
     try {
-      add(iteration, generateIteration(problem, iteration));
+      add(iteration, generateIterationWithRelaxation(problem, iteration));
     } catch (error) {
       if (!isNoValidSlotError(error)) throw error;
-      if (problem.objective === "fastest") continue;
-      try {
-        // Keep worker exploration aligned with generateConstraintAwareSchedule:
-        // an objective preference may consume a scarce slot, but it must not
-        // hide a deterministic feasible draft from the organiser.
-        add(iteration, generateIteration({ ...problem, objective: "fastest" }, iteration));
-      } catch (fallbackError) {
-        if (!isNoValidSlotError(fallbackError)) throw fallbackError;
-      }
     }
   }
   return candidates;
@@ -1968,6 +2044,198 @@ export function diagnoseScheduleInfeasibility(problem: ScheduleProblem): readonl
         message: `Official ${officialId} is assigned to ${assignedMatches.length} matches but only ${maxSequentialSlots} non-overlapping slots are available`,
       });
     }
+  }
+
+  violations.push(...diagnoseCapacityInfeasibility(problem));
+  return violations;
+}
+
+function localTimeLabel(epochMs: number, timeZone: string): string {
+  const minute = localMinuteOfDay(epochMs, timeZone);
+  const hh = String(Math.floor(minute / 60)).padStart(2, "0");
+  const mm = String(minute % 60).padStart(2, "0");
+  return `${localDateKey(epochMs, timeZone)} ${hh}:${mm}`;
+}
+
+function listLabel(values: readonly string[], limit = 6): string {
+  return values.length <= limit
+    ? values.join(", ")
+    : `${values.slice(0, limit).join(", ")} and ${values.length - limit} more`;
+}
+
+/**
+ * Necessary-condition checks for the common no_solution causes. Each finding proves that no
+ * schedule exists under the stated hard/required settings, so the organiser can act on it: venue
+ * capacity, the per-entry daily limit, required rest, and dependency (knockout ordering) windows.
+ * Messages name raw ids; callers substitute display names.
+ */
+function diagnoseCapacityInfeasibility(problem: ScheduleProblem): ScheduleViolation[] {
+  const violations: ScheduleViolation[] = [];
+  const { timeZone } = problem;
+  const dateOf = (epochMs: number) => localDateKey(epochMs, timeZone);
+  const slotMinutes = (slot: SchedulingSlot) => (slot.endEpochMs - slot.startEpochMs) / MINUTE_MS;
+  const dates = uniqueSorted(problem.slots.map((slot) => dateOf(slot.startEpochMs)));
+
+  // 1. Venue capacity: each match occupies one slot of exactly its duration.
+  for (const duration of new Set(problem.matches.map((match) => match.durationMinutes))) {
+    const matchCount = problem.matches.filter((match) => match.durationMinutes === duration).length;
+    const slots = problem.slots.filter((slot) => slotMinutes(slot) === duration);
+    if (matchCount <= slots.length) continue;
+    const perArea = uniqueSorted(slots.map((slot) => slot.areaId)).map(
+      (areaId) => `${areaId}: ${slots.filter((slot) => slot.areaId === areaId).length} slots`,
+    );
+    violations.push({
+      code: "insufficient_capacity",
+      severity: "hard",
+      matchIds: [],
+      amount: matchCount - slots.length,
+      message:
+        `${matchCount} matches of ${duration} minutes need ${matchCount * duration} court-minutes, but the venue ` +
+        `windows provide ${slots.length} slots (${slots.length * duration} court-minutes) over ${dates.length} ` +
+        `day(s)${perArea.length ? ` (${perArea.join("; ")})` : ""}. Add playing areas or time, or choose a smaller format.`,
+    });
+  }
+
+  const ancestors = buildTransitiveDependencies(problem.matches);
+  const entryIds = uniqueSorted(problem.matches.flatMap((match) => match.possibleEntryIds));
+  const neededByEntry = new Map(
+    entryIds.map((entryId) => [entryId, maxMatchesForEntryInCollection(entryId, problem.matches, ancestors)]),
+  );
+  const matchIdsFor = (entries: readonly string[]) =>
+    uniqueSorted(
+      problem.matches
+        .filter((match) => match.possibleEntryIds.some((entryId) => entries.includes(entryId)))
+        .map((match) => match.id),
+    );
+  const entriesLabel = (entries: readonly string[]) =>
+    `${entries.length} entr${entries.length === 1 ? "y" : "ies"} (${listLabel(entries)})`;
+
+  // 2. Required per-entry daily limit over the available dates.
+  const daily = problem.constraints.maximumMatchesPerDay;
+  const dailyLimit = daily.mode === "required" ? daily.value.matches : Number.POSITIVE_INFINITY;
+  if (daily.mode === "required" && dates.length > 0) {
+    const allowed = daily.value.matches * dates.length;
+    const over = entryIds.filter((entryId) => neededByEntry.get(entryId)! > allowed);
+    if (over.length > 0) {
+      const most = Math.max(...over.map((entryId) => neededByEntry.get(entryId)!));
+      violations.push({
+        code: "maximum_matches_per_day",
+        severity: "required",
+        matchIds: matchIdsFor(over),
+        amount: most - allowed,
+        message:
+          `${entriesLabel(over)} may have to play up to ${most} matches, but the required limit of ` +
+          `${daily.value.matches} per day over ${dates.length} day(s) allows ${allowed}. ` +
+          `Raise the daily limit to at least ${Math.ceil(most / dates.length)} or make it preferred.`,
+      });
+    }
+  }
+
+  // 3. Required rest: the most matches one entry can play per day when its matches must be
+  // separated by the required gap (and capped by the required daily limit), summed over dates.
+  const restMinutes = Math.max(
+    problem.constraints.minimumRest.mode === "required" ? problem.constraints.minimumRest.value.minutes : 0,
+    problem.constraints.avoidConsecutiveMatches.mode === "required"
+      ? problem.constraints.avoidConsecutiveMatches.value.minutes
+      : 0,
+  );
+  if (restMinutes > 0) {
+    const sequentialCapacity = (duration: number, gapMinutes: number) => {
+      let total = 0;
+      const byDate: string[] = [];
+      for (const date of dates) {
+        const starts = [
+          ...new Set(
+            problem.slots
+              .filter((slot) => slotMinutes(slot) === duration && dateOf(slot.startEpochMs) === date)
+              .map((slot) => slot.startEpochMs),
+          ),
+        ].sort((left, right) => left - right);
+        let count = 0;
+        let nextStart = Number.NEGATIVE_INFINITY;
+        for (const start of starts) {
+          if (start < nextStart) continue;
+          count += 1;
+          nextStart = start + (duration + gapMinutes) * MINUTE_MS;
+        }
+        count = Math.min(count, dailyLimit);
+        total += count;
+        byDate.push(`${date}: ${count}`);
+      }
+      return { total, byDate };
+    };
+    const shortfalls: { entryId: string; needed: number; capacity: { total: number; byDate: string[] } }[] = [];
+    for (const entryId of entryIds) {
+      const duration = Math.max(
+        ...problem.matches
+          .filter((match) => match.possibleEntryIds.includes(entryId))
+          .map((match) => match.durationMinutes),
+      );
+      const needed = neededByEntry.get(entryId)!;
+      const capacity = sequentialCapacity(duration, restMinutes);
+      // Report rest only when it is the binding cause (without the rest gap the entry would fit).
+      if (needed > capacity.total && needed <= sequentialCapacity(duration, 0).total) {
+        shortfalls.push({ entryId, needed, capacity });
+      }
+    }
+    if (shortfalls.length > 0) {
+      const worst = shortfalls.reduce((left, right) =>
+        right.needed - right.capacity.total > left.needed - left.capacity.total ? right : left,
+      );
+      violations.push({
+        code: "minimum_rest",
+        severity: "required",
+        matchIds: matchIdsFor(shortfalls.map((item) => item.entryId)),
+        amount: worst.needed - worst.capacity.total,
+        message:
+          `${entriesLabel(shortfalls.map((item) => item.entryId))} may have to play up to ${worst.needed} matches, ` +
+          `but with ${restMinutes} minutes of required rest only ${worst.capacity.total} fit in the venue windows ` +
+          `(${worst.capacity.byDate.join("; ")}). Reduce the required rest, make it preferred, or add playing time.`,
+      });
+    }
+  }
+
+  // 4. Dependency windows: earliest possible finish along each prerequisite chain, including the
+  // required rest between a match and the matches that feed it.
+  const earliestFinish = new Map<string, number>();
+  const blocked = new Set<string>();
+  const sortedSlots = [...problem.slots].sort((left, right) => left.startEpochMs - right.startEpochMs);
+  for (const match of topologicalMatches(problem.matches)) {
+    if (match.dependencyMatchIds.some((id) => blocked.has(id))) {
+      blocked.add(match.id);
+      continue;
+    }
+    const ready = Math.max(
+      Number.NEGATIVE_INFINITY,
+      ...match.dependencyMatchIds.map((id) => earliestFinish.get(id)! + restMinutes * MINUTE_MS),
+    );
+    const fixed = match.fixedAssignment;
+    const start = fixed
+      ? fixed.startEpochMs >= ready
+        ? fixed.startEpochMs
+        : undefined
+      : sortedSlots.find((slot) => slotMinutes(slot) === match.durationMinutes && slot.startEpochMs >= ready)
+          ?.startEpochMs;
+    if (start !== undefined) {
+      earliestFinish.set(match.id, start + match.durationMinutes * MINUTE_MS);
+      continue;
+    }
+    blocked.add(match.id);
+    if (match.dependencyMatchIds.length === 0) continue; // the capacity finding covers this case
+    const chain = uniqueSorted([match.id, ...(ancestors.get(match.id) ?? [])]);
+    const restNote = restMinutes > 0 ? ` plus ${restMinutes} minutes of required rest` : "";
+    violations.push({
+      code: "dependency_order",
+      severity: "hard",
+      matchIds: chain,
+      message: fixed
+        ? `Locked match ${match.id} starts at ${localTimeLabel(fixed.startEpochMs, timeZone)}, before its ` +
+          `prerequisite matches can finish (earliest ${localTimeLabel(ready, timeZone)}${restNote}). ` +
+          `Unlock it or move it later.`
+        : `Match ${match.id} must wait for ${chain.length - 1} prerequisite match(es), which cannot finish before ` +
+          `${localTimeLabel(ready, timeZone)}${restNote}, and no ${match.durationMinutes}-minute slot remains after ` +
+          `that. Add playing time after the prerequisite rounds.`,
+    });
   }
 
   return violations;

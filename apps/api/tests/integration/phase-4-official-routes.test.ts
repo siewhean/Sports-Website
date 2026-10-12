@@ -1979,4 +1979,142 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
       expect(JSON.parse(res.body).error.code).toBe(ErrorCode.COMPETITION_ACCESS_DENIED);
     });
   });
+
+  describe("Suite 10: Schedule feasibility (QA mock tournament)", () => {
+    function relaxedConstraints(dailyLimit: number): ScheduleConstraints {
+      return {
+        minimum_rest: { mode: "ignored", value: { minutes: 0 } },
+        maximum_matches_per_day: { mode: "required", value: { matches: dailyLimit } },
+        preferred_final_time: {
+          mode: "ignored",
+          value: { target_start_epoch_ms: Date.parse("2027-08-01T12:00:00Z"), tolerance_minutes: 60 },
+        },
+        entry_unavailable: { mode: "ignored", value: { by_entry_id: {} } },
+        official_availability: { mode: "ignored", value: { by_official_id: {} } },
+        featured_playing_area: { mode: "ignored", value: { area_id: areaId, match_ids: [] } },
+        avoid_consecutive_matches: { mode: "ignored", value: { minutes: 0 } },
+        balance_early_matches: { mode: "ignored", value: { before_local_time: "09:00" } },
+        balance_late_matches: { mode: "ignored", value: { at_or_after_local_time: "18:00" } },
+        keep_division_together: { mode: "ignored", value: { maximum_area_count: 1 } },
+        preserve_existing_schedule: { mode: "ignored", value: { maximum_shift_minutes: 0, by_match_id: {} } },
+      };
+    }
+
+    async function eventWithDraftFormat(name: string, windowEnd: string) {
+      const competition = await phase3.createCompetition(
+        { accountId: ownerId },
+        {
+          organisationId: org1Id,
+          name,
+          slug: `feasibility-${randomUUID()}`,
+          sportCode: "canoe_polo",
+          venue: "Pool 3",
+          address: "3 Pool Way",
+          countryCode: "SG",
+          startsOn: "2027-08-01",
+          endsOn: "2027-08-01",
+          timezone: "Asia/Singapore",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      );
+      const [area] = await client<{ id: string }[]>`
+        INSERT INTO playing_areas(competition_id, name, slot_minutes, sort_order)
+        VALUES(${competition.id}, 'Pool Court', 30, 1) RETURNING id`;
+      await client`
+        INSERT INTO competition_availability_windows(competition_id, playing_area_id, starts_at, ends_at)
+        VALUES(${competition.id}, ${area!.id}, '2027-08-01 08:00:00+08', ${windowEnd})`;
+      const [division] = await client<{ id: string }[]>`
+        INSERT INTO divisions(competition_id, name, team_limit) VALUES(${competition.id}, 'Open', 8) RETURNING id`;
+      await client`
+        INSERT INTO division_entries(division_id, name, seed, status, entry_type)
+        SELECT ${division!.id}, 'Squad ' || s, s, 'active', 'team' FROM generate_series(1, 8) s`;
+      const graph = structuredClone(createDefaultFormatTemplates(8)[0]!.graph); // full placement, 18 matches
+      const draft = await phase4.saveFormatRevision(
+        { accountId: ownerId },
+        competition.id,
+        division!.id,
+        {
+          draft_id: null,
+          expected_revision: null,
+          parent_revision_id: null,
+          document: {
+            schema_version: 1,
+            graph,
+            layout: {
+              schema_version: 1,
+              stage_positions: graph.stages.map((stage, index) => ({ stage_id: stage.id, x: index * 240, y: 80 })),
+            },
+          },
+          idempotency_key: `format-${randomUUID()}`,
+        },
+        randomUUID(),
+      );
+      return { competitionId: competition.id, draftId: draft.draft_id };
+    }
+
+    it("refuses a format publish that exceeds capacity with the real reason (scenario 4)", async () => {
+      // One court for one hour: 2 slots for 18 matches.
+      const { draftId } = await eventWithDraftFormat("Tiny Venue Cup", "2027-08-01 09:00:00+08");
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/format-revisions/${draftId}/publish`,
+        headers: ownerHeaders(),
+        body: { idempotency_key: `publish-${randomUUID()}` },
+      });
+      expect(res.statusCode).toBe(422);
+      const error = JSON.parse(res.body).error;
+      expect(error.code).toBe(ErrorCode.CAPACITY_INSUFFICIENT);
+      expect(error.message).toContain("need 18 match slots");
+      expect(error.message).toContain("provides 2");
+    });
+
+    it("defaults the daily match limit to what the format needs in a one-day event", async () => {
+      const { competitionId, draftId } = await eventWithDraftFormat("One Day Cup", "2027-08-01 20:00:00+08");
+      await phase4.materialiseFormat({ accountId: ownerId }, draftId, `mat-${randomUUID()}`, randomUUID());
+      await client`SELECT phase4_publish_format_revision(${draftId}, ${ownerId}, ${`pub-${randomUUID()}`})`;
+      const workspace = await phase4.scheduleWorkspace({ accountId: ownerId }, competitionId);
+      // Full placement: an entry may play up to 5 matches; the old fixed default of 4 was unschedulable.
+      expect(workspace.generation.constraints.maximum_matches_per_day).toEqual({
+        mode: "required",
+        value: { matches: 5 },
+      });
+    });
+
+    it("explains a too-low daily limit with entry names in the no_solution diagnostics", async () => {
+      const comp = (
+        await client<{ revision: number; capacity_revision: number }[]>`
+        SELECT revision::int revision, capacity_revision::int capacity_revision FROM competitions WHERE id=${comp1Id}`
+      )[0]!;
+      const gen = await phase4.generateSchedule(
+        { accountId: ownerId },
+        comp1Id,
+        {
+          idempotency_key: `diag-daily-${randomUUID()}`,
+          expected_source_revision: Number(comp.revision),
+          expected_capacity_revision: Number(comp.capacity_revision),
+          objective: "balanced",
+          constraints: relaxedConstraints(1),
+        },
+        randomUUID(),
+      );
+      await client`UPDATE schedule_generation_jobs SET status='no_solution', completed_at=now() WHERE id=${gen.job.id}`;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/schedule-jobs/${gen.job.id}/diagnostics`,
+        headers: ownerHeaders(),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body) as {
+        diagnostics: { code: string; severity: string; match_ids: string[]; message?: string }[];
+      };
+      const daily = body.diagnostics.find((item) => item.code === "maximum_matches_per_day");
+      expect(daily).toMatchObject({ severity: "required" });
+      expect(daily!.match_ids.length).toBeGreaterThan(0);
+      expect(daily!.message).toContain("Team 1");
+      expect(daily!.message).toContain("over 1 day(s)");
+      expect(daily!.message).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    });
+  });
 });
