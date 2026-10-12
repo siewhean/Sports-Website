@@ -119,6 +119,24 @@ function readinessStatus(dependencies: DependencyStatus): HealthStatus {
   return dependencies.redis && dependencies.queue ? "healthy" : "degraded";
 }
 
+// The free-plan cap is ultimately enforced by the phase3_enforce_free_entry_limit
+// trigger; writers that reach it without the domain pre-check must still get a
+// plan-limit error, not a 500.
+function freeEntryLimitError(error: unknown): ApiError | null {
+  if (
+    error instanceof Error &&
+    (error as { code?: unknown }).code === "P0001" &&
+    error.message.includes("free plan permits at most 16 active entries")
+  ) {
+    return new ApiError(
+      422,
+      ErrorCode.FREE_ENTRY_LIMIT_REACHED,
+      "The free plan supports 16 active entries across all divisions; upgrade to add more",
+    );
+  }
+  return null;
+}
+
 function identityErrorMapping(error: unknown): { statusCode: number; code: string; message: string } | null {
   if (error instanceof IdentityProviderUnavailableError) {
     return { statusCode: 503, code: "IDENTITY_PROVIDER_UNAVAILABLE", message: "Identity provider is unavailable" };
@@ -466,7 +484,7 @@ export async function buildApp(options: BuildAppOptions) {
   });
 
   app.setErrorHandler(async (error, request, reply) => {
-    const apiError = error instanceof ApiError ? error : null;
+    const apiError = error instanceof ApiError ? error : freeEntryLimitError(error);
     const mappedIdentityError = identityErrorMapping(error);
     const isValidationError = typeof error === "object" && error !== null && "validation" in error;
     const frameworkStatus =

@@ -169,7 +169,7 @@ export function assertFiveSportScoreCommandAllowed(
     definition?.requiresSide === true ||
     SEGMENT_COMPLETION_TYPES.has(command.type) ||
     EXCEPTIONAL_OUTCOME_TYPES.has(command.type);
-  if (sideRequired && !command.side) throw new Error(`${command.type} requires a side`);
+  if (sideRequired && !command.side) throw new Error(`${command.type} requires a side (team_slot)`);
 
   if (definition?.participantAttribution === "required" && !command.participantId) {
     const allowedUnknownScorer =
@@ -177,7 +177,7 @@ export function assertFiveSportScoreCommandAllowed(
       command.type === "goal" &&
       command.unknownParticipant === true &&
       booleanSetting(settings, "allowUnknownScorer", false);
-    if (!allowedUnknownScorer) throw new Error(`${command.type} requires participant attribution`);
+    if (!allowedUnknownScorer) throw new Error(`${command.type} requires participant attribution (participant_id)`);
   }
 
   if (command.participantId && command.unknownParticipant === true) {

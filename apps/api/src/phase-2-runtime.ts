@@ -28,6 +28,7 @@ import {
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { CompetitionPublicationNotifier } from "./competition-publication-notifier.js";
+import { standingsResultFromSnapshot } from "./standings-results.js";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import { applyLiveOverlay, liveOverlayRowsSql, liveOverlayUpdatedAt, parseLiveOverlay } from "./public-live-overlay.js";
 import {
@@ -441,6 +442,20 @@ type CanonicalScoringContext = {
 
 function date(value: Date | string): Date {
   return value instanceof Date ? value : new Date(value);
+}
+
+// Command-shape rules (missing team_slot, participant_id, reason, ...) are
+// client input errors; surface them as 422 rather than an unmapped 500.
+function assertScoreCommandAllowed(...args: Parameters<typeof assertFiveSportScoreCommandAllowed>): void {
+  try {
+    assertFiveSportScoreCommandAllowed(...args);
+  } catch (error) {
+    throw new ApiError(
+      422,
+      ErrorCode.SCORE_EVENT_REJECTED,
+      error instanceof Error ? error.message : "Score event is invalid",
+    );
+  }
 }
 
 function jsonValue<T>(value: T | string): T {
@@ -3373,7 +3388,7 @@ export class Phase2Runtime {
             "This historical corrected result is readable but cannot accept canonical score events",
           );
         }
-        assertFiveSportScoreCommandAllowed(context.sport_code, command, context.settings);
+        assertScoreCommandAllowed(context.sport_code, command, context.settings);
         const fingerprint = stableHash(wireScoreCommand(command));
         const duplicateRow = historyRows.find((r) => r.client_event_id === command.clientEventId);
         if (duplicateRow) {
@@ -4695,7 +4710,7 @@ export class Phase2Runtime {
         );
       }
       for (const command of commands) {
-        assertFiveSportScoreCommandAllowed(canonical.context.sport_code, command, canonical.context.settings);
+        assertScoreCommandAllowed(canonical.context.sport_code, command, canonical.context.settings);
       }
       const explicitlyReopened = match.state === "in_progress" && canonical.events.at(-1)?.type === "match_reopened";
       if (!["final", "corrected"].includes(match.state) && !explicitlyReopened) {
@@ -5069,13 +5084,23 @@ export class Phase2Runtime {
     divisionId: string,
     resultVersion: number,
   ) {
-    const entries = await tx.unsafe<EntryRow>(
-      `SELECT id,name,seed FROM division_entries
-       WHERE division_id=$1 AND status IN ('confirmed','active')
-       ORDER BY seed,id`,
-      [divisionId],
-    );
-    if (entries.length === 0) {
+    // Withdrawn entries keep their standings row (ineligible for advancement)
+    // so their completed and forfeited results still reference a known entry.
+    const entries = (
+      await tx.unsafe<EntryRow & { status: string }>(
+        `SELECT id,name,seed,status FROM division_entries
+         WHERE division_id=$1 AND status IN ('confirmed','active','withdrawn')
+         ORDER BY seed,id`,
+        [divisionId],
+      )
+    ).map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      seed: entry.seed,
+      status: entry.status === "withdrawn" ? ("withdrawn" as const) : ("active" as const),
+    }));
+    const activeEntries = entries.filter((entry) => entry.status === "active");
+    if (activeEntries.length === 0) {
       throw new ApiError(
         409,
         ErrorCode.STANDINGS_ENTRIES_EMPTY,
@@ -5123,50 +5148,9 @@ export class Phase2Runtime {
          ORDER BY m.id,snapshot.result_version DESC`,
       [divisionId, resultVersion],
     );
-    const standingsResults: StandingsMatchResult[] = genericResults.map((result) => {
-      const snapshot = jsonValue<{
-        segments?: Array<{ home?: number; away?: number }>;
-        totalPoints?: { home?: number; away?: number };
-        exceptionalOutcome?: string | null;
-        winner?: "home" | "away" | null;
-      }>(result.snapshot);
-      const segments = Array.isArray(snapshot.segments) ? snapshot.segments : [];
-      const config = standingsConfig;
-      const forfeit = snapshot.exceptionalOutcome === "walkover" && Boolean(snapshot.winner);
-      const homeWonForfeit = forfeit && snapshot.winner === "home";
-      const forfeitHomeSegments = homeWonForfeit ? config.forfeitScore.homeSegments : config.forfeitScore.awaySegments;
-      const forfeitAwaySegments = homeWonForfeit ? config.forfeitScore.awaySegments : config.forfeitScore.homeSegments;
-      return {
-        matchId: result.match_id,
-        homeEntryId: result.home_entry_id,
-        awayEntryId: result.away_entry_id,
-        homeScore: forfeit
-          ? homeWonForfeit
-            ? config.forfeitScore.homeScore
-            : config.forfeitScore.awayScore
-          : Number(snapshot.totalPoints?.home ?? result.home_score),
-        awayScore: forfeit
-          ? homeWonForfeit
-            ? config.forfeitScore.awayScore
-            : config.forfeitScore.homeScore
-          : Number(snapshot.totalPoints?.away ?? result.away_score),
-        ...(!forfeit
-          ? {
-              homeSegments: segments.map((segment) => Number(segment.home ?? 0)),
-              awaySegments: segments.map((segment) => Number(segment.away ?? 0)),
-            }
-          : forfeitHomeSegments && forfeitAwaySegments
-            ? { homeSegments: forfeitHomeSegments, awaySegments: forfeitAwaySegments }
-            : {}),
-        status: forfeit ? ("forfeit" as const) : result.state,
-        ...(forfeit
-          ? {
-              forfeitLoserEntryId: snapshot.winner === "home" ? result.away_entry_id : result.home_entry_id,
-            }
-          : {}),
-        version: result.result_version,
-      };
-    });
+    const standingsResults: StandingsMatchResult[] = genericResults.map((result) =>
+      standingsResultFromSnapshot(result, standingsConfig),
+    );
     const rows = calculateStandings(entries, standingsResults, standingsConfig);
     const standings = {
       standings: rows,
@@ -5210,12 +5194,14 @@ export class Phase2Runtime {
         entries.filter((entry) => poolEntryIds.has(entry.id)),
         poolResults,
         standingsConfig,
-      ).map((row) => row.entryId);
+      )
+        .filter((row) => row.status !== "withdrawn")
+        .map((row) => row.entryId);
     }
     const bracket = this.domain.resolveBracket({
       format: format.definition,
       results,
-      entries,
+      entries: activeEntries,
       graphMatchIds,
       groupRankings,
     });

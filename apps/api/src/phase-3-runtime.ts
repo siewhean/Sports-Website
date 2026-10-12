@@ -13,6 +13,7 @@ import {
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
+import { resultWinnerEntryId, standingsResultFromSnapshot } from "./standings-results.js";
 import { assertDivisionInCompetition } from "./tenant-scope.js";
 import type { Phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import {
@@ -1072,23 +1073,9 @@ export class Phase3Runtime {
       [competitionId, divisionId, entryId, publication.result_version],
     );
     const completedIds = new Set(latestResults.map((row) => row.match_id));
-    const persistedResults: StandingsMatchResult[] = latestResults.map((row) => {
-      const detail = decodedJson(row.snapshot);
-      const forfeitLoser = typeof detail.forfeitLoserEntryId === "string" ? detail.forfeitLoserEntryId : undefined;
-      return {
-        matchId: row.match_id,
-        homeEntryId: row.home_entry_id,
-        awayEntryId: row.away_entry_id,
-        homeScore: row.home_score,
-        awayScore: row.away_score,
-        ...(Array.isArray(detail.homeSegments) && Array.isArray(detail.awaySegments)
-          ? { homeSegments: detail.homeSegments as number[], awaySegments: detail.awaySegments as number[] }
-          : {}),
-        status: forfeitLoser ? "forfeit" : row.state,
-        version: row.result_version,
-        ...(forfeitLoser ? { forfeitLoserEntryId: forfeitLoser } : {}),
-      };
-    });
+    const persistedResults: StandingsMatchResult[] = latestResults.map((row) =>
+      standingsResultFromSnapshot(row, engineConfig),
+    );
     const scheduledMatches: ScheduledStandingsMatch[] = matches
       .filter((match) => completedIds.has(match.id) || ["pending", "ready"].includes(match.state))
       .map((match) => ({
@@ -2892,29 +2879,7 @@ export class Phase3Runtime {
       "Published format not found",
     );
     const graph = decodedJson(format.definition);
-    const results: StandingsMatchResult[] = resultRows.map((row) => {
-      const detail = decodedJson(row.snapshot);
-      const forfeitLoser = typeof detail.forfeitLoserEntryId === "string" ? detail.forfeitLoserEntryId : undefined;
-      return {
-        matchId: row.match_id,
-        homeEntryId: row.home_entry_id,
-        awayEntryId: row.away_entry_id,
-        homeScore: row.home_score,
-        awayScore: row.away_score,
-        ...(Array.isArray(detail.homeSegments) && Array.isArray(detail.awaySegments)
-          ? { homeSegments: detail.homeSegments as number[], awaySegments: detail.awaySegments as number[] }
-          : {}),
-        ...(typeof detail.homeDisciplinePoints === "number"
-          ? { homeDisciplinePoints: detail.homeDisciplinePoints }
-          : {}),
-        ...(typeof detail.awayDisciplinePoints === "number"
-          ? { awayDisciplinePoints: detail.awayDisciplinePoints }
-          : {}),
-        status: forfeitLoser ? "forfeit" : row.state,
-        version: row.result_version,
-        ...(forfeitLoser ? { forfeitLoserEntryId: forfeitLoser } : {}),
-      };
-    });
+    const results: StandingsMatchResult[] = resultRows.map((row) => standingsResultFromSnapshot(row, engineConfig));
     const sourceGroups = new Set<string>();
     for (const stage of graph.stages) {
       if (stage.kind === "group") {
@@ -3114,6 +3079,65 @@ export class Phase3Runtime {
           this.now(),
         ],
       );
+    }
+    // Winner/loser slots resolve as on finalisation: from the decided result
+    // of the source graph match. Group-rank rules above cannot express them.
+    const resultRowByCode = new Map(resultRows.map((row) => [row.code, row]));
+    for (const graphMatch of graph.matches) {
+      const match = matchesByCode.get(graphMatch.id);
+      if (!match) continue;
+      for (const slot of ["home", "away"] as const) {
+        const origin = graphMatch[slot];
+        if (origin.type !== "winner" && origin.type !== "loser") continue;
+        const slotId = `${match.id}:${slot}`;
+        const persisted = persistedBySlot.get(slotId);
+        if (persisted?.control === "manual") continue;
+        const sourceRow = resultRowByCode.get(origin.matchId);
+        const winner = sourceRow ? resultWinnerEntryId(sourceRow) : null;
+        if (!sourceRow || !winner) continue;
+        const loser = winner === sourceRow.home_entry_id ? sourceRow.away_entry_id : sourceRow.home_entry_id;
+        const entryId = origin.type === "winner" ? winner : loser;
+        const ruleId = `${graphMatch.id}:${slot}:${origin.type}:${origin.matchId}`;
+        if (match[`${slot}_entry_id`] === entryId && persisted?.entry_id === entryId) continue;
+        if (!["pending", "ready"].includes(match.state)) {
+          if (match[`${slot}_entry_id`] !== entryId) {
+            conflicts.push({ ruleId, targetSlotId: slotId, reason: "downstream_match_started" });
+          }
+          continue;
+        }
+        await tx.unsafe(
+          slot === "home"
+            ? `UPDATE matches SET home_entry_id=$2,
+                 state=CASE WHEN away_entry_id IS NOT NULL THEN 'ready' ELSE state END
+               WHERE id=$1 AND state IN ('pending','ready')`
+            : `UPDATE matches SET away_entry_id=$2,
+                 state=CASE WHEN home_entry_id IS NOT NULL THEN 'ready' ELSE state END
+               WHERE id=$1 AND state IN ('pending','ready')`,
+          [match.id, entryId],
+        );
+        match[`${slot}_entry_id`] = entryId;
+        await tx.unsafe(
+          `INSERT INTO advancement_slots
+              (competition_id,division_id,match_id,slot,entry_id,control,controlled_by_rule_id,source_snapshot_id,
+               source_fingerprint,result_version,updated_at)
+             VALUES ($1,$2,$3,$4,$5,'automatic',$6,$7,$8,$9,$10)
+             ON CONFLICT (match_id,slot) DO UPDATE SET entry_id=EXCLUDED.entry_id,control='automatic',
+               controlled_by_rule_id=EXCLUDED.controlled_by_rule_id,source_snapshot_id=EXCLUDED.source_snapshot_id,
+               source_fingerprint=EXCLUDED.source_fingerprint,result_version=EXCLUDED.result_version,updated_at=EXCLUDED.updated_at`,
+          [
+            competitionId,
+            divisionId,
+            match.id,
+            slot,
+            entryId,
+            ruleId,
+            snapshotId,
+            source.source_hash,
+            publication.result_version,
+            this.now(),
+          ],
+        );
+      }
     }
     for (const conflict of conflicts) {
       await tx.unsafe(
