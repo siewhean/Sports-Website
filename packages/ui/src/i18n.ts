@@ -360,6 +360,11 @@ export const messages = {
     oneOrMoreAffectedMatches: "one or more affected matches",
     overlapAffectedMatchesWithAnother: "{matches} and another affected match",
     overlapAffectedMatchesWithMore: "{matches} and one or more affected matches",
+    schedulingConflictsDetected: "Why no schedule could be found",
+    insufficientCapacityTitle: "Not enough playing time",
+    dailyMatchLimitTitle: "Daily match limit too low",
+    requiredRestTitle: "Required rest does not fit",
+    dependencyWindowTitle: "Knockout rounds do not fit",
     noFeasibleScheduleGeneric:
       "No feasible schedule could be found that satisfies all required constraints and playing areas.",
     reviewOfficials: "Review officials",

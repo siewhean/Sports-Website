@@ -19,9 +19,22 @@ import { Worker } from "node:worker_threads";
 import { SchedulerInvariantError, SolverYieldDeadlineError } from "./errors.js";
 import type { ScheduleOptimizer } from "./ports.js";
 
+type VerifiedSchedule = {
+  validation: ReturnType<typeof validateSchedule>;
+  quality: ReturnType<typeof evaluateScheduleQuality>;
+};
+
+type GeneratedSchedules = ReadonlyArray<
+  {
+    candidate: ReturnType<typeof generateScheduleCandidates>[number];
+  } & VerifiedSchedule
+>;
+
 export class DomainScheduleOptimizer implements ScheduleOptimizer {
   readonly #maxIterationsPerRun: number;
   readonly #workerExecArgv: string[] | undefined;
+  /** The processor verifies each yielded candidate with the same input object; reuse that job's worker. */
+  readonly #activeSessions = new WeakMap<ScheduleJobInput, SolverSession>();
 
   constructor(options: { maxIterationsPerRun?: number; workerExecArgv?: readonly string[] } = {}) {
     this.#maxIterationsPerRun = options.maxIterationsPerRun ?? 64;
@@ -48,12 +61,19 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
       maxYieldIntervalMs: 1_000,
     },
   ): Promise<ScheduleJobResult | null> {
-    const problem = toProblem(input);
     const assignments = candidate.assignments.map(toDomainAssignment);
-    const verified = await runSolverThread<{
-      validation: ReturnType<typeof validateSchedule>;
-      quality: ReturnType<typeof evaluateScheduleQuality>;
-    }>({ operation: "verify", problem, assignments }, context.signal, context.maxYieldIntervalMs, this.#workerExecArgv);
+    const active = this.#activeSessions.get(input);
+    const session = active ?? new SolverSession(toProblem(input), this.#workerExecArgv);
+    let verified: VerifiedSchedule | null;
+    try {
+      verified = await session.request<VerifiedSchedule>(
+        { operation: "verify", assignments },
+        context.signal,
+        context.maxYieldIntervalMs,
+      );
+    } finally {
+      if (!active) session.close();
+    }
     if (verified === null) return null;
     const { validation, quality } = verified;
     if (!validation.valid || !quality.valid) return null;
@@ -65,109 +85,151 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
   }
 
   async *optimize(request: Parameters<ScheduleOptimizer["optimize"]>[0]) {
-    const problem = toProblem(request.input);
-    if (request.seed !== null) {
-      const seed = request.seed.assignments.map(toDomainAssignment);
-      const verifiedSeed = await runSolverThread<{
-        validation: ReturnType<typeof validateSchedule>;
-        quality: ReturnType<typeof evaluateScheduleQuality>;
-      }>(
-        { operation: "verify", problem, assignments: seed },
-        request.signal,
-        request.maxYieldIntervalMs,
-        this.#workerExecArgv,
-      );
-      if (verifiedSeed === null) return;
-      if (!verifiedSeed.validation.valid || !verifiedSeed.quality.valid) {
-        throw new Error("Persisted continuation seed is invalid");
+    if (request.signal.aborted) return;
+    const session = new SolverSession(toProblem(request.input), this.#workerExecArgv);
+    this.#activeSessions.set(request.input, session);
+    try {
+      if (request.seed !== null) {
+        const seed = request.seed.assignments.map(toDomainAssignment);
+        const verifiedSeed = await session.request<VerifiedSchedule>(
+          { operation: "verify", assignments: seed },
+          request.signal,
+          request.maxYieldIntervalMs,
+        );
+        if (verifiedSeed === null) return;
+        if (!verifiedSeed.validation.valid || !verifiedSeed.quality.valid) {
+          throw new Error("Persisted continuation seed is invalid");
+        }
       }
-    }
-    const endIteration = request.startIteration + this.#maxIterationsPerRun;
-    for (let iteration = request.startIteration; iteration < endIteration; iteration += 1) {
-      if (request.signal.aborted) return;
-      const generated = await runSolverThread<
-        ReadonlyArray<{
-          candidate: ReturnType<typeof generateScheduleCandidates>[number];
-          validation: ReturnType<typeof validateSchedule>;
-          quality: ReturnType<typeof evaluateScheduleQuality>;
-        }>
-      >(
-        { operation: "generate", problem, iteration },
-        request.signal,
-        request.maxYieldIntervalMs,
-        this.#workerExecArgv,
-      );
-      if (generated === null) return;
-      for (const { candidate, validation, quality } of generated) {
+      const endIteration = request.startIteration + this.#maxIterationsPerRun;
+      for (let iteration = request.startIteration; iteration < endIteration; iteration += 1) {
         if (request.signal.aborted) return;
-        if (!validation.valid || !quality.valid) continue;
-        yield {
-          iteration: candidate.iteration,
-          result: {
-            schema_version: 1 as const,
-            job_id: request.input.job_id,
-            source_revision: request.input.source_revision,
-            result_revision: 0,
-            status: "valid" as const,
-            assignments: candidate.assignments.map(toTransportAssignment),
-            violations: validation.violations.map(toTransportViolation),
-            quality: toTransportQuality(quality),
-            assignment_hash: "0".repeat(64),
-          },
-        };
+        const generated = await session.request<GeneratedSchedules>(
+          { operation: "generate", iteration },
+          request.signal,
+          request.maxYieldIntervalMs,
+        );
+        if (generated === null) return;
+        for (const { candidate, validation, quality } of generated) {
+          if (request.signal.aborted) return;
+          if (!validation.valid || !quality.valid) continue;
+          yield {
+            iteration: candidate.iteration,
+            result: {
+              schema_version: 1 as const,
+              job_id: request.input.job_id,
+              source_revision: request.input.source_revision,
+              result_revision: 0,
+              status: "valid" as const,
+              assignments: candidate.assignments.map(toTransportAssignment),
+              violations: validation.violations.map(toTransportViolation),
+              quality: toTransportQuality(quality),
+              assignment_hash: "0".repeat(64),
+            },
+          };
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve));
       }
-      await new Promise<void>((resolve) => setImmediate(resolve));
+    } finally {
+      if (this.#activeSessions.get(request.input) === session) this.#activeSessions.delete(request.input);
+      session.close();
     }
   }
 }
 
-async function runSolverThread<Result>(
-  workerData: Record<string, unknown>,
-  signal: AbortSignal,
-  deadlineMs: number,
-  workerExecArgv?: readonly string[],
-): Promise<Result | null> {
-  if (signal.aborted) return null;
-  return new Promise<Result | null>((resolve, reject) => {
-    const worker = new Worker(new URL("./solver-thread.mjs", import.meta.url), {
-      workerData,
+/**
+ * One long-lived solver thread per job. Starting a worker costs far more than solving one
+ * iteration, so the problem is sent once and every generate/verify call is a message. Requests are
+ * serialised; each must answer within the yield deadline or the thread is terminated, and an abort
+ * terminates it immediately, so a stuck solve can never outlive its job.
+ */
+class SolverSession {
+  readonly #worker: Worker;
+  #queue: Promise<unknown> = Promise.resolve();
+  #nextId = 0;
+  #closed = false;
+  #failure: Error | null = null;
+  readonly #pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+
+  constructor(problem: ScheduleProblem, workerExecArgv?: readonly string[]) {
+    this.#worker = new Worker(new URL("./solver-thread.mjs", import.meta.url), {
+      workerData: { problem },
       ...(workerExecArgv === undefined ? {} : { execArgv: [...workerExecArgv] }),
     });
-    let settled = false;
-    const finish = (operation: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      operation();
-    };
-    const onAbort = () =>
-      finish(() => {
-        void worker.terminate();
-        resolve(null);
-      });
-    const timer = setTimeout(
-      () =>
+    this.#worker.unref();
+    this.#worker.on("message", (message: { id: number; ok: boolean; result?: unknown; error?: string }) => {
+      const pending = this.#pending.get(message.id);
+      if (!pending) return;
+      this.#pending.delete(message.id);
+      if (message.ok && message.result !== undefined) pending.resolve(message.result);
+      else pending.reject(new SchedulerInvariantError(message.error ?? "Schedule domain worker rejected input"));
+    });
+    this.#worker.on("error", (error) => this.#fail(error));
+    this.#worker.on("exit", (code) => {
+      if (!this.#closed) this.#fail(new Error(`Schedule solver worker exited with code ${code}`));
+    });
+  }
+
+  request<Result>(message: Record<string, unknown>, signal: AbortSignal, deadlineMs: number): Promise<Result | null> {
+    const next = this.#queue.then(() => this.#send<Result>(message, signal, deadlineMs));
+    this.#queue = next.catch(() => undefined);
+    return next;
+  }
+
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    for (const pending of this.#pending.values()) pending.reject(new Error("Schedule solver session closed"));
+    this.#pending.clear();
+    void this.#worker.terminate();
+  }
+
+  #fail(error: Error): void {
+    this.#failure ??= error;
+    for (const pending of this.#pending.values()) pending.reject(error);
+    this.#pending.clear();
+  }
+
+  #send<Result>(message: Record<string, unknown>, signal: AbortSignal, deadlineMs: number): Promise<Result | null> {
+    if (signal.aborted) return Promise.resolve(null);
+    if (this.#failure) return Promise.reject(this.#failure);
+    if (this.#closed) return Promise.reject(new Error("Schedule solver session closed"));
+    const id = this.#nextId++;
+    return new Promise<Result | null>((resolve, reject) => {
+      let settled = false;
+      const finish = (operation: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        this.#pending.delete(id);
+        // Keep the process alive only while a request is in flight.
+        if (this.#pending.size === 0) this.#worker.unref();
+        operation();
+      };
+      const onAbort = () =>
         finish(() => {
-          void worker.terminate();
-          reject(new SolverYieldDeadlineError(deadlineMs));
-        }),
-      deadlineMs,
-    );
-    timer.unref();
-    signal.addEventListener("abort", onAbort, { once: true });
-    worker.once("message", (message: { ok: boolean; result?: Result; error?: string }) => {
-      finish(() => {
-        void worker.terminate();
-        if (message.ok && message.result !== undefined) resolve(message.result);
-        else reject(new SchedulerInvariantError(message.error ?? "Schedule domain worker rejected input"));
+          this.close();
+          resolve(null);
+        });
+      const timer = setTimeout(
+        () =>
+          finish(() => {
+            this.close();
+            reject(new SolverYieldDeadlineError(deadlineMs));
+          }),
+        deadlineMs,
+      );
+      timer.unref();
+      signal.addEventListener("abort", onAbort, { once: true });
+      this.#pending.set(id, {
+        resolve: (value) => finish(() => resolve(value as Result)),
+        reject: (error) => finish(() => reject(error)),
       });
+      this.#worker.ref();
+      this.#worker.postMessage({ ...message, id });
     });
-    worker.once("error", (error) => finish(() => reject(error)));
-    worker.once("exit", (code) => {
-      if (code !== 0) finish(() => reject(new Error(`Schedule solver worker exited with code ${code}`)));
-    });
-  });
+  }
 }
 
 export function toProblem(input: ScheduleJobInput): ScheduleProblem {

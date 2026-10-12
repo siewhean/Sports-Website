@@ -100,7 +100,8 @@ export type ScheduleViolationCode =
   | "early_match_balance"
   | "late_match_balance"
   | "division_area_spread"
-  | "existing_schedule_moved";
+  | "existing_schedule_moved"
+  | "insufficient_capacity";
 
 export type ScheduleViolation = {
   code: ScheduleViolationCode;
@@ -306,32 +307,56 @@ function assertSetting<T>(setting: ConstraintSetting<T>, label: string): void {
   }
 }
 
+// Intl formatting dominated solver time when repeated per candidate slot, so formatters are built
+// once per time zone and results are memoised per (zone, instant). Slot instants repeat across
+// iterations; the memo is cleared when it grows large so long-lived processes stay bounded.
+const LOCAL_TIME_MEMO_LIMIT = 200_000;
+const localTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+const localTimeMemo = new Map<string, number | string>();
+
+function localTimeFormatter(locale: "en-CA" | "en-GB", timeZone: string): Intl.DateTimeFormat {
+  const key = `${locale}|${timeZone}`;
+  let formatter = localTimeFormatters.get(key);
+  if (!formatter) {
+    formatter =
+      locale === "en-CA"
+        ? new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" })
+        : new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    localTimeFormatters.set(key, formatter);
+  }
+  return formatter;
+}
+
+function rememberLocalTime<T extends number | string>(key: string, value: T): T {
+  if (localTimeMemo.size >= LOCAL_TIME_MEMO_LIMIT) localTimeMemo.clear();
+  localTimeMemo.set(key, value);
+  return value;
+}
+
 function localDateKey(epochMs: number, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(epochMs));
+  const memoKey = `d|${timeZone}|${epochMs}`;
+  const cached = localTimeMemo.get(memoKey);
+  if (cached !== undefined) return cached as string;
   const values = Object.fromEntries(
-    parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]),
+    localTimeFormatter("en-CA", timeZone)
+      .formatToParts(new Date(epochMs))
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
   );
-  return `${values.year}-${values.month}-${values.day}`;
+  return rememberLocalTime(memoKey, `${values.year}-${values.month}-${values.day}`);
 }
 
 function localMinuteOfDay(epochMs: number, timeZone: string): number {
+  const memoKey = `m|${timeZone}|${epochMs}`;
+  const cached = localTimeMemo.get(memoKey);
+  if (cached !== undefined) return cached as number;
   const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    })
+    localTimeFormatter("en-GB", timeZone)
       .formatToParts(new Date(epochMs))
       .filter((part) => part.type !== "literal")
       .map((part) => [part.type, Number(part.value)]),
   );
-  return (parts.hour ?? 0) * 60 + (parts.minute ?? 0);
+  return rememberLocalTime(memoKey, (parts.hour ?? 0) * 60 + (parts.minute ?? 0));
 }
 
 function parseLocalTime(value: string, label: string): number {
@@ -1327,276 +1352,373 @@ function assignmentFor(match: SchedulingMatch, slot: SchedulingSlot): ScheduleAs
   };
 }
 
-type CandidateEvaluationContext = {
+/** Lookups shared by every iteration and relaxation rung; keyed on the problem's shared arrays. */
+type SlotIndex = {
+  sortedSlots: readonly SchedulingSlot[];
+  dateByStart: ReadonlyMap<number, string>;
+  minuteByStart: ReadonlyMap<number, number>;
+};
+
+type MatchIndex = {
+  orderedMatches: readonly SchedulingMatch[];
   matchesById: ReadonlyMap<string, SchedulingMatch>;
   allEntryIds: readonly string[];
-  localDateByStart: ReadonlyMap<number, string>;
-  localMinuteByStart: ReadonlyMap<number, number>;
-  earlyThreshold: number;
-  lateThreshold: number;
   ancestorsByMatchId: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
-function partialAllows(
-  problem: ScheduleProblem,
-  match: SchedulingMatch,
-  candidate: ScheduleAssignment,
-  assigned: ReadonlyMap<string, ScheduleAssignment>,
-  context: CandidateEvaluationContext,
-): boolean {
-  if (candidate.endEpochMs - candidate.startEpochMs !== match.durationMinutes * MINUTE_MS) return false;
-  const fixed = match.fixedAssignment;
-  if (
-    fixed &&
-    (candidate.slotId !== fixed.slotId ||
-      candidate.areaId !== fixed.areaId ||
-      candidate.startEpochMs !== fixed.startEpochMs ||
-      candidate.endEpochMs !== fixed.endEpochMs)
-  ) {
-    return false;
+const slotIndexCache = new WeakMap<readonly SchedulingSlot[], Map<string, SlotIndex>>();
+const matchIndexCache = new WeakMap<readonly SchedulingMatch[], MatchIndex>();
+
+function slotIndexFor(problem: ScheduleProblem): SlotIndex {
+  let byZone = slotIndexCache.get(problem.slots);
+  if (!byZone) {
+    byZone = new Map();
+    slotIndexCache.set(problem.slots, byZone);
   }
-  for (const dependency of match.dependencyMatchIds) {
-    const prior = assigned.get(dependency);
-    if (!prior || candidate.startEpochMs < prior.endEpochMs) return false;
+  const cached = byZone.get(problem.timeZone);
+  if (cached) return cached;
+  const sortedSlots = [...problem.slots].sort(
+    (left, right) =>
+      left.startEpochMs - right.startEpochMs ||
+      left.areaId.localeCompare(right.areaId) ||
+      left.id.localeCompare(right.id),
+  );
+  const index: SlotIndex = {
+    sortedSlots,
+    dateByStart: new Map(
+      sortedSlots.map((slot) => [slot.startEpochMs, localDateKey(slot.startEpochMs, problem.timeZone)]),
+    ),
+    minuteByStart: new Map(
+      sortedSlots.map((slot) => [slot.startEpochMs, localMinuteOfDay(slot.startEpochMs, problem.timeZone)]),
+    ),
+  };
+  byZone.set(problem.timeZone, index);
+  return index;
+}
+
+function matchIndexFor(problem: ScheduleProblem): MatchIndex {
+  const cached = matchIndexCache.get(problem.matches);
+  if (cached) return cached;
+  const index: MatchIndex = {
+    orderedMatches: topologicalMatches(problem.matches),
+    matchesById: new Map(problem.matches.map((match) => [match.id, match])),
+    allEntryIds: uniqueSorted(problem.matches.flatMap((match) => match.possibleEntryIds)),
+    ancestorsByMatchId: buildTransitiveDependencies(problem.matches),
+  };
+  matchIndexCache.set(problem.matches, index);
+  return index;
+}
+
+function pushTo<Key, Value>(map: Map<Key, Value[]>, key: Key, value: Value): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+
+/**
+ * Incremental placement state: every hard check and ranking term only needs the assignments that
+ * share an area, entry, official, date or division with the match being placed, so they are kept
+ * indexed instead of rescanning every placed match for every candidate slot.
+ */
+class PlacementState {
+  readonly assigned = new Map<string, ScheduleAssignment>();
+  readonly usedSlotIds = new Set<string>();
+  readonly byArea = new Map<string, ScheduleAssignment[]>();
+  readonly byEntry = new Map<string, ScheduleAssignment[]>();
+  readonly byOfficial = new Map<string, ScheduleAssignment[]>();
+  readonly matchesByDate = new Map<string, SchedulingMatch[]>();
+  readonly areasByDivision = new Map<string, Set<string>>();
+  readonly earlyCounts = new Map<string, number>();
+  readonly lateCounts = new Map<string, number>();
+
+  constructor(
+    readonly slotIndex: SlotIndex,
+    readonly earlyThreshold: number,
+    readonly lateThreshold: number,
+  ) {}
+
+  add(match: SchedulingMatch, assignment: ScheduleAssignment): void {
+    this.assigned.set(match.id, assignment);
+    this.usedSlotIds.add(assignment.slotId);
+    pushTo(this.byArea, assignment.areaId, assignment);
+    for (const entryId of new Set(match.possibleEntryIds)) pushTo(this.byEntry, entryId, assignment);
+    for (const officialId of new Set(match.officialIds)) pushTo(this.byOfficial, officialId, assignment);
+    pushTo(this.matchesByDate, this.slotIndex.dateByStart.get(assignment.startEpochMs)!, match);
+    let areas = this.areasByDivision.get(match.divisionId);
+    if (!areas) {
+      areas = new Set();
+      this.areasByDivision.set(match.divisionId, areas);
+    }
+    areas.add(assignment.areaId);
+    const minute = this.slotIndex.minuteByStart.get(assignment.startEpochMs)!;
+    // Duplicated entry ids count twice, matching the original whole-schedule recount.
+    for (const entryId of match.possibleEntryIds) {
+      if (minute < this.earlyThreshold) this.earlyCounts.set(entryId, (this.earlyCounts.get(entryId) ?? 0) + 1);
+      if (minute >= this.lateThreshold) this.lateCounts.set(entryId, (this.lateCounts.get(entryId) ?? 0) + 1);
+    }
   }
-  const matches = context.matchesById;
-  for (const prior of assigned.values()) {
-    const priorMatch = matches.get(prior.matchId)!;
-    if (prior.areaId === candidate.areaId && intervalsOverlap(prior, candidate)) return false;
-    const sharesPossibleEntry = match.possibleEntryIds.some((entryId) => priorMatch.possibleEntryIds.includes(entryId));
-    if (sharesPossibleEntry && intervalsOverlap(prior, candidate)) return false;
+}
+
+function restGapMs(prior: { startEpochMs: number; endEpochMs: number }, slot: SchedulingSlot): number {
+  return prior.endEpochMs <= slot.startEpochMs
+    ? slot.startEpochMs - prior.endEpochMs
+    : prior.startEpochMs >= slot.endEpochMs
+      ? prior.startEpochMs - slot.endEpochMs
+      : -1;
+}
+
+/** Per-match values that depend only on the local date or on early/late membership, not the slot. */
+class MatchPlacement {
+  readonly #dailyLoadByDate = new Map<string, number>();
+  readonly #spreads = new Map<string, number>();
+
+  constructor(
+    readonly problem: ScheduleProblem,
+    readonly match: SchedulingMatch,
+    readonly state: PlacementState,
+    readonly matchIndex: MatchIndex,
+  ) {}
+
+  dailyLoad(date: string): number {
+    const cached = this.#dailyLoadByDate.get(date);
+    if (cached !== undefined) return cached;
+    const dayMatches = [...(this.state.matchesByDate.get(date) ?? []), this.match];
+    const load = Math.max(
+      0,
+      ...this.match.possibleEntryIds.map((entryId) =>
+        maxMatchesForEntryInCollection(entryId, dayMatches, this.matchIndex.ancestorsByMatchId),
+      ),
+    );
+    this.#dailyLoadByDate.set(date, load);
+    return load;
+  }
+
+  balanceSpread(kind: "early" | "late", qualifies: boolean): number {
+    const key = `${kind}:${qualifies}`;
+    const cached = this.#spreads.get(key);
+    if (cached !== undefined) return cached;
+    const counts = kind === "early" ? this.state.earlyCounts : this.state.lateCounts;
+    const bump = new Map<string, number>();
+    if (qualifies) for (const entryId of this.match.possibleEntryIds) bump.set(entryId, (bump.get(entryId) ?? 0) + 1);
+    let max = Number.NEGATIVE_INFINITY;
+    let min = Number.POSITIVE_INFINITY;
+    for (const entryId of this.matchIndex.allEntryIds) {
+      const value = (counts.get(entryId) ?? 0) + (bump.get(entryId) ?? 0);
+      if (value > max) max = value;
+      if (value < min) min = value;
+    }
+    const spread = this.matchIndex.allEntryIds.length === 0 ? 0 : max - min;
+    this.#spreads.set(key, spread);
+    return spread;
+  }
+
+  allows(slot: SchedulingSlot): boolean {
+    const { problem, match, state } = this;
+    const { constraints } = problem;
+    if (slot.endEpochMs - slot.startEpochMs !== match.durationMinutes * MINUTE_MS) return false;
+    const fixed = match.fixedAssignment;
     if (
-      match.officialIds.some((officialId) => priorMatch.officialIds.includes(officialId)) &&
-      intervalsOverlap(prior, candidate)
+      fixed &&
+      (slot.id !== fixed.slotId ||
+        slot.areaId !== fixed.areaId ||
+        slot.startEpochMs !== fixed.startEpochMs ||
+        slot.endEpochMs !== fixed.endEpochMs)
     ) {
       return false;
     }
-    if (sharesPossibleEntry && problem.constraints.minimumRest.mode === "required") {
-      const gap =
-        prior.endEpochMs <= candidate.startEpochMs
-          ? candidate.startEpochMs - prior.endEpochMs
-          : prior.startEpochMs >= candidate.endEpochMs
-            ? prior.startEpochMs - candidate.endEpochMs
-            : -1;
-      if (gap < problem.constraints.minimumRest.value.minutes * MINUTE_MS) return false;
+    for (const dependency of match.dependencyMatchIds) {
+      const prior = state.assigned.get(dependency);
+      if (!prior || slot.startEpochMs < prior.endEpochMs) return false;
     }
-    if (sharesPossibleEntry && problem.constraints.avoidConsecutiveMatches.mode === "required") {
-      const gap =
-        prior.endEpochMs <= candidate.startEpochMs
-          ? candidate.startEpochMs - prior.endEpochMs
-          : prior.startEpochMs >= candidate.endEpochMs
-            ? prior.startEpochMs - candidate.endEpochMs
-            : -1;
-      if (gap < problem.constraints.avoidConsecutiveMatches.value.minutes * MINUTE_MS) return false;
-    }
-  }
-  if (problem.constraints.entryUnavailable.mode === "required") {
+    for (const prior of state.byArea.get(slot.areaId) ?? []) if (intervalsOverlap(prior, slot)) return false;
+    const requiredRestMs =
+      constraints.minimumRest.mode === "required" ? constraints.minimumRest.value.minutes * MINUTE_MS : 0;
+    const requiredConsecutiveMs =
+      constraints.avoidConsecutiveMatches.mode === "required"
+        ? constraints.avoidConsecutiveMatches.value.minutes * MINUTE_MS
+        : 0;
     for (const entryId of match.possibleEntryIds) {
-      if (
-        (problem.constraints.entryUnavailable.value.byEntryId[entryId] ?? []).some((interval) =>
-          intervalsOverlap(candidate, interval),
-        )
-      ) {
-        return false;
+      for (const prior of state.byEntry.get(entryId) ?? []) {
+        if (intervalsOverlap(prior, slot)) return false;
+        if (requiredRestMs > 0 || requiredConsecutiveMs > 0) {
+          const gap = restGapMs(prior, slot);
+          if (gap < requiredRestMs || gap < requiredConsecutiveMs) return false;
+        }
       }
     }
-  }
-  if (problem.constraints.officialAvailability.mode === "required") {
     for (const officialId of match.officialIds) {
-      const availability = problem.constraints.officialAvailability.value.byOfficialId[officialId];
-      if (
-        !availability?.some(
-          (interval) => candidate.startEpochMs >= interval.startEpochMs && candidate.endEpochMs <= interval.endEpochMs,
+      for (const prior of state.byOfficial.get(officialId) ?? []) if (intervalsOverlap(prior, slot)) return false;
+    }
+    if (constraints.entryUnavailable.mode === "required") {
+      for (const entryId of match.possibleEntryIds) {
+        if (
+          (constraints.entryUnavailable.value.byEntryId[entryId] ?? []).some((interval) =>
+            intervalsOverlap(slot, interval),
+          )
         )
-      ) {
-        return false;
+          return false;
       }
     }
-  }
-  if (problem.constraints.maximumMatchesPerDay.mode === "required") {
-    const date = context.localDateByStart.get(candidate.startEpochMs)!;
-    const limit = problem.constraints.maximumMatchesPerDay.value.matches;
-    const priorOnDate = [...assigned.values()]
-      .filter((prior) => context.localDateByStart.get(prior.startEpochMs) === date)
-      .map((prior) => matches.get(prior.matchId)!);
-    const dayMatches = [...priorOnDate, match];
-    for (const entryId of match.possibleEntryIds) {
-      const count = maxMatchesForEntryInCollection(entryId, dayMatches, context.ancestorsByMatchId);
-      if (count > limit) return false;
-    }
-  }
-  if (match.isChampionshipFinal && problem.constraints.preferredFinalTime.mode === "required") {
-    const delta = Math.abs(candidate.startEpochMs - problem.constraints.preferredFinalTime.value.targetStartEpochMs);
-    if (delta > problem.constraints.preferredFinalTime.value.toleranceMinutes * MINUTE_MS) return false;
-  }
-  if (
-    problem.constraints.featuredPlayingArea.mode === "required" &&
-    problem.constraints.featuredPlayingArea.value.matchIds.includes(match.id) &&
-    candidate.areaId !== problem.constraints.featuredPlayingArea.value.areaId
-  ) {
-    return false;
-  }
-  if (problem.constraints.keepDivisionTogether.mode === "required") {
-    const matches = new Map(problem.matches.map((value) => [value.id, value]));
-    const areas = new Set(
-      [...assigned.values()]
-        .filter((prior) => matches.get(prior.matchId)!.divisionId === match.divisionId)
-        .map((prior) => prior.areaId),
-    );
-    areas.add(candidate.areaId);
-    if (areas.size > problem.constraints.keepDivisionTogether.value.maximumAreaCount) return false;
-  }
-  if (problem.constraints.preserveExistingSchedule.mode === "required") {
-    const existing = problem.constraints.preserveExistingSchedule.value.byMatchId[match.id];
-    if (existing) {
-      const shift = Math.abs(candidate.startEpochMs - existing.startEpochMs) / MINUTE_MS;
-      if (
-        candidate.areaId !== existing.areaId ||
-        shift > problem.constraints.preserveExistingSchedule.value.maximumShiftMinutes
-      ) {
-        return false;
+    if (constraints.officialAvailability.mode === "required") {
+      for (const officialId of match.officialIds) {
+        const availability = constraints.officialAvailability.value.byOfficialId[officialId];
+        if (
+          !availability?.some(
+            (interval) => slot.startEpochMs >= interval.startEpochMs && slot.endEpochMs <= interval.endEpochMs,
+          )
+        ) {
+          return false;
+        }
       }
     }
+    if (
+      constraints.maximumMatchesPerDay.mode === "required" &&
+      this.dailyLoad(state.slotIndex.dateByStart.get(slot.startEpochMs)!) >
+        constraints.maximumMatchesPerDay.value.matches
+    ) {
+      return false;
+    }
+    if (match.isChampionshipFinal && constraints.preferredFinalTime.mode === "required") {
+      const delta = Math.abs(slot.startEpochMs - constraints.preferredFinalTime.value.targetStartEpochMs);
+      if (delta > constraints.preferredFinalTime.value.toleranceMinutes * MINUTE_MS) return false;
+    }
+    if (
+      constraints.featuredPlayingArea.mode === "required" &&
+      constraints.featuredPlayingArea.value.matchIds.includes(match.id) &&
+      slot.areaId !== constraints.featuredPlayingArea.value.areaId
+    ) {
+      return false;
+    }
+    if (
+      constraints.keepDivisionTogether.mode === "required" &&
+      this.divisionAreaCount(slot) > constraints.keepDivisionTogether.value.maximumAreaCount
+    ) {
+      return false;
+    }
+    if (constraints.preserveExistingSchedule.mode === "required") {
+      const existing = constraints.preserveExistingSchedule.value.byMatchId[match.id];
+      if (existing) {
+        const shift = Math.abs(slot.startEpochMs - existing.startEpochMs) / MINUTE_MS;
+        if (slot.areaId !== existing.areaId || shift > constraints.preserveExistingSchedule.value.maximumShiftMinutes) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
-  return true;
-}
 
-function candidateRank(
-  problem: ScheduleProblem,
-  match: SchedulingMatch,
-  candidate: ScheduleAssignment,
-  assigned: ReadonlyMap<string, ScheduleAssignment>,
-  context: CandidateEvaluationContext,
-): readonly number[] {
-  const matches = context.matchesById;
-  const assignedValues = [...assigned.values()];
-  const shared = assignedValues.filter((prior) => {
-    const priorMatch = matches.get(prior.matchId)!;
-    return match.possibleEntryIds.some((entryId) => priorMatch.possibleEntryIds.includes(entryId));
-  });
-  const nearestRest = shared.length
-    ? Math.min(
-        ...shared.map((prior) =>
+  divisionAreaCount(slot: SchedulingSlot): number {
+    const areas = this.state.areasByDivision.get(this.match.divisionId);
+    return (areas?.size ?? 0) + (areas?.has(slot.areaId) ? 0 : 1);
+  }
+
+  rank(slot: SchedulingSlot, placement: PlacementMode): readonly number[] {
+    const { problem, match, state } = this;
+    const { constraints } = problem;
+    let nearestRest = Number.MAX_SAFE_INTEGER;
+    for (const entryId of match.possibleEntryIds) {
+      for (const prior of state.byEntry.get(entryId) ?? []) {
+        const gap =
+          prior.endEpochMs <= slot.startEpochMs
+            ? slot.startEpochMs - prior.endEpochMs
+            : prior.startEpochMs - slot.endEpochMs;
+        nearestRest = Math.min(nearestRest, Math.max(0, gap / MINUTE_MS));
+      }
+    }
+    const dailyLoad = this.dailyLoad(state.slotIndex.dateByStart.get(slot.startEpochMs)!);
+    const finalDelta =
+      match.isChampionshipFinal && constraints.preferredFinalTime.mode !== "ignored"
+        ? Math.abs(slot.startEpochMs - constraints.preferredFinalTime.value.targetStartEpochMs) / MINUTE_MS
+        : 0;
+    const preferredRestShortfall =
+      constraints.minimumRest.mode === "preferred"
+        ? Math.max(0, constraints.minimumRest.value.minutes - nearestRest)
+        : 0;
+    const preferredDailyExcess =
+      constraints.maximumMatchesPerDay.mode === "preferred"
+        ? Math.max(0, dailyLoad - constraints.maximumMatchesPerDay.value.matches)
+        : 0;
+    const preferredEntryUnavailable =
+      constraints.entryUnavailable.mode === "preferred"
+        ? match.possibleEntryIds.filter((entryId) =>
+            (constraints.entryUnavailable.value.byEntryId[entryId] ?? []).some((interval) =>
+              intervalsOverlap(slot, interval),
+            ),
+          ).length
+        : 0;
+    const preferredOfficialUnavailable =
+      constraints.officialAvailability.mode === "preferred"
+        ? match.officialIds.filter(
+            (officialId) =>
+              !constraints.officialAvailability.value.byOfficialId[officialId]?.some(
+                (interval) => slot.startEpochMs >= interval.startEpochMs && slot.endEpochMs <= interval.endEpochMs,
+              ),
+          ).length
+        : 0;
+    const preferredFeaturedArea =
+      constraints.featuredPlayingArea.mode === "preferred" &&
+      constraints.featuredPlayingArea.value.matchIds.includes(match.id) &&
+      slot.areaId !== constraints.featuredPlayingArea.value.areaId
+        ? 1
+        : 0;
+    const preferredConsecutiveShortfall =
+      constraints.avoidConsecutiveMatches.mode === "preferred"
+        ? Math.max(0, constraints.avoidConsecutiveMatches.value.minutes - nearestRest)
+        : 0;
+    const preferredDivisionExcess =
+      constraints.keepDivisionTogether.mode === "preferred"
+        ? Math.max(0, this.divisionAreaCount(slot) - constraints.keepDivisionTogether.value.maximumAreaCount)
+        : 0;
+    const existing = constraints.preserveExistingSchedule.value.byMatchId[match.id];
+    const preferredPreservation =
+      constraints.preserveExistingSchedule.mode === "preferred" && existing
+        ? (slot.areaId === existing.areaId ? 0 : 1) +
           Math.max(
             0,
-            (prior.endEpochMs <= candidate.startEpochMs
-              ? candidate.startEpochMs - prior.endEpochMs
-              : prior.startEpochMs - candidate.endEpochMs) / MINUTE_MS,
-          ),
-        ),
-      )
-    : Number.MAX_SAFE_INTEGER;
-  const date = context.localDateByStart.get(candidate.startEpochMs)!;
-  const priorOnDate = assignedValues
-    .filter((prior) => context.localDateByStart.get(prior.startEpochMs) === date)
-    .map((prior) => matches.get(prior.matchId)!);
-  const candidateDayMatches = [...priorOnDate, match];
-  const dailyLoad = Math.max(
-    0,
-    ...match.possibleEntryIds.map((entryId) =>
-      maxMatchesForEntryInCollection(entryId, candidateDayMatches, context.ancestorsByMatchId),
-    ),
-  );
-  const finalDelta =
-    match.isChampionshipFinal && problem.constraints.preferredFinalTime.mode !== "ignored"
-      ? Math.abs(candidate.startEpochMs - problem.constraints.preferredFinalTime.value.targetStartEpochMs) / MINUTE_MS
-      : 0;
-  const preferredRestShortfall =
-    problem.constraints.minimumRest.mode === "preferred"
-      ? Math.max(0, problem.constraints.minimumRest.value.minutes - nearestRest)
-      : 0;
-  const preferredDailyExcess =
-    problem.constraints.maximumMatchesPerDay.mode === "preferred"
-      ? Math.max(0, dailyLoad - problem.constraints.maximumMatchesPerDay.value.matches)
-      : 0;
-  const preferredEntryUnavailable =
-    problem.constraints.entryUnavailable.mode === "preferred"
-      ? match.possibleEntryIds.filter((entryId) =>
-          (problem.constraints.entryUnavailable.value.byEntryId[entryId] ?? []).some((interval) =>
-            intervalsOverlap(candidate, interval),
-          ),
-        ).length
-      : 0;
-  const preferredOfficialUnavailable =
-    problem.constraints.officialAvailability.mode === "preferred"
-      ? match.officialIds.filter(
-          (officialId) =>
-            !problem.constraints.officialAvailability.value.byOfficialId[officialId]?.some(
-              (interval) =>
-                candidate.startEpochMs >= interval.startEpochMs && candidate.endEpochMs <= interval.endEpochMs,
-            ),
-        ).length
-      : 0;
-  const preferredFeaturedArea =
-    problem.constraints.featuredPlayingArea.mode === "preferred" &&
-    problem.constraints.featuredPlayingArea.value.matchIds.includes(match.id) &&
-    candidate.areaId !== problem.constraints.featuredPlayingArea.value.areaId
-      ? 1
-      : 0;
-  const preferredConsecutiveShortfall =
-    problem.constraints.avoidConsecutiveMatches.mode === "preferred"
-      ? Math.max(0, problem.constraints.avoidConsecutiveMatches.value.minutes - nearestRest)
-      : 0;
-  const divisionAreas = new Set(
-    assignedValues
-      .filter((prior) => matches.get(prior.matchId)!.divisionId === match.divisionId)
-      .map((prior) => prior.areaId),
-  );
-  divisionAreas.add(candidate.areaId);
-  const preferredDivisionExcess =
-    problem.constraints.keepDivisionTogether.mode === "preferred"
-      ? Math.max(0, divisionAreas.size - problem.constraints.keepDivisionTogether.value.maximumAreaCount)
-      : 0;
-  const existing = problem.constraints.preserveExistingSchedule.value.byMatchId[match.id];
-  const preferredPreservation =
-    problem.constraints.preserveExistingSchedule.mode === "preferred" && existing
-      ? (candidate.areaId === existing.areaId ? 0 : 1) +
-        Math.max(
-          0,
-          Math.abs(candidate.startEpochMs - existing.startEpochMs) / MINUTE_MS -
-            problem.constraints.preserveExistingSchedule.value.maximumShiftMinutes,
-        )
-      : 0;
-  const balanceSpread = (kind: "early" | "late"): number => {
-    const threshold = kind === "early" ? context.earlyThreshold : context.lateThreshold;
-    const qualifies = (assignment: ScheduleAssignment) =>
-      kind === "early"
-        ? context.localMinuteByStart.get(assignment.startEpochMs)! < threshold
-        : context.localMinuteByStart.get(assignment.startEpochMs)! >= threshold;
-    const counts = new Map<string, number>();
-    for (const current of [...assignedValues, candidate]) {
-      if (!qualifies(current)) continue;
-      for (const entryId of matches.get(current.matchId)!.possibleEntryIds) {
-        counts.set(entryId, (counts.get(entryId) ?? 0) + 1);
-      }
-    }
-    const values = context.allEntryIds.map((entryId) => counts.get(entryId) ?? 0);
-    return values.length === 0 ? 0 : Math.max(...values) - Math.min(...values);
-  };
-  const preferredEarlySpread =
-    problem.constraints.balanceEarlyMatches.mode === "preferred" ? Math.max(0, balanceSpread("early") - 1) : 0;
-  const preferredLateSpread =
-    problem.constraints.balanceLateMatches.mode === "preferred" ? Math.max(0, balanceSpread("late") - 1) : 0;
-  const preferencePenalty =
-    preferredRestShortfall * weight(problem.constraints.minimumRest) +
-    preferredDailyExcess * weight(problem.constraints.maximumMatchesPerDay) +
-    (match.isChampionshipFinal && problem.constraints.preferredFinalTime.mode === "preferred"
-      ? Math.max(0, finalDelta - problem.constraints.preferredFinalTime.value.toleranceMinutes) *
-        weight(problem.constraints.preferredFinalTime)
-      : 0) +
-    preferredEntryUnavailable * weight(problem.constraints.entryUnavailable) +
-    preferredOfficialUnavailable * weight(problem.constraints.officialAvailability) +
-    preferredFeaturedArea * weight(problem.constraints.featuredPlayingArea) +
-    preferredConsecutiveShortfall * weight(problem.constraints.avoidConsecutiveMatches) +
-    preferredEarlySpread * weight(problem.constraints.balanceEarlyMatches) +
-    preferredLateSpread * weight(problem.constraints.balanceLateMatches) +
-    preferredDivisionExcess * weight(problem.constraints.keepDivisionTogether) +
-    preferredPreservation * weight(problem.constraints.preserveExistingSchedule);
-  if (problem.objective === "fastest") return [preferencePenalty, candidate.endEpochMs, dailyLoad, -nearestRest];
-  if (problem.objective === "balanced")
-    return [preferencePenalty, candidate.endEpochMs, dailyLoad, finalDelta, -nearestRest];
-  return [preferencePenalty, -nearestRest, dailyLoad, candidate.endEpochMs, finalDelta];
+            Math.abs(slot.startEpochMs - existing.startEpochMs) / MINUTE_MS -
+              constraints.preserveExistingSchedule.value.maximumShiftMinutes,
+          )
+        : 0;
+    const minute = state.slotIndex.minuteByStart.get(slot.startEpochMs)!;
+    const preferredEarlySpread =
+      constraints.balanceEarlyMatches.mode === "preferred"
+        ? Math.max(0, this.balanceSpread("early", minute < state.earlyThreshold) - 1)
+        : 0;
+    const preferredLateSpread =
+      constraints.balanceLateMatches.mode === "preferred"
+        ? Math.max(0, this.balanceSpread("late", minute >= state.lateThreshold) - 1)
+        : 0;
+    const preferencePenalty =
+      preferredRestShortfall * weight(constraints.minimumRest) +
+      preferredDailyExcess * weight(constraints.maximumMatchesPerDay) +
+      (match.isChampionshipFinal && constraints.preferredFinalTime.mode === "preferred"
+        ? Math.max(0, finalDelta - constraints.preferredFinalTime.value.toleranceMinutes) *
+          weight(constraints.preferredFinalTime)
+        : 0) +
+      preferredEntryUnavailable * weight(constraints.entryUnavailable) +
+      preferredOfficialUnavailable * weight(constraints.officialAvailability) +
+      preferredFeaturedArea * weight(constraints.featuredPlayingArea) +
+      preferredConsecutiveShortfall * weight(constraints.avoidConsecutiveMatches) +
+      preferredEarlySpread * weight(constraints.balanceEarlyMatches) +
+      preferredLateSpread * weight(constraints.balanceLateMatches) +
+      preferredDivisionExcess * weight(constraints.keepDivisionTogether) +
+      preferredPreservation * weight(constraints.preserveExistingSchedule);
+    if (placement === "feasibility") return [slot.endEpochMs, dailyLoad, preferencePenalty, -nearestRest];
+    if (problem.objective === "fastest") return [preferencePenalty, slot.endEpochMs, dailyLoad, -nearestRest];
+    if (problem.objective === "balanced")
+      return [preferencePenalty, slot.endEpochMs, dailyLoad, finalDelta, -nearestRest];
+    return [preferencePenalty, -nearestRest, dailyLoad, slot.endEpochMs, finalDelta];
+  }
 }
+
+/**
+ * `preferences` ranks hard-feasible slots by preference penalty first. `bounded` keeps that
+ * ranking but only within a short horizon after the earliest hard-feasible start, so a
+ * preference (e.g. rest) can delay a match a little without consuming late capacity.
+ * `feasibility` is earliest finish first (list scheduling), with preferences as tie-breakers.
+ * Preferences never filter slots in any mode; they only order the hard-feasible ones.
+ */
+type PlacementMode = "preferences" | "bounded" | "feasibility";
 
 function compareRank(left: readonly number[], right: readonly number[]): number {
   for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
@@ -1614,6 +1736,40 @@ function stableIterationIndex(iteration: number, matchId: string, candidateCount
   return (offset + iteration) % candidateCount;
 }
 
+function boundedPlacementHorizonMinutes(problem: ScheduleProblem, match: SchedulingMatch): number {
+  const { minimumRest, avoidConsecutiveMatches } = problem.constraints;
+  return (
+    match.durationMinutes +
+    Math.max(
+      minimumRest.mode === "ignored" ? 0 : minimumRest.value.minutes,
+      avoidConsecutiveMatches.mode === "ignored" ? 0 : avoidConsecutiveMatches.value.minutes,
+    )
+  );
+}
+
+/** Relaxed retries perturb only among the earliest few slots so exploration cannot starve dependants. */
+const FEASIBILITY_PERTURBATION_WINDOW = 3;
+
+/**
+ * Smallest per-entry daily match limit the matches can satisfy across the available local dates:
+ * the most matches any entry may have to play (knockout possibilities counted conservatively),
+ * spread evenly over the dates. Used to derive a default that never makes a format unschedulable.
+ */
+export function minimumFeasibleDailyMatchLimit(
+  matches: readonly SchedulingMatch[],
+  slotStartEpochMs: readonly number[],
+  timeZone: string,
+): number {
+  const dates = new Set(slotStartEpochMs.map((start) => localDateKey(start, timeZone))).size;
+  if (dates === 0) return 1;
+  const ancestors = buildTransitiveDependencies(matches);
+  let mostMatches = 1;
+  for (const entryId of new Set(matches.flatMap((match) => match.possibleEntryIds))) {
+    mostMatches = Math.max(mostMatches, maxMatchesForEntryInCollection(entryId, matches, ancestors));
+  }
+  return Math.ceil(mostMatches / dates);
+}
+
 function exceedsRequiredDailyMatchCapacity(problem: ScheduleProblem): boolean {
   if (problem.constraints.maximumMatchesPerDay.mode !== "required") return false;
   const availableDates = new Set(problem.slots.map((slot) => localDateKey(slot.startEpochMs, problem.timeZone)));
@@ -1628,52 +1784,65 @@ function exceedsRequiredDailyMatchCapacity(problem: ScheduleProblem): boolean {
   return false;
 }
 
-function generateIteration(problem: ScheduleProblem, iteration: number): ScheduleAssignment[] {
+function generateIteration(
+  problem: ScheduleProblem,
+  iteration: number,
+  placement: PlacementMode = "preferences",
+): ScheduleAssignment[] {
   validateProblem(problem);
-  const slots = [...problem.slots].sort(
-    (left, right) =>
-      left.startEpochMs - right.startEpochMs ||
-      left.areaId.localeCompare(right.areaId) ||
-      left.id.localeCompare(right.id),
+  const slotIndex = slotIndexFor(problem);
+  const matchIndex = matchIndexFor(problem);
+  const state = new PlacementState(
+    slotIndex,
+    parseLocalTime(problem.constraints.balanceEarlyMatches.value.beforeLocalTime, "Early threshold"),
+    parseLocalTime(problem.constraints.balanceLateMatches.value.atOrAfterLocalTime, "Late threshold"),
   );
-  const context: CandidateEvaluationContext = {
-    matchesById: new Map(problem.matches.map((match) => [match.id, match])),
-    allEntryIds: uniqueSorted(problem.matches.flatMap((match) => match.possibleEntryIds)),
-    localDateByStart: new Map(
-      slots.map((slot) => [slot.startEpochMs, localDateKey(slot.startEpochMs, problem.timeZone)]),
-    ),
-    localMinuteByStart: new Map(
-      slots.map((slot) => [slot.startEpochMs, localMinuteOfDay(slot.startEpochMs, problem.timeZone)]),
-    ),
-    earlyThreshold: parseLocalTime(problem.constraints.balanceEarlyMatches.value.beforeLocalTime, "Early threshold"),
-    lateThreshold: parseLocalTime(problem.constraints.balanceLateMatches.value.atOrAfterLocalTime, "Late threshold"),
-    ancestorsByMatchId: buildTransitiveDependencies(problem.matches),
-  };
-  const assigned = new Map<string, ScheduleAssignment>();
-  for (const match of topologicalMatches(problem.matches)) {
-    let candidates = slots
-      .filter((slot) => ![...assigned.values()].some((assignment) => assignment.slotId === slot.id))
-      .map((slot) => assignmentFor(match, slot))
-      .filter((assignment) => partialAllows(problem, match, assignment, assigned, context));
-    if (match.fixedAssignment)
-      candidates = candidates.filter((candidate) => candidate.slotId === match.fixedAssignment!.slotId);
+  const slots = slotIndex.sortedSlots;
+  for (const match of matchIndex.orderedMatches) {
+    const placementContext = new MatchPlacement(problem, match, state, matchIndex);
+    // Slots are sorted by start, so skip straight past those that start before a dependency ends.
+    let earliestStart = Number.NEGATIVE_INFINITY;
+    for (const dependency of match.dependencyMatchIds) {
+      earliestStart = Math.max(earliestStart, state.assigned.get(dependency)?.endEpochMs ?? Number.POSITIVE_INFINITY);
+    }
+    let low = 0;
+    let high = slots.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (slots[middle]!.startEpochMs < earliestStart) low = middle + 1;
+      else high = middle;
+    }
+    let candidates: SchedulingSlot[] = [];
+    for (let index = low; index < slots.length; index += 1) {
+      const slot = slots[index]!;
+      if (!state.usedSlotIds.has(slot.id) && placementContext.allows(slot)) candidates.push(slot);
+    }
+    if (placement === "bounded" && candidates.length > 0) {
+      const earliest = Math.min(...candidates.map((candidate) => candidate.startEpochMs));
+      const horizon = earliest + boundedPlacementHorizonMinutes(problem, match) * MINUTE_MS;
+      candidates = candidates.filter((candidate) => candidate.startEpochMs <= horizon);
+    }
     const rankedCandidates = candidates.map((candidate) => ({
       candidate,
-      rank: candidateRank(problem, match, candidate, assigned, context),
+      rank: placementContext.rank(candidate, placement),
     }));
     rankedCandidates.sort((left, right) => {
       const ranked = compareRank(left.rank, right.rank);
       return (
         ranked ||
         left.candidate.areaId.localeCompare(right.candidate.areaId) ||
-        left.candidate.slotId.localeCompare(right.candidate.slotId)
+        left.candidate.id.localeCompare(right.candidate.id)
       );
     });
-    const selected = rankedCandidates[stableIterationIndex(iteration, match.id, rankedCandidates.length)]?.candidate;
+    const window =
+      placement !== "preferences"
+        ? Math.min(rankedCandidates.length, FEASIBILITY_PERTURBATION_WINDOW)
+        : rankedCandidates.length;
+    const selected = rankedCandidates[stableIterationIndex(iteration, match.id, window)]?.candidate;
     if (!selected) throw new Error(`No valid slot remains for match ${match.id}`);
-    assigned.set(match.id, selected);
+    state.add(match, assignmentFor(match, selected));
   }
-  const result = [...assigned.values()].sort(compareAssignment);
+  const result = [...state.assigned.values()].sort(compareAssignment);
   const validation = validateSchedule(problem, result);
   if (!validation.valid) {
     const first = validation.violations.find((violation) => violation.severity !== "preferred");
@@ -1686,18 +1855,44 @@ function isNoValidSlotError(error: unknown): error is Error {
   return error instanceof Error && error.message.startsWith("No valid slot remains");
 }
 
-export function generateConstraintAwareSchedule(problem: ScheduleProblem): ScheduleAssignment[] {
-  try {
-    return generateIteration(problem, 0);
-  } catch (error) {
-    if (problem.objective === "fastest" || !isNoValidSlotError(error)) {
-      throw error;
+/**
+ * Preferred (soft) constraints must never turn a hard-feasible problem into no_solution. Greedy
+ * placement has no backtracking, so a preference-led choice can consume a slot a later dependant
+ * needs. Retry with preferences relaxed to tie-breakers (earliest-finish placement), first at the
+ * same iteration and then at the deterministic baseline iteration. Required constraints stay hard.
+ */
+function generateIterationWithRelaxation(problem: ScheduleProblem, iteration: number): ScheduleAssignment[] {
+  // Relaxation only changes how slots are ranked; the returned assignments are still validated
+  // and scored by callers against the original problem, so quality reports stay honest.
+  const preferredKeys = (Object.keys(problem.constraints) as (keyof SchedulingConstraints)[]).filter(
+    (key) => problem.constraints[key].mode === "preferred",
+  );
+  const relaxing = (key: keyof SchedulingConstraints): ScheduleProblem => ({
+    ...problem,
+    constraints: { ...problem.constraints, [key]: { mode: "ignored", value: problem.constraints[key].value } },
+  });
+  const attempts: [ScheduleProblem, number, PlacementMode][] = [
+    [problem, iteration, "preferences"],
+    ...preferredKeys.map((key): [ScheduleProblem, number, PlacementMode] => [relaxing(key), iteration, "preferences"]),
+    [problem, iteration, "bounded"],
+    [problem, iteration, "feasibility"],
+    ...(iteration === 0 ? [] : [[problem, 0, "feasibility"] as [ScheduleProblem, number, PlacementMode]]),
+  ];
+  let lastError: unknown;
+  for (const [attemptProblem, attemptIteration, placement] of attempts) {
+    try {
+      // Relaxing a preferred setting cannot change hard validity: required modes are untouched.
+      return generateIteration(attemptProblem, attemptIteration, placement);
+    } catch (error) {
+      if (!isNoValidSlotError(error)) throw error;
+      lastError = error;
     }
-    // Preference-led greedy placement may consume a scarce late slot. Fall
-    // back to the deterministic feasibility-first baseline; workers can then
-    // continue exploring preferred quality without losing a valid draft.
-    return generateIteration({ ...problem, objective: "fastest" }, 0);
   }
+  throw lastError;
+}
+
+export function generateConstraintAwareSchedule(problem: ScheduleProblem): ScheduleAssignment[] {
+  return generateIterationWithRelaxation(problem, 0);
 }
 
 /**
@@ -1738,18 +1933,9 @@ export function generateScheduleCandidates(
   const endExclusive = startIteration + maxIterations;
   for (let iteration = firstGeneratedIteration; iteration < endExclusive; iteration += 1) {
     try {
-      add(iteration, generateIteration(problem, iteration));
+      add(iteration, generateIterationWithRelaxation(problem, iteration));
     } catch (error) {
       if (!isNoValidSlotError(error)) throw error;
-      if (problem.objective === "fastest") continue;
-      try {
-        // Keep worker exploration aligned with generateConstraintAwareSchedule:
-        // an objective preference may consume a scarce slot, but it must not
-        // hide a deterministic feasible draft from the organiser.
-        add(iteration, generateIteration({ ...problem, objective: "fastest" }, iteration));
-      } catch (fallbackError) {
-        if (!isNoValidSlotError(fallbackError)) throw fallbackError;
-      }
     }
   }
   return candidates;
@@ -1968,6 +2154,198 @@ export function diagnoseScheduleInfeasibility(problem: ScheduleProblem): readonl
         message: `Official ${officialId} is assigned to ${assignedMatches.length} matches but only ${maxSequentialSlots} non-overlapping slots are available`,
       });
     }
+  }
+
+  violations.push(...diagnoseCapacityInfeasibility(problem));
+  return violations;
+}
+
+function localTimeLabel(epochMs: number, timeZone: string): string {
+  const minute = localMinuteOfDay(epochMs, timeZone);
+  const hh = String(Math.floor(minute / 60)).padStart(2, "0");
+  const mm = String(minute % 60).padStart(2, "0");
+  return `${localDateKey(epochMs, timeZone)} ${hh}:${mm}`;
+}
+
+function listLabel(values: readonly string[], limit = 6): string {
+  return values.length <= limit
+    ? values.join(", ")
+    : `${values.slice(0, limit).join(", ")} and ${values.length - limit} more`;
+}
+
+/**
+ * Necessary-condition checks for the common no_solution causes. Each finding proves that no
+ * schedule exists under the stated hard/required settings, so the organiser can act on it: venue
+ * capacity, the per-entry daily limit, required rest, and dependency (knockout ordering) windows.
+ * Messages name raw ids; callers substitute display names.
+ */
+function diagnoseCapacityInfeasibility(problem: ScheduleProblem): ScheduleViolation[] {
+  const violations: ScheduleViolation[] = [];
+  const { timeZone } = problem;
+  const dateOf = (epochMs: number) => localDateKey(epochMs, timeZone);
+  const slotMinutes = (slot: SchedulingSlot) => (slot.endEpochMs - slot.startEpochMs) / MINUTE_MS;
+  const dates = uniqueSorted(problem.slots.map((slot) => dateOf(slot.startEpochMs)));
+
+  // 1. Venue capacity: each match occupies one slot of exactly its duration.
+  for (const duration of new Set(problem.matches.map((match) => match.durationMinutes))) {
+    const matchCount = problem.matches.filter((match) => match.durationMinutes === duration).length;
+    const slots = problem.slots.filter((slot) => slotMinutes(slot) === duration);
+    if (matchCount <= slots.length) continue;
+    const perArea = uniqueSorted(slots.map((slot) => slot.areaId)).map(
+      (areaId) => `${areaId}: ${slots.filter((slot) => slot.areaId === areaId).length} slots`,
+    );
+    violations.push({
+      code: "insufficient_capacity",
+      severity: "hard",
+      matchIds: [],
+      amount: matchCount - slots.length,
+      message:
+        `${matchCount} matches of ${duration} minutes need ${matchCount * duration} court-minutes, but the venue ` +
+        `windows provide ${slots.length} slots (${slots.length * duration} court-minutes) over ${dates.length} ` +
+        `day(s)${perArea.length ? ` (${perArea.join("; ")})` : ""}. Add playing areas or time, or choose a smaller format.`,
+    });
+  }
+
+  const ancestors = buildTransitiveDependencies(problem.matches);
+  const entryIds = uniqueSorted(problem.matches.flatMap((match) => match.possibleEntryIds));
+  const neededByEntry = new Map(
+    entryIds.map((entryId) => [entryId, maxMatchesForEntryInCollection(entryId, problem.matches, ancestors)]),
+  );
+  const matchIdsFor = (entries: readonly string[]) =>
+    uniqueSorted(
+      problem.matches
+        .filter((match) => match.possibleEntryIds.some((entryId) => entries.includes(entryId)))
+        .map((match) => match.id),
+    );
+  const entriesLabel = (entries: readonly string[]) =>
+    `${entries.length} entr${entries.length === 1 ? "y" : "ies"} (${listLabel(entries)})`;
+
+  // 2. Required per-entry daily limit over the available dates.
+  const daily = problem.constraints.maximumMatchesPerDay;
+  const dailyLimit = daily.mode === "required" ? daily.value.matches : Number.POSITIVE_INFINITY;
+  if (daily.mode === "required" && dates.length > 0) {
+    const allowed = daily.value.matches * dates.length;
+    const over = entryIds.filter((entryId) => neededByEntry.get(entryId)! > allowed);
+    if (over.length > 0) {
+      const most = Math.max(...over.map((entryId) => neededByEntry.get(entryId)!));
+      violations.push({
+        code: "maximum_matches_per_day",
+        severity: "required",
+        matchIds: matchIdsFor(over),
+        amount: most - allowed,
+        message:
+          `${entriesLabel(over)} may have to play up to ${most} matches, but the required limit of ` +
+          `${daily.value.matches} per day over ${dates.length} day(s) allows ${allowed}. ` +
+          `Raise the daily limit to at least ${Math.ceil(most / dates.length)} or make it preferred.`,
+      });
+    }
+  }
+
+  // 3. Required rest: the most matches one entry can play per day when its matches must be
+  // separated by the required gap (and capped by the required daily limit), summed over dates.
+  const restMinutes = Math.max(
+    problem.constraints.minimumRest.mode === "required" ? problem.constraints.minimumRest.value.minutes : 0,
+    problem.constraints.avoidConsecutiveMatches.mode === "required"
+      ? problem.constraints.avoidConsecutiveMatches.value.minutes
+      : 0,
+  );
+  if (restMinutes > 0) {
+    const sequentialCapacity = (duration: number, gapMinutes: number) => {
+      let total = 0;
+      const byDate: string[] = [];
+      for (const date of dates) {
+        const starts = [
+          ...new Set(
+            problem.slots
+              .filter((slot) => slotMinutes(slot) === duration && dateOf(slot.startEpochMs) === date)
+              .map((slot) => slot.startEpochMs),
+          ),
+        ].sort((left, right) => left - right);
+        let count = 0;
+        let nextStart = Number.NEGATIVE_INFINITY;
+        for (const start of starts) {
+          if (start < nextStart) continue;
+          count += 1;
+          nextStart = start + (duration + gapMinutes) * MINUTE_MS;
+        }
+        count = Math.min(count, dailyLimit);
+        total += count;
+        byDate.push(`${date}: ${count}`);
+      }
+      return { total, byDate };
+    };
+    const shortfalls: { entryId: string; needed: number; capacity: { total: number; byDate: string[] } }[] = [];
+    for (const entryId of entryIds) {
+      const duration = Math.max(
+        ...problem.matches
+          .filter((match) => match.possibleEntryIds.includes(entryId))
+          .map((match) => match.durationMinutes),
+      );
+      const needed = neededByEntry.get(entryId)!;
+      const capacity = sequentialCapacity(duration, restMinutes);
+      // Report rest only when it is the binding cause (without the rest gap the entry would fit).
+      if (needed > capacity.total && needed <= sequentialCapacity(duration, 0).total) {
+        shortfalls.push({ entryId, needed, capacity });
+      }
+    }
+    if (shortfalls.length > 0) {
+      const worst = shortfalls.reduce((left, right) =>
+        right.needed - right.capacity.total > left.needed - left.capacity.total ? right : left,
+      );
+      violations.push({
+        code: "minimum_rest",
+        severity: "required",
+        matchIds: matchIdsFor(shortfalls.map((item) => item.entryId)),
+        amount: worst.needed - worst.capacity.total,
+        message:
+          `${entriesLabel(shortfalls.map((item) => item.entryId))} may have to play up to ${worst.needed} matches, ` +
+          `but with ${restMinutes} minutes of required rest only ${worst.capacity.total} fit in the venue windows ` +
+          `(${worst.capacity.byDate.join("; ")}). Reduce the required rest, make it preferred, or add playing time.`,
+      });
+    }
+  }
+
+  // 4. Dependency windows: earliest possible finish along each prerequisite chain, including the
+  // required rest between a match and the matches that feed it.
+  const earliestFinish = new Map<string, number>();
+  const blocked = new Set<string>();
+  const sortedSlots = [...problem.slots].sort((left, right) => left.startEpochMs - right.startEpochMs);
+  for (const match of topologicalMatches(problem.matches)) {
+    if (match.dependencyMatchIds.some((id) => blocked.has(id))) {
+      blocked.add(match.id);
+      continue;
+    }
+    const ready = Math.max(
+      Number.NEGATIVE_INFINITY,
+      ...match.dependencyMatchIds.map((id) => earliestFinish.get(id)! + restMinutes * MINUTE_MS),
+    );
+    const fixed = match.fixedAssignment;
+    const start = fixed
+      ? fixed.startEpochMs >= ready
+        ? fixed.startEpochMs
+        : undefined
+      : sortedSlots.find((slot) => slotMinutes(slot) === match.durationMinutes && slot.startEpochMs >= ready)
+          ?.startEpochMs;
+    if (start !== undefined) {
+      earliestFinish.set(match.id, start + match.durationMinutes * MINUTE_MS);
+      continue;
+    }
+    blocked.add(match.id);
+    if (match.dependencyMatchIds.length === 0) continue; // the capacity finding covers this case
+    const chain = uniqueSorted([match.id, ...(ancestors.get(match.id) ?? [])]);
+    const restNote = restMinutes > 0 ? ` plus ${restMinutes} minutes of required rest` : "";
+    violations.push({
+      code: "dependency_order",
+      severity: "hard",
+      matchIds: chain,
+      message: fixed
+        ? `Locked match ${match.id} starts at ${localTimeLabel(fixed.startEpochMs, timeZone)}, before its ` +
+          `prerequisite matches can finish (earliest ${localTimeLabel(ready, timeZone)}${restNote}). ` +
+          `Unlock it or move it later.`
+        : `Match ${match.id} must wait for ${chain.length - 1} prerequisite match(es), which cannot finish before ` +
+          `${localTimeLabel(ready, timeZone)}${restNote}, and no ${match.durationMinutes}-minute slot remains after ` +
+          `that. Add playing time after the prerequisite rounds.`,
+    });
   }
 
   return violations;

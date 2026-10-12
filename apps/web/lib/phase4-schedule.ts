@@ -244,13 +244,29 @@ export type ScheduleUnlockReceipt = Readonly<{
   matchId: string;
 }>;
 
-export type ScheduleOfficialDiagnosticCode = "official_unavailable" | "official_overlap";
+export type ScheduleOfficialDiagnosticCode =
+  | "official_unavailable"
+  | "official_overlap"
+  | "insufficient_capacity"
+  | "maximum_matches_per_day"
+  | "minimum_rest"
+  | "dependency_order";
 
 export type ScheduleOfficialDiagnostic = Readonly<{
   code: ScheduleOfficialDiagnosticCode;
   severity: "required" | "hard";
   matchIds: readonly string[];
+  message?: string;
 }>;
+
+const diagnosticCodes = new Set<string>([
+  "official_unavailable",
+  "official_overlap",
+  "insufficient_capacity",
+  "maximum_matches_per_day",
+  "minimum_rest",
+  "dependency_order",
+]);
 
 export type ScheduleJobDiagnostics = Readonly<{
   jobId: string;
@@ -789,8 +805,12 @@ export function parseScheduleJobDiagnostics(value: unknown): ScheduleJobDiagnost
     const diag = record(entry);
     if (
       !diag ||
-      !exact(diag, ["code", "severity", "match_ids"]) ||
-      (diag.code !== "official_unavailable" && diag.code !== "official_overlap") ||
+      typeof diag.code !== "string" ||
+      // Official diagnostics stay id-only; capacity diagnostics carry the API's named explanation.
+      !(diag.code === "official_unavailable" || diag.code === "official_overlap"
+        ? exact(diag, ["code", "severity", "match_ids"])
+        : exact(diag, ["code", "severity", "match_ids", "message"]) && nonEmpty(diag.message)) ||
+      !diagnosticCodes.has(diag.code) ||
       (diag.severity !== "required" && diag.severity !== "hard") ||
       !Array.isArray(diag.match_ids) ||
       !diag.match_ids.every(isUuid)
@@ -798,9 +818,10 @@ export function parseScheduleJobDiagnostics(value: unknown): ScheduleJobDiagnost
       return null;
 
     diagnostics.push({
-      code: diag.code,
+      code: diag.code as ScheduleOfficialDiagnosticCode,
       severity: diag.severity,
       matchIds: diag.match_ids as string[],
+      ...(typeof diag.message === "string" ? { message: diag.message } : {}),
     });
   }
 

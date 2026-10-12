@@ -345,4 +345,26 @@ describe("NoSolutionOfficialDiagnostics component rendering", () => {
       expect(html).toContain(phase4ScheduleCopy.loading);
     });
   });
+
+  describe("capacity diagnostics", () => {
+    it("renders the API explanation under a cause-specific heading without the officials disclaimer", () => {
+      const diagnostics: readonly ScheduleOfficialDiagnostic[] = [
+        {
+          code: "insufficient_capacity",
+          severity: "hard",
+          matchIds: [],
+          message: "28 matches of 30 minutes need 840 court-minutes, but the venue windows provide 12 slots.",
+        },
+      ];
+
+      const html = renderToString(
+        React.createElement(NoSolutionOfficialDiagnostics, { competitionId, matches: mockMatches, diagnostics }),
+      );
+
+      expect(html).toContain(phase4ScheduleCopy.schedulingConflictsDetected);
+      expect(html).toContain(phase4ScheduleCopy.insufficientCapacityTitle);
+      expect(html).toContain("28 matches of 30 minutes need 840 court-minutes");
+      expect(html).not.toContain(phase4ScheduleCopy.officialConflictsDisclaimer);
+    });
+  });
 });
