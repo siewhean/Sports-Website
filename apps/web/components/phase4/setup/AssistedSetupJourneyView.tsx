@@ -80,6 +80,13 @@ const copy = {
   warningCapacity: opaqueId("This format needs more match slots than the current capacity provides."),
   warningInfeasible: opaqueId("This format cannot be scheduled with the current entries, rules, and capacity."),
   warningGeneric: opaqueId("Review this format before selecting it."),
+  warningDailyLimit: opaqueId("Entries would need more matches per day than the daily match limit allows."),
+  warningRest: opaqueId("The required rest between matches does not fit in the available playing time."),
+  warningDependencies: opaqueId("Later knockout rounds cannot fit after the rounds they depend on."),
+  warningUnverified: opaqueId("A quick check found no schedule yet. Generating one may still succeed."),
+  scheduleFeasible: opaqueId("Fits the schedule"),
+  scheduleInfeasible: opaqueId("Does not fit the schedule"),
+  scheduleNotChecked: opaqueId("Not checked"),
   planCapacity: opaqueId("Plan capacity"),
   milestone: opaqueId("Milestone"),
   of: opaqueId("of"),
@@ -832,7 +839,9 @@ function RecommendationStep({
               </div>
               <div>
                 <dt>{t("prototype.f4830a1dae29")}</dt>
-                <dd>{item.scheduling_status.replaceAll("_", " ")}</dd>
+                <dd data-scheduling-status={item.scheduling_status}>
+                  {formatSchedulingStatus(item.scheduling_status)}
+                </dd>
               </div>
             </dl>
             <p>{item.advantage}</p>
@@ -1006,8 +1015,19 @@ function CheckField({
 function formatWarning(warning: string) {
   if (warning === "CAPACITY_SHORTFALL" || warning === "insufficient_capacity" || warning === "requires_more_slots")
     return copy.warningCapacity;
+  if (warning === "SCHEDULE_CAPACITY") return copy.warningCapacity;
+  if (warning === "SCHEDULE_DAILY_LIMIT") return copy.warningDailyLimit;
+  if (warning === "SCHEDULE_REST") return copy.warningRest;
+  if (warning === "SCHEDULE_DEPENDENCIES") return copy.warningDependencies;
+  if (warning === "SCHEDULE_UNVERIFIED") return copy.warningUnverified;
   if (warning === "SCHEDULE_INFEASIBLE") return copy.warningInfeasible;
   return copy.warningGeneric;
+}
+
+function formatSchedulingStatus(status: "feasible" | "infeasible" | "not_checked") {
+  if (status === "feasible") return copy.scheduleFeasible;
+  if (status === "infeasible") return copy.scheduleInfeasible;
+  return copy.scheduleNotChecked;
 }
 
 function Field({ id, label, helper, children }: { id?: string; label: string; helper?: string; children: ReactNode }) {

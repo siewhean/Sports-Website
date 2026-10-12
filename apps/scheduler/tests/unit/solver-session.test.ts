@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { ScheduleJobInput } from "@matchday/contracts";
-import { generateScheduleCandidates } from "@matchday/domain";
+import { generateScheduleCandidates, improveSchedule } from "@matchday/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import { DomainScheduleOptimizer, toProblem } from "../../src/domain-optimizer.js";
@@ -42,6 +42,28 @@ describe("solver session", () => {
     expect(verified).toHaveLength(4);
     expect(verified.every((result) => result?.quality.valid === true)).toBe(true);
     expect(workerStarts.count).toBe(1);
+  }, 60_000);
+
+  it("yields the locally improved schedule for a new best candidate", async () => {
+    const optimizer = new DomainScheduleOptimizer({ maxIterationsPerRun: 1, workerExecArgv: [] });
+    const yielded = [];
+    for await (const candidate of optimizer.optimize({
+      input,
+      seed: null,
+      startIteration: 0,
+      signal: new AbortController().signal,
+      maxYieldIntervalMs: 30_000,
+    }))
+      yielded.push(candidate);
+
+    const problem = toProblem(input);
+    const [constructed] = generateScheduleCandidates(problem, { startIteration: 0, maxIterations: 1 });
+    const improved = improveSchedule(problem, constructed!.assignments, { seed: 0 });
+    expect(improved.acceptedMoves).toBeGreaterThan(0);
+    expect(yielded).toHaveLength(1);
+    expect(yielded[0]!.result.assignments.map((assignment) => `${assignment.match_id}@${assignment.slot_id}`)).toEqual(
+      improved.assignments.map((assignment) => `${assignment.matchId}@${assignment.slotId}`),
+    );
   }, 60_000);
 
   it("still terminates a solve that misses the yield deadline", async () => {

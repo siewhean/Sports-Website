@@ -59,6 +59,9 @@ const copy = {
   totalMatches: t("prototype.b556e5c45b4e"),
   guaranteedMatches: t("prototype.4b9c79ade388"),
   availableSlots: t("prototype.b35e91492eb6"),
+  schedule: t("prototype.f4830a1dae29"),
+  scheduleFeasible: opaqueId("Fits the schedule"),
+  scheduleNotChecked: opaqueId("Not checked"),
 } as const;
 
 function errorDetails(payload: unknown): { code: string | null; message: string | null } {
@@ -306,6 +309,13 @@ export function V1FormatPicker({
                   <div>
                     <dt>{copy.availableSlots}</dt>
                     <dd>{option.available_match_slots}</dd>
+                  </div>
+                  <div>
+                    <dt>{copy.schedule}</dt>
+                    {/* Infeasible options are filtered out above, so only these two remain. */}
+                    <dd data-scheduling-status={option.scheduling_status}>
+                      {option.scheduling_status === "feasible" ? copy.scheduleFeasible : copy.scheduleNotChecked}
+                    </dd>
                   </div>
                 </dl>
                 <button

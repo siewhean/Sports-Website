@@ -1317,19 +1317,36 @@ export function evaluateScheduleQuality(
   };
 }
 
-function topologicalMatches(matches: readonly SchedulingMatch[]): SchedulingMatch[] {
+/**
+ * `id` places each dependency layer in match-id order. `interleaved` mixes divisions in proportion
+ * to their ready matches: with id-ordered divisions (e.g. graph ids before materialisation) one
+ * division's whole round goes first and can push another division's knockouts out of the event.
+ */
+type MatchOrder = "id" | "interleaved";
+
+function topologicalMatches(matches: readonly SchedulingMatch[], order: MatchOrder = "id"): SchedulingMatch[] {
   const remaining = new Map(matches.map((match) => [match.id, match]));
   const complete = new Set<string>();
   const ordered: SchedulingMatch[] = [];
   while (remaining.size > 0) {
     const ready = [...remaining.values()]
       .filter((match) => match.dependencyMatchIds.every((dependency) => complete.has(dependency)))
-      .sort(
-        (left, right) =>
-          Number(Boolean(right.fixedAssignment)) - Number(Boolean(left.fixedAssignment)) ||
-          left.id.localeCompare(right.id),
-      );
+      .sort((left, right) => left.id.localeCompare(right.id));
     if (ready.length === 0) throw new Error("Schedule match graph contains a dependency cycle");
+    const progress = new Map<string, number>();
+    if (order === "interleaved") {
+      const byDivision = new Map<string, SchedulingMatch[]>();
+      for (const match of ready) byDivision.set(match.divisionId, [...(byDivision.get(match.divisionId) ?? []), match]);
+      for (const list of byDivision.values())
+        list.forEach((match, index) => progress.set(match.id, (index + 0.5) / list.length));
+    }
+    ready.sort(
+      (left, right) =>
+        Number(Boolean(right.fixedAssignment)) - Number(Boolean(left.fixedAssignment)) ||
+        (progress.get(left.id) ?? 0) - (progress.get(right.id) ?? 0) ||
+        (order === "interleaved" ? left.divisionId.localeCompare(right.divisionId) : 0) ||
+        left.id.localeCompare(right.id),
+    );
     for (const match of ready) {
       remaining.delete(match.id);
       complete.add(match.id);
@@ -1360,7 +1377,7 @@ type SlotIndex = {
 };
 
 type MatchIndex = {
-  orderedMatches: readonly SchedulingMatch[];
+  orderedMatches: Readonly<Record<MatchOrder, readonly SchedulingMatch[]>>;
   matchesById: ReadonlyMap<string, SchedulingMatch>;
   allEntryIds: readonly string[];
   ancestorsByMatchId: ReadonlyMap<string, ReadonlySet<string>>;
@@ -1400,7 +1417,10 @@ function matchIndexFor(problem: ScheduleProblem): MatchIndex {
   const cached = matchIndexCache.get(problem.matches);
   if (cached) return cached;
   const index: MatchIndex = {
-    orderedMatches: topologicalMatches(problem.matches),
+    orderedMatches: {
+      id: topologicalMatches(problem.matches, "id"),
+      interleaved: topologicalMatches(problem.matches, "interleaved"),
+    },
     matchesById: new Map(problem.matches.map((match) => [match.id, match])),
     allEntryIds: uniqueSorted(problem.matches.flatMap((match) => match.possibleEntryIds)),
     ancestorsByMatchId: buildTransitiveDependencies(problem.matches),
@@ -1435,6 +1455,8 @@ class PlacementState {
     readonly slotIndex: SlotIndex,
     readonly earlyThreshold: number,
     readonly lateThreshold: number,
+    /** `${areaId}|${startEpochMs}` of each match's previous assignment, when preserve-existing applies. */
+    readonly existingSlotOwners: ReadonlyMap<string, string> = new Map(),
   ) {}
 
   add(match: SchedulingMatch, assignment: ScheduleAssignment): void {
@@ -1704,10 +1726,28 @@ class MatchPlacement {
       preferredDivisionExcess * weight(constraints.keepDivisionTogether) +
       preferredPreservation * weight(constraints.preserveExistingSchedule);
     if (placement === "feasibility") return [slot.endEpochMs, dailyLoad, preferencePenalty, -nearestRest];
-    if (problem.objective === "fastest") return [preferencePenalty, slot.endEpochMs, dailyLoad, -nearestRest];
+    const displacement = this.displacement(slot);
+    if (problem.objective === "fastest")
+      return [displacement, preferencePenalty, slot.endEpochMs, dailyLoad, -nearestRest];
     if (problem.objective === "balanced")
-      return [preferencePenalty, slot.endEpochMs, dailyLoad, finalDelta, -nearestRest];
-    return [preferencePenalty, -nearestRest, dailyLoad, slot.endEpochMs, finalDelta];
+      return [displacement, preferencePenalty, slot.endEpochMs, dailyLoad, finalDelta, -nearestRest];
+    return [displacement, preferencePenalty, -nearestRest, dailyLoad, slot.endEpochMs, finalDelta];
+  }
+
+  /**
+   * Minimal change when regenerating against a previous revision (preserve-existing preferred):
+   * keep a match in its previous slot whenever that slot is still hard-feasible, otherwise prefer
+   * a free slot over evicting another match that has not been placed yet. Without this, a shift
+   * inside the allowed window costs no penalty, so matches drift and evict each other (QA scenario
+   * 7 moved 14 of 28 when 4 had to move). Own previous slot 0, a free slot 1, another unplaced
+   * match's previous slot 2; always 0 when preserve-existing is ignored, leaving ranking unchanged.
+   */
+  displacement(slot: SchedulingSlot): number {
+    const owners = this.state.existingSlotOwners;
+    if (owners.size === 0) return 0;
+    const owner = owners.get(`${slot.areaId}|${slot.startEpochMs}`);
+    if (owner === this.match.id) return 0;
+    return owner !== undefined && !this.state.assigned.has(owner) ? 2 : 1;
   }
 }
 
@@ -1788,6 +1828,7 @@ function generateIteration(
   problem: ScheduleProblem,
   iteration: number,
   placement: PlacementMode = "preferences",
+  order: MatchOrder = "id",
 ): ScheduleAssignment[] {
   validateProblem(problem);
   const slotIndex = slotIndexFor(problem);
@@ -1796,9 +1837,17 @@ function generateIteration(
     slotIndex,
     parseLocalTime(problem.constraints.balanceEarlyMatches.value.beforeLocalTime, "Early threshold"),
     parseLocalTime(problem.constraints.balanceLateMatches.value.atOrAfterLocalTime, "Late threshold"),
+    problem.constraints.preserveExistingSchedule.mode === "ignored"
+      ? new Map()
+      : new Map(
+          Object.entries(problem.constraints.preserveExistingSchedule.value.byMatchId).map(([matchId, existing]) => [
+            `${existing.areaId}|${existing.startEpochMs}`,
+            matchId,
+          ]),
+        ),
   );
   const slots = slotIndex.sortedSlots;
-  for (const match of matchIndex.orderedMatches) {
+  for (const match of matchIndex.orderedMatches[order]) {
     const placementContext = new MatchPlacement(problem, match, state, matchIndex);
     // Slots are sorted by start, so skip straight past those that start before a dependency ends.
     let earliestStart = Number.NEGATIVE_INFINITY;
@@ -1834,10 +1883,15 @@ function generateIteration(
         left.candidate.id.localeCompare(right.candidate.id)
       );
     });
-    const window =
+    let window =
       placement !== "preferences"
         ? Math.min(rankedCandidates.length, FEASIBILITY_PERTURBATION_WINDOW)
         : rankedCandidates.length;
+    if (state.existingSlotOwners.size > 0 && placement !== "feasibility" && rankedCandidates.length > 0) {
+      // Exploration must not undo minimal change: only vary among equally displacing slots.
+      const best = rankedCandidates[0]!.rank[0];
+      window = Math.min(window, rankedCandidates.filter((ranked) => ranked.rank[0] === best).length);
+    }
     const selected = rankedCandidates[stableIterationIndex(iteration, match.id, window)]?.candidate;
     if (!selected) throw new Error(`No valid slot remains for match ${match.id}`);
     state.add(match, assignmentFor(match, selected));
@@ -1871,18 +1925,21 @@ function generateIterationWithRelaxation(problem: ScheduleProblem, iteration: nu
     ...problem,
     constraints: { ...problem.constraints, [key]: { mode: "ignored", value: problem.constraints[key].value } },
   });
-  const attempts: [ScheduleProblem, number, PlacementMode][] = [
+  const attempts: [ScheduleProblem, number, PlacementMode, MatchOrder?][] = [
     [problem, iteration, "preferences"],
     ...preferredKeys.map((key): [ScheduleProblem, number, PlacementMode] => [relaxing(key), iteration, "preferences"]),
     [problem, iteration, "bounded"],
     [problem, iteration, "feasibility"],
     ...(iteration === 0 ? [] : [[problem, 0, "feasibility"] as [ScheduleProblem, number, PlacementMode]]),
+    // Last resort when id order clusters one division's rounds: interleave divisions.
+    [problem, iteration, "preferences", "interleaved"],
+    [problem, iteration, "feasibility", "interleaved"],
   ];
   let lastError: unknown;
-  for (const [attemptProblem, attemptIteration, placement] of attempts) {
+  for (const [attemptProblem, attemptIteration, placement, order] of attempts) {
     try {
       // Relaxing a preferred setting cannot change hard validity: required modes are untouched.
-      return generateIteration(attemptProblem, attemptIteration, placement);
+      return generateIteration(attemptProblem, attemptIteration, placement, order);
     } catch (error) {
       if (!isNoValidSlotError(error)) throw error;
       lastError = error;
@@ -2350,3 +2407,109 @@ function diagnoseCapacityInfeasibility(problem: ScheduleProblem): ScheduleViolat
 
   return violations;
 }
+
+export type FormatScheduleCheck = {
+  readonly status: "feasible" | "infeasible" | "not_checked";
+  /** Infeasible: SCHEDULE_CAPACITY, _DAILY_LIMIT, _REST, _DEPENDENCIES or _INFEASIBLE; not_checked: SCHEDULE_UNVERIFIED. */
+  readonly warningCodes: readonly string[];
+  readonly diagnostics: readonly ScheduleViolation[];
+};
+
+const FORMAT_CHECK_WARNING_BY_CODE: Partial<Record<ScheduleViolationCode, string>> = {
+  insufficient_capacity: "SCHEDULE_CAPACITY",
+  maximum_matches_per_day: "SCHEDULE_DAILY_LIMIT",
+  minimum_rest: "SCHEDULE_REST",
+  consecutive_matches: "SCHEDULE_REST",
+  dependency_order: "SCHEDULE_DEPENDENCIES",
+};
+
+/**
+ * Fast schedule check for a proposed format before it is chosen, against the real courts and
+ * venue windows: one bounded greedy solve when matches × slots is small enough for an interactive
+ * request, otherwise only the analytic no_solution diagnostics (capacity, daily limit, required
+ * rest, knockout windows). Participants are synthetic per-seed ids; preferences never make a
+ * format infeasible. Returns not_checked when the problem is too large or cannot be built.
+ */
+export function checkFormatScheduleFeasibility(input: {
+  timeZone: string;
+  slots: readonly SchedulingSlot[];
+  durationMinutes: number;
+  divisions: readonly Readonly<{ divisionId: string; graph: FormatGraph }>[];
+  constraints: SchedulingConstraints;
+  /** Raise a required daily limit to what the format forces per day, as the workspace default does. */
+  deriveDailyLimit?: boolean;
+  /** Above this many matches × slots, skip the solve (default 250 000). */
+  maxSolveCells?: number;
+}): FormatScheduleCheck {
+  const notChecked: FormatScheduleCheck = { status: "not_checked", warningCodes: [], diagnostics: [] };
+  if (input.slots.length === 0) return notChecked;
+  let problem: ScheduleProblem;
+  try {
+    const matches = input.divisions.flatMap(({ divisionId, graph }) => {
+      const seeds = Object.fromEntries(
+        Array.from({ length: graph.entryCount }, (_, index) => [index + 1, `${divisionId}:seed-${index + 1}`]),
+      );
+      return deriveSchedulingMatches(graph, divisionId, seeds, input.durationMinutes).map((match) => ({
+        ...match,
+        id: `${divisionId}:${match.id}`,
+        dependencyMatchIds: match.dependencyMatchIds.map((dependency) => `${divisionId}:${dependency}`),
+      }));
+    });
+    const daily = input.constraints.maximumMatchesPerDay;
+    const dailyLimit =
+      input.deriveDailyLimit && daily.mode === "required"
+        ? Math.min(
+            64,
+            Math.max(
+              daily.value.matches,
+              minimumFeasibleDailyMatchLimit(
+                matches,
+                input.slots.map((slot) => slot.startEpochMs),
+                input.timeZone,
+              ),
+            ),
+          )
+        : daily.value.matches;
+    problem = {
+      timeZone: input.timeZone,
+      objective: "balanced",
+      matches,
+      slots: input.slots,
+      constraints: { ...input.constraints, maximumMatchesPerDay: { ...daily, value: { matches: dailyLimit } } },
+    };
+    validateProblem(problem);
+  } catch {
+    return notChecked;
+  }
+  const infeasible = (diagnostics: readonly ScheduleViolation[]): FormatScheduleCheck => ({
+    status: "infeasible",
+    warningCodes: uniqueSorted(
+      diagnostics.length === 0
+        ? ["SCHEDULE_INFEASIBLE"]
+        : diagnostics.map((violation) => FORMAT_CHECK_WARNING_BY_CODE[violation.code] ?? "SCHEDULE_INFEASIBLE"),
+    ),
+    diagnostics,
+  });
+  if (problem.matches.length > problem.slots.length) return infeasible(diagnoseScheduleInfeasibility(problem));
+  if (problem.matches.length * problem.slots.length > (input.maxSolveCells ?? 250_000)) {
+    const diagnostics = diagnoseScheduleInfeasibility(problem);
+    return diagnostics.length > 0 ? infeasible(diagnostics) : notChecked;
+  }
+  if (generateScheduleCandidates(problem, { startIteration: 0, maxIterations: 1 }).length > 0)
+    return { status: "feasible", warningCodes: [], diagnostics: [] };
+  // The quick greedy solve is not a proof: without a concrete reason, do not call it infeasible.
+  const diagnostics = diagnoseScheduleInfeasibility(problem);
+  return diagnostics.length > 0
+    ? infeasible(diagnostics)
+    : { status: "not_checked", warningCodes: ["SCHEDULE_UNVERIFIED"], diagnostics: [] };
+}
+
+/** Shared with schedule-improvement.ts so local search reuses the solver's time and daily-load rules. */
+export const scheduleInternals = {
+  localDateKey,
+  localMinuteOfDay,
+  parseLocalTime,
+  maxMatchesForEntryInCollection,
+  buildTransitiveDependencies,
+  compareAssignment,
+} as const;
