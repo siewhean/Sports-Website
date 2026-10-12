@@ -1,6 +1,7 @@
 import test from "node:test";
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile, writeFile, symlink, link, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, symlink, link, mkdir, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -651,4 +652,84 @@ test("migration screening preserves SQL quoting and rejects misleading DEFAULT l
     );
     assert.equal((await certifyGateFMigrations(SHA, { artifactsDir: dir, migrationsDir })).verdict, "PASS");
   });
+});
+
+test("static migration success cannot certify topology or invent an ADR replica waiver", async () => {
+  await withArtifacts(async (dir) => {
+    const migrationsDir = path.join(dir, "migrations");
+    await mkdir(migrationsDir);
+    await writeFile(path.join(migrationsDir, "0001_safe.sql"), "CREATE TABLE accounts (id integer PRIMARY KEY);");
+    assert.equal((await certifyGateFMigrations(SHA, { artifactsDir: dir, migrationsDir })).verdict, "PASS");
+    const topology = JSON.parse(await readFile(path.join(dir, "gate-f-database-topology.json"), "utf8"));
+    assert.equal(topology.qa_item, "OPS-010");
+    assert.equal(topology.candidate_sha, SHA);
+    assert.equal(topology.verdict, "PENDING");
+    assert.equal(topology.evidence_scope, "SOURCE_REQUIREMENTS_ONLY");
+    assert.equal(topology.production_certification, false);
+    assert.equal(topology.topology, "NOT_VERIFIED");
+    assert.equal(topology.read_replica_disposition, "REQUIRED_BY_OPS_010_NOT_VERIFIED");
+    assert.equal(Object.hasOwn(topology, "pool_size"), false);
+    assert.equal(topology.requirements.acknowledged_write_host_az_rpo_seconds, 0);
+    assert.equal(topology.requirements.regional_rpo_max_seconds, 900);
+    assert.equal(topology.requirements.regional_rto_less_than_seconds, 3600);
+    assert.equal(topology.requirements.adr_0001_stakeholder_confirmation, "PENDING");
+    assert.ok(topology.pending_reasons.includes("pool_configuration_not_observed"));
+  });
+});
+
+test("migration CLI exits nonzero when source screening fails", async () => {
+  for (const scenario of [
+    { file: "0001_safe.sql", sql: "CREATE TABLE accounts (id integer);", status: 0, verdict: "PASS" },
+    { file: "0002_gap.sql", sql: "CREATE TABLE accounts (id integer);", status: 1, verdict: "FAIL" },
+    { file: "0001_unsafe.sql", sql: "DROP TABLE accounts;", status: 1, verdict: "FAIL" },
+  ]) {
+    await withArtifacts(async (dir) => {
+      const scriptsDir = path.join(dir, "scripts");
+      const migrationsDir = path.join(dir, "packages/database/migrations");
+      await mkdir(scriptsDir);
+      await mkdir(migrationsDir, { recursive: true });
+      const cli = path.join(scriptsDir, "certify-gate-f-migrations.mjs");
+      await writeFile(cli, await readFile(path.join(root, "scripts/certify-gate-f-migrations.mjs")));
+      await writeFile(path.join(migrationsDir, scenario.file), scenario.sql);
+      const result = spawnSync(process.execPath, [await realpath(cli), SHA], { cwd: dir, encoding: "utf8" });
+      assert.equal(result.status, scenario.status, result.stderr);
+      const receipt = JSON.parse(await readFile(path.join(dir, "artifacts/gate-f-migration-certification.json")));
+      assert.equal(receipt.verdict, scenario.verdict);
+    });
+  }
+});
+
+test("isolated backup evidence rejects out-of-budget recovery without promoting regional or host/AZ proof", async () => {
+  for (const { rpo, rto, accepted } of [
+    { rpo: 3600, rto: 7200, accepted: false },
+    { rpo: 901, rto: 120, accepted: false },
+    { rpo: 60, rto: 3600, accepted: false },
+    { rpo: 900, rto: 3599, accepted: true },
+  ]) {
+    await withArtifacts(async (artifactsDir) => {
+      const { evidence, evidenceFile } = await productionFixture(artifactsDir);
+      const started = Date.now() - 3 * 3600000;
+      const created = started - 60000;
+      evidence.source.observed_at = new Date(created - 60000).toISOString();
+      evidence.backup.created_at = new Date(created).toISOString();
+      evidence.backup.recovered_through_at = new Date(created - rpo * 1000).toISOString();
+      evidence.restore.started_at = new Date(started).toISOString();
+      evidence.restore.completed_at = new Date(started + rto * 1000).toISOString();
+      evidence.recovery.measured_rpo_seconds = rpo;
+      evidence.recovery.measured_rto_seconds = rto;
+      await writeFile(evidenceFile, JSON.stringify(evidence));
+      const receipt = await runGateFBackupRestoreAudit(SHA, { artifactsDir, evidenceFile });
+      assert.equal(receipt.verdict, accepted ? "PASS" : "PENDING");
+      assert.ok(!receipt.pending_reasons.includes("measured_recovery_intervals"));
+      assert.ok(!receipt.pending_reasons.includes("timestamp_order"));
+      if (rpo > 900) assert.ok(receipt.pending_reasons.includes("recovery_rpo_budget_15_minutes"));
+      if (rto >= 3600) assert.ok(receipt.pending_reasons.includes("recovery_rto_budget_under_one_hour"));
+      assert.equal(receipt.regional_disaster_recovery_verified, false);
+      assert.equal(receipt.host_az_rpo_zero_verified, false);
+      const dr = JSON.parse(await readFile(path.join(artifactsDir, "gate-f-disaster-recovery.json")));
+      assert.equal(dr.verdict, "PENDING");
+      assert.equal(dr.failure_mode, "NOT_VERIFIED");
+      assert.equal(dr.required_failure_mode, "full_region_loss");
+    });
+  }
 });

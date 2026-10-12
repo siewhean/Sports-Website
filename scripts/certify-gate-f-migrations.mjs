@@ -250,14 +250,29 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
   await mkdir(artifactsDir, { recursive: true });
   await writeFile(path.join(artifactsDir, "gate-f-migration-certification.json"), JSON.stringify(receipt, null, 2));
 
-  // Topology report (OPS-010)
+  // Migration files prove neither live database topology nor pool configuration.
+  // ADR-0001 does not waive the archived OPS-010 public-read replica requirement.
   const topology = {
     qa_item: "OPS-010",
     candidate_sha: sha,
-    topology: "single-primary-with-connection-pooling",
-    read_replica_disposition: "NOT_REQUIRED_BY_ADR_0001_AND_OPS_LOAD_BUDGET",
-    pool_size: 16,
-    verdict: "PASS",
+    evidence_scope: "SOURCE_REQUIREMENTS_ONLY",
+    production_certification: false,
+    topology: "NOT_VERIFIED",
+    read_replica_disposition: "REQUIRED_BY_OPS_010_NOT_VERIFIED",
+    requirements: {
+      public_reads_routed_to_replica: true,
+      acknowledged_write_host_az_rpo_seconds: 0,
+      regional_rpo_max_seconds: 900,
+      regional_rto_less_than_seconds: 3600,
+      adr_0001_stakeholder_confirmation: "PENDING",
+    },
+    verdict: "PENDING",
+    pending_reasons: [
+      "independent_topology_and_public_read_routing_evidence_required",
+      "host_and_availability_zone_write_durability_not_verified",
+      "regional_wal_pitr_cross_region_recovery_not_verified",
+      "pool_configuration_not_observed",
+    ],
     generated_at: new Date().toISOString(),
   };
   topology.receipt_sha256 = createHash("sha256")
@@ -271,7 +286,10 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sha = process.argv[2] ?? process.env.CANDIDATE_SHA;
   certifyGateFMigrations(sha)
-    .then((r) => console.log(`✓ Gate F migrations certified: ${r.verdict} (${r.migration_count} migrations)`))
+    .then((r) => {
+      console.log(`Gate F migration source screening: ${r.verdict} (${r.migration_count} migrations)`);
+      if (r.verdict !== "PASS") process.exitCode = 1;
+    })
     .catch((e) => {
       console.error(e.message);
       process.exit(1);
