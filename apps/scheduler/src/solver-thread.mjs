@@ -1,9 +1,11 @@
 import { parentPort, workerData } from "node:worker_threads";
 
 import {
+  constructRestAwareSchedule,
   evaluateScheduleQuality,
   generateScheduleCandidates,
   improveSchedule,
+  measureScheduleShape,
   validateSchedule,
 } from "@matchday/domain";
 
@@ -13,6 +15,15 @@ const port = parentPort;
 // iteration or the assignments to check, so per-iteration cost is solving, not thread start-up.
 const problem = workerData.problem;
 
+function checked(iteration, assignments) {
+  return {
+    candidate: { iteration, assignments },
+    validation: validateSchedule(problem, assignments),
+    quality: evaluateScheduleQuality(problem, assignments),
+    backToBackCount: measureScheduleShape(problem, assignments).backToBackCount,
+  };
+}
+
 port.on("message", (message) => {
   try {
     if (message.operation === "generate") {
@@ -20,23 +31,21 @@ port.on("message", (message) => {
         startIteration: message.iteration,
         maxIterations: 1,
       });
-      const result = candidates.map((candidate) => ({
-        candidate,
-        validation: validateSchedule(problem, candidate.assignments),
-        quality: evaluateScheduleQuality(problem, candidate.assignments),
-      }));
+      const result = candidates.map((candidate) => checked(candidate.iteration, candidate.assignments));
       port.postMessage({ id: message.id, ok: true, result });
     } else if (message.operation === "improve") {
       const { assignments } = improveSchedule(problem, message.assignments, { seed: message.iteration });
-      port.postMessage({
-        id: message.id,
-        ok: true,
-        result: {
-          candidate: { iteration: message.iteration, assignments },
-          validation: validateSchedule(problem, assignments),
-          quality: evaluateScheduleQuality(problem, assignments),
-        },
-      });
+      port.postMessage({ id: message.id, ok: true, result: checked(message.iteration, assignments) });
+    } else if (message.operation === "rest_aware") {
+      // Bounded witness search for the fewest back-to-backs, then the same local search. `false`
+      // (not null) when nothing is found, because a null result means "aborted" to the session.
+      const constructed = constructRestAwareSchedule(problem);
+      if (constructed === null) {
+        port.postMessage({ id: message.id, ok: true, result: false });
+      } else {
+        const { assignments } = improveSchedule(problem, constructed.assignments, { seed: message.iteration });
+        port.postMessage({ id: message.id, ok: true, result: checked(message.iteration, assignments) });
+      }
     } else if (message.operation === "verify") {
       port.postMessage({
         id: message.id,

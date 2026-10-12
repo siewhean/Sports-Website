@@ -1,0 +1,1045 @@
+{
+  "description": "A hard-valid schedule for qa-canoe-polo-104-matches.json with 0 back-to-backs (30-minute buffer, possible participants), found by constructRestAwareSchedule. It proves 0 is reachable; the benchmark re-validates it.",
+  "assignments": [
+    {
+      "match_id": "00a13c18-6ba9-48b2-abc1-1e5461417d85",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:1",
+      "start_epoch_ms": 1794614400000,
+      "end_epoch_ms": 1794616200000,
+      "fixed": false
+    },
+    {
+      "match_id": "00ae7eee-9a76-4107-a66c-7500aac61c6e",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:1",
+      "start_epoch_ms": 1794614400000,
+      "end_epoch_ms": 1794616200000,
+      "fixed": false
+    },
+    {
+      "match_id": "02d3e960-bd78-407b-af83-d8a5cae4b14f",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:1",
+      "start_epoch_ms": 1794614400000,
+      "end_epoch_ms": 1794616200000,
+      "fixed": false
+    },
+    {
+      "match_id": "0df1b98e-4a27-4a5c-a56e-a1eb9467ee73",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:1",
+      "start_epoch_ms": 1794614400000,
+      "end_epoch_ms": 1794616200000,
+      "fixed": false
+    },
+    {
+      "match_id": "113b8ad6-4f4c-424b-ae2a-951d71e5b307",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:2",
+      "start_epoch_ms": 1794616200000,
+      "end_epoch_ms": 1794618000000,
+      "fixed": false
+    },
+    {
+      "match_id": "157d2541-560b-4cff-acf7-dc2db7f7a165",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:2",
+      "start_epoch_ms": 1794616200000,
+      "end_epoch_ms": 1794618000000,
+      "fixed": false
+    },
+    {
+      "match_id": "19ec7ba0-e216-419a-a798-0cbffac3de2f",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:2",
+      "start_epoch_ms": 1794616200000,
+      "end_epoch_ms": 1794618000000,
+      "fixed": false
+    },
+    {
+      "match_id": "1c93570e-dc44-4855-ae10-fea74866854d",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:2",
+      "start_epoch_ms": 1794616200000,
+      "end_epoch_ms": 1794618000000,
+      "fixed": false
+    },
+    {
+      "match_id": "2274212d-0cd8-46b4-a2c0-dc0545dc27a6",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:3",
+      "start_epoch_ms": 1794618000000,
+      "end_epoch_ms": 1794619800000,
+      "fixed": false
+    },
+    {
+      "match_id": "53d29cf1-bba6-454e-a7ed-b28eb02c6c9d",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:3",
+      "start_epoch_ms": 1794618000000,
+      "end_epoch_ms": 1794619800000,
+      "fixed": false
+    },
+    {
+      "match_id": "67c877dc-4c47-46c9-afb0-c92e2dd522bb",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:3",
+      "start_epoch_ms": 1794618000000,
+      "end_epoch_ms": 1794619800000,
+      "fixed": false
+    },
+    {
+      "match_id": "865302c4-1e1b-4218-ac32-21c7bb12b047",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:3",
+      "start_epoch_ms": 1794618000000,
+      "end_epoch_ms": 1794619800000,
+      "fixed": false
+    },
+    {
+      "match_id": "3c16ee45-83d2-4a05-a401-a149fcfb4e88",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:4",
+      "start_epoch_ms": 1794619800000,
+      "end_epoch_ms": 1794621600000,
+      "fixed": false
+    },
+    {
+      "match_id": "4c1d8e17-a755-43fc-ab5e-eb3a7dfcca13",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:4",
+      "start_epoch_ms": 1794619800000,
+      "end_epoch_ms": 1794621600000,
+      "fixed": false
+    },
+    {
+      "match_id": "7eb2e8f5-b14d-42c8-a39e-01504bb7b64e",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:4",
+      "start_epoch_ms": 1794619800000,
+      "end_epoch_ms": 1794621600000,
+      "fixed": false
+    },
+    {
+      "match_id": "89c9d782-d559-4ca7-a086-320b6fc1664a",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:4",
+      "start_epoch_ms": 1794619800000,
+      "end_epoch_ms": 1794621600000,
+      "fixed": false
+    },
+    {
+      "match_id": "83b42678-ade6-4d96-aace-6d15920eb28b",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:5",
+      "start_epoch_ms": 1794621600000,
+      "end_epoch_ms": 1794623400000,
+      "fixed": false
+    },
+    {
+      "match_id": "9dd20441-b992-4b21-a324-8f6f5b3825fa",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:5",
+      "start_epoch_ms": 1794621600000,
+      "end_epoch_ms": 1794623400000,
+      "fixed": false
+    },
+    {
+      "match_id": "f3f271fc-e7f8-4863-ad46-e29ee5476c80",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:5",
+      "start_epoch_ms": 1794621600000,
+      "end_epoch_ms": 1794623400000,
+      "fixed": false
+    },
+    {
+      "match_id": "f98deb7e-d73d-4bbd-a886-0d03d0c43424",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:5",
+      "start_epoch_ms": 1794621600000,
+      "end_epoch_ms": 1794623400000,
+      "fixed": false
+    },
+    {
+      "match_id": "0b7f19f4-3383-4153-a303-37dd6bf366a0",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:6",
+      "start_epoch_ms": 1794623400000,
+      "end_epoch_ms": 1794625200000,
+      "fixed": false
+    },
+    {
+      "match_id": "192cd7db-a887-4551-a2d4-e3e4bbaf019b",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:6",
+      "start_epoch_ms": 1794623400000,
+      "end_epoch_ms": 1794625200000,
+      "fixed": false
+    },
+    {
+      "match_id": "1d9128d9-4481-444d-a85a-97297bd871e8",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:6",
+      "start_epoch_ms": 1794623400000,
+      "end_epoch_ms": 1794625200000,
+      "fixed": false
+    },
+    {
+      "match_id": "26ae09dd-1686-499d-aec8-b5dc65207d64",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:6",
+      "start_epoch_ms": 1794623400000,
+      "end_epoch_ms": 1794625200000,
+      "fixed": false
+    },
+    {
+      "match_id": "2c8dc8df-472e-4d75-a06c-77d2b8d955e3",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:7",
+      "start_epoch_ms": 1794625200000,
+      "end_epoch_ms": 1794627000000,
+      "fixed": false
+    },
+    {
+      "match_id": "2ca5f61b-7dd1-4e2f-aaef-f450e99aa8a0",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:7",
+      "start_epoch_ms": 1794625200000,
+      "end_epoch_ms": 1794627000000,
+      "fixed": false
+    },
+    {
+      "match_id": "39e4aea2-6d43-409d-aaf1-792cec7bf3fd",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:7",
+      "start_epoch_ms": 1794625200000,
+      "end_epoch_ms": 1794627000000,
+      "fixed": false
+    },
+    {
+      "match_id": "3d78d98d-0a15-4bc6-aea6-d56936fe3837",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:7",
+      "start_epoch_ms": 1794625200000,
+      "end_epoch_ms": 1794627000000,
+      "fixed": false
+    },
+    {
+      "match_id": "194dfd63-e702-424d-ac39-063fd849fd75",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:8",
+      "start_epoch_ms": 1794627000000,
+      "end_epoch_ms": 1794628800000,
+      "fixed": false
+    },
+    {
+      "match_id": "1f244e9c-7e9b-48eb-ae70-272e6d83ec64",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:8",
+      "start_epoch_ms": 1794627000000,
+      "end_epoch_ms": 1794628800000,
+      "fixed": false
+    },
+    {
+      "match_id": "5fee5984-bfa0-4021-aca7-4c05b73da424",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:8",
+      "start_epoch_ms": 1794627000000,
+      "end_epoch_ms": 1794628800000,
+      "fixed": false
+    },
+    {
+      "match_id": "6a181838-cf2e-442b-a545-816ce4f9ce6e",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:8",
+      "start_epoch_ms": 1794627000000,
+      "end_epoch_ms": 1794628800000,
+      "fixed": false
+    },
+    {
+      "match_id": "4c669bca-1b38-469b-a9e7-a6ec35e214cf",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:9",
+      "start_epoch_ms": 1794628800000,
+      "end_epoch_ms": 1794630600000,
+      "fixed": false
+    },
+    {
+      "match_id": "4f440cd3-99f7-46f1-af3b-f4b880440e9a",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:9",
+      "start_epoch_ms": 1794628800000,
+      "end_epoch_ms": 1794630600000,
+      "fixed": false
+    },
+    {
+      "match_id": "61e6ac4b-a263-474f-aeca-38a7c5fddaa3",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:9",
+      "start_epoch_ms": 1794628800000,
+      "end_epoch_ms": 1794630600000,
+      "fixed": false
+    },
+    {
+      "match_id": "681e1a0f-1693-437f-a726-e6cd251d3f9b",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:9",
+      "start_epoch_ms": 1794628800000,
+      "end_epoch_ms": 1794630600000,
+      "fixed": false
+    },
+    {
+      "match_id": "7537b371-1c41-4770-a6c0-2a201ec2df8b",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:10",
+      "start_epoch_ms": 1794630600000,
+      "end_epoch_ms": 1794632400000,
+      "fixed": false
+    },
+    {
+      "match_id": "944a2e07-7073-45f6-adcc-efec2c19194c",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:10",
+      "start_epoch_ms": 1794630600000,
+      "end_epoch_ms": 1794632400000,
+      "fixed": false
+    },
+    {
+      "match_id": "9ae6efa0-9090-4240-a802-6bc70fb1d761",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:10",
+      "start_epoch_ms": 1794630600000,
+      "end_epoch_ms": 1794632400000,
+      "fixed": false
+    },
+    {
+      "match_id": "a54f3b19-93f8-4f64-acd9-7b6670fb026f",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:10",
+      "start_epoch_ms": 1794630600000,
+      "end_epoch_ms": 1794632400000,
+      "fixed": false
+    },
+    {
+      "match_id": "a72bb68d-cbbf-4552-a4b7-3fdea6d9759c",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:11",
+      "start_epoch_ms": 1794632400000,
+      "end_epoch_ms": 1794634200000,
+      "fixed": false
+    },
+    {
+      "match_id": "ae499b38-2147-4e73-ab7e-cf4dcb145623",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:11",
+      "start_epoch_ms": 1794632400000,
+      "end_epoch_ms": 1794634200000,
+      "fixed": false
+    },
+    {
+      "match_id": "b4fe3b73-e737-4cf2-abe1-f05c8d3cf654",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:11",
+      "start_epoch_ms": 1794632400000,
+      "end_epoch_ms": 1794634200000,
+      "fixed": false
+    },
+    {
+      "match_id": "bb4d9220-16c5-4a86-a9ab-1ad4bff136ca",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:11",
+      "start_epoch_ms": 1794632400000,
+      "end_epoch_ms": 1794634200000,
+      "fixed": false
+    },
+    {
+      "match_id": "c8aa6b3e-c9e1-48df-ab28-661dc23b26e0",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:12",
+      "start_epoch_ms": 1794634200000,
+      "end_epoch_ms": 1794636000000,
+      "fixed": false
+    },
+    {
+      "match_id": "d5504e1c-5018-4916-a374-fdaf5181c709",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:12",
+      "start_epoch_ms": 1794634200000,
+      "end_epoch_ms": 1794636000000,
+      "fixed": false
+    },
+    {
+      "match_id": "dc767c21-5635-491c-ac66-4e4041328523",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:12",
+      "start_epoch_ms": 1794634200000,
+      "end_epoch_ms": 1794636000000,
+      "fixed": false
+    },
+    {
+      "match_id": "e97c62dd-e38e-43ff-a2b5-3f09c6ad1e98",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:12",
+      "start_epoch_ms": 1794634200000,
+      "end_epoch_ms": 1794636000000,
+      "fixed": false
+    },
+    {
+      "match_id": "54a2d4f7-2c6f-44d7-aea7-7b44fee68fbc",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:13",
+      "start_epoch_ms": 1794636000000,
+      "end_epoch_ms": 1794637800000,
+      "fixed": false
+    },
+    {
+      "match_id": "7fad0052-592c-4e09-ab81-ff5a72c9ce58",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:13",
+      "start_epoch_ms": 1794636000000,
+      "end_epoch_ms": 1794637800000,
+      "fixed": false
+    },
+    {
+      "match_id": "8e572abc-f510-4706-a47f-8f187b1177ca",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:13",
+      "start_epoch_ms": 1794636000000,
+      "end_epoch_ms": 1794637800000,
+      "fixed": false
+    },
+    {
+      "match_id": "90ba5a4c-cf76-485b-a593-8aa4020ee2bb",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:13",
+      "start_epoch_ms": 1794636000000,
+      "end_epoch_ms": 1794637800000,
+      "fixed": false
+    },
+    {
+      "match_id": "3d2fb46d-9955-4735-aceb-bef7efc7db6b",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:14",
+      "start_epoch_ms": 1794637800000,
+      "end_epoch_ms": 1794639600000,
+      "fixed": false
+    },
+    {
+      "match_id": "994a8f6e-c055-4fa5-a547-ba2a4edf8588",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:14",
+      "start_epoch_ms": 1794637800000,
+      "end_epoch_ms": 1794639600000,
+      "fixed": false
+    },
+    {
+      "match_id": "a0240da6-571c-4bcb-abdc-087f9acdcb35",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:14",
+      "start_epoch_ms": 1794637800000,
+      "end_epoch_ms": 1794639600000,
+      "fixed": false
+    },
+    {
+      "match_id": "a993e08e-f84d-47fd-a1d6-8eb6b81b4e2b",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:14",
+      "start_epoch_ms": 1794637800000,
+      "end_epoch_ms": 1794639600000,
+      "fixed": false
+    },
+    {
+      "match_id": "8fc7a020-9589-4df8-a721-fddb9a1ec234",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:15",
+      "start_epoch_ms": 1794639600000,
+      "end_epoch_ms": 1794641400000,
+      "fixed": false
+    },
+    {
+      "match_id": "c435b67e-02a9-4cc2-a77b-e228e47decbd",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:15",
+      "start_epoch_ms": 1794639600000,
+      "end_epoch_ms": 1794641400000,
+      "fixed": false
+    },
+    {
+      "match_id": "cfe6953f-5671-499b-ae82-c6bdc7b9f3cd",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:15",
+      "start_epoch_ms": 1794639600000,
+      "end_epoch_ms": 1794641400000,
+      "fixed": false
+    },
+    {
+      "match_id": "d7846948-c976-4abd-ab23-79ba4c3cb690",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:15",
+      "start_epoch_ms": 1794639600000,
+      "end_epoch_ms": 1794641400000,
+      "fixed": false
+    },
+    {
+      "match_id": "e9a1a3d1-6954-4f29-ae34-89710b0d2dca",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:16",
+      "start_epoch_ms": 1794641400000,
+      "end_epoch_ms": 1794643200000,
+      "fixed": false
+    },
+    {
+      "match_id": "ede70cc6-b1a1-46a7-ae80-5a6207098704",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:16",
+      "start_epoch_ms": 1794641400000,
+      "end_epoch_ms": 1794643200000,
+      "fixed": false
+    },
+    {
+      "match_id": "f64c966c-04af-462b-a419-c0060e7e94fe",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:16",
+      "start_epoch_ms": 1794641400000,
+      "end_epoch_ms": 1794643200000,
+      "fixed": false
+    },
+    {
+      "match_id": "fb5b3c3c-c507-4782-a856-8156eb9f8527",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:16",
+      "start_epoch_ms": 1794641400000,
+      "end_epoch_ms": 1794643200000,
+      "fixed": false
+    },
+    {
+      "match_id": "017d05eb-286a-44a7-a5cb-a0b3747be810",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:17",
+      "start_epoch_ms": 1794643200000,
+      "end_epoch_ms": 1794645000000,
+      "fixed": false
+    },
+    {
+      "match_id": "4f75ed9c-e7b8-4f12-ae1a-303350eb49a0",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:17",
+      "start_epoch_ms": 1794643200000,
+      "end_epoch_ms": 1794645000000,
+      "fixed": false
+    },
+    {
+      "match_id": "94c6a266-b575-44e8-a22c-1bc2206f0ac0",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:17",
+      "start_epoch_ms": 1794643200000,
+      "end_epoch_ms": 1794645000000,
+      "fixed": false
+    },
+    {
+      "match_id": "9e34ee64-d6e1-4f82-ae17-1bea08c1b6e0",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:17",
+      "start_epoch_ms": 1794643200000,
+      "end_epoch_ms": 1794645000000,
+      "fixed": false
+    },
+    {
+      "match_id": "914418cd-68d4-457c-a765-17e117ce6e19",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:18",
+      "start_epoch_ms": 1794645000000,
+      "end_epoch_ms": 1794646800000,
+      "fixed": false
+    },
+    {
+      "match_id": "ab65aa3a-4cb5-434b-a97c-2024ac53fb09",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:18",
+      "start_epoch_ms": 1794645000000,
+      "end_epoch_ms": 1794646800000,
+      "fixed": false
+    },
+    {
+      "match_id": "f0bf3194-b26e-4645-ad8b-8abe899e9a16",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:18",
+      "start_epoch_ms": 1794645000000,
+      "end_epoch_ms": 1794646800000,
+      "fixed": false
+    },
+    {
+      "match_id": "1c787856-5087-4a62-a913-efc43ad0c0e4",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:19",
+      "start_epoch_ms": 1794646800000,
+      "end_epoch_ms": 1794648600000,
+      "fixed": false
+    },
+    {
+      "match_id": "24b19a70-5741-40eb-a893-eab40831f0c3",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:19",
+      "start_epoch_ms": 1794646800000,
+      "end_epoch_ms": 1794648600000,
+      "fixed": false
+    },
+    {
+      "match_id": "2595498d-03f2-442a-ab29-8b1b5bd1876d",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:19",
+      "start_epoch_ms": 1794646800000,
+      "end_epoch_ms": 1794648600000,
+      "fixed": false
+    },
+    {
+      "match_id": "04e33adb-b8f1-4a14-a0ed-daa82687c0aa",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:19",
+      "start_epoch_ms": 1794646800000,
+      "end_epoch_ms": 1794648600000,
+      "fixed": false
+    },
+    {
+      "match_id": "6cbf998b-135b-4625-a3bb-03846c599ef6",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "420b5319-ecda-4a56-af3b-a58321467b47",
+      "slot_id": "420b5319-ecda-4a56-af3b-a58321467b47:20",
+      "start_epoch_ms": 1794648600000,
+      "end_epoch_ms": 1794650400000,
+      "fixed": false
+    },
+    {
+      "match_id": "6edb56f8-b8a0-45e1-ac22-7b1ee78dbb1e",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "3398e063-cb59-4037-b7b6-9a8810bce054",
+      "slot_id": "3398e063-cb59-4037-b7b6-9a8810bce054:20",
+      "start_epoch_ms": 1794648600000,
+      "end_epoch_ms": 1794650400000,
+      "fixed": false
+    },
+    {
+      "match_id": "877e8330-1555-4dad-ac2c-0915927978ae",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743",
+      "slot_id": "cb7b0a42-456b-4b68-92c5-c031c9a4e743:20",
+      "start_epoch_ms": 1794648600000,
+      "end_epoch_ms": 1794650400000,
+      "fixed": false
+    },
+    {
+      "match_id": "2c5ee7b2-4765-4fbf-ab3e-891535f1c953",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d",
+      "slot_id": "b19313c1-850b-47f5-b220-6c4a6e80c15d:20",
+      "start_epoch_ms": 1794648600000,
+      "end_epoch_ms": 1794650400000,
+      "fixed": false
+    },
+    {
+      "match_id": "73bef39d-604d-4cf7-ac55-905492daeb29",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "361611e5-c976-4b16-9e01-63aaa591788d",
+      "slot_id": "361611e5-c976-4b16-9e01-63aaa591788d:1",
+      "start_epoch_ms": 1794700800000,
+      "end_epoch_ms": 1794702600000,
+      "fixed": false
+    },
+    {
+      "match_id": "80bd4569-763e-413d-ae5e-703b590219f9",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb",
+      "slot_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb:1",
+      "start_epoch_ms": 1794700800000,
+      "end_epoch_ms": 1794702600000,
+      "fixed": false
+    },
+    {
+      "match_id": "ab727312-67b9-4820-a0d4-51736436a2b5",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8",
+      "slot_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8:1",
+      "start_epoch_ms": 1794700800000,
+      "end_epoch_ms": 1794702600000,
+      "fixed": false
+    },
+    {
+      "match_id": "34f80dd8-2c71-46e5-a237-92f0b01271c0",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5",
+      "slot_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5:1",
+      "start_epoch_ms": 1794700800000,
+      "end_epoch_ms": 1794702600000,
+      "fixed": false
+    },
+    {
+      "match_id": "b6b5ad00-6a3e-426f-ac82-7d2f3bcd7f01",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "361611e5-c976-4b16-9e01-63aaa591788d",
+      "slot_id": "361611e5-c976-4b16-9e01-63aaa591788d:2",
+      "start_epoch_ms": 1794702600000,
+      "end_epoch_ms": 1794704400000,
+      "fixed": false
+    },
+    {
+      "match_id": "deeb8856-5c2c-46a0-aa7d-6c273b83ca3e",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb",
+      "slot_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb:2",
+      "start_epoch_ms": 1794702600000,
+      "end_epoch_ms": 1794704400000,
+      "fixed": false
+    },
+    {
+      "match_id": "e98ce079-680b-4bba-a048-7f51a2ce2ad7",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8",
+      "slot_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8:2",
+      "start_epoch_ms": 1794702600000,
+      "end_epoch_ms": 1794704400000,
+      "fixed": false
+    },
+    {
+      "match_id": "b451af9e-f754-44d3-acac-d77a9acecf12",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5",
+      "slot_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5:2",
+      "start_epoch_ms": 1794702600000,
+      "end_epoch_ms": 1794704400000,
+      "fixed": false
+    },
+    {
+      "match_id": "df2be2a0-1bc8-47f4-a9c0-d8d262ef77ef",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5",
+      "slot_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5:3",
+      "start_epoch_ms": 1794704400000,
+      "end_epoch_ms": 1794706200000,
+      "fixed": false
+    },
+    {
+      "match_id": "195d2d4e-e129-4022-a3bf-56e3fb9daa1f",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "361611e5-c976-4b16-9e01-63aaa591788d",
+      "slot_id": "361611e5-c976-4b16-9e01-63aaa591788d:4",
+      "start_epoch_ms": 1794706200000,
+      "end_epoch_ms": 1794708000000,
+      "fixed": false
+    },
+    {
+      "match_id": "8eecc75d-c682-4d85-a784-91f267ed83bc",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb",
+      "slot_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb:4",
+      "start_epoch_ms": 1794706200000,
+      "end_epoch_ms": 1794708000000,
+      "fixed": false
+    },
+    {
+      "match_id": "a0cbfdce-8074-4667-a1d0-6918dd98e3fe",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8",
+      "slot_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8:4",
+      "start_epoch_ms": 1794706200000,
+      "end_epoch_ms": 1794708000000,
+      "fixed": false
+    },
+    {
+      "match_id": "03481d34-afcc-4cf4-a9d1-3c3a29650c88",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5",
+      "slot_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5:5",
+      "start_epoch_ms": 1794708000000,
+      "end_epoch_ms": 1794709800000,
+      "fixed": false
+    },
+    {
+      "match_id": "2ce32bf4-3f34-442d-a5cf-9c9216175b20",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "361611e5-c976-4b16-9e01-63aaa591788d",
+      "slot_id": "361611e5-c976-4b16-9e01-63aaa591788d:6",
+      "start_epoch_ms": 1794709800000,
+      "end_epoch_ms": 1794711600000,
+      "fixed": false
+    },
+    {
+      "match_id": "dce6f659-2545-4d08-ab5c-9f2939f5db0a",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb",
+      "slot_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb:6",
+      "start_epoch_ms": 1794709800000,
+      "end_epoch_ms": 1794711600000,
+      "fixed": false
+    },
+    {
+      "match_id": "e3e666c2-ef62-4f16-a2ad-01864d722064",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8",
+      "slot_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8:6",
+      "start_epoch_ms": 1794709800000,
+      "end_epoch_ms": 1794711600000,
+      "fixed": false
+    },
+    {
+      "match_id": "05941d24-f3c3-4f8b-a2b4-559cd2ded413",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5",
+      "slot_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5:7",
+      "start_epoch_ms": 1794711600000,
+      "end_epoch_ms": 1794713400000,
+      "fixed": false
+    },
+    {
+      "match_id": "3044033a-ec3e-41e1-a746-d9021ad36047",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "361611e5-c976-4b16-9e01-63aaa591788d",
+      "slot_id": "361611e5-c976-4b16-9e01-63aaa591788d:8",
+      "start_epoch_ms": 1794713400000,
+      "end_epoch_ms": 1794715200000,
+      "fixed": false
+    },
+    {
+      "match_id": "46971bc0-6f1e-41eb-a50f-dc242249b1de",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb",
+      "slot_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb:8",
+      "start_epoch_ms": 1794713400000,
+      "end_epoch_ms": 1794715200000,
+      "fixed": false
+    },
+    {
+      "match_id": "55da6c80-fa23-4569-a28f-c7463ed820b8",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8",
+      "slot_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8:8",
+      "start_epoch_ms": 1794713400000,
+      "end_epoch_ms": 1794715200000,
+      "fixed": false
+    },
+    {
+      "match_id": "7ac86a2c-8353-4371-a94b-08d17fece8cd",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5",
+      "slot_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5:9",
+      "start_epoch_ms": 1794715200000,
+      "end_epoch_ms": 1794717000000,
+      "fixed": false
+    },
+    {
+      "match_id": "a58a811c-b174-46b9-a9c3-ef799f91fd98",
+      "division_id": "37270143-64fb-4e92-9dba-df890267544a",
+      "area_id": "5497ba5b-13f3-4640-a75b-fe6b53138851",
+      "interval_id": "361611e5-c976-4b16-9e01-63aaa591788d",
+      "slot_id": "361611e5-c976-4b16-9e01-63aaa591788d:10",
+      "start_epoch_ms": 1794717000000,
+      "end_epoch_ms": 1794718800000,
+      "fixed": false
+    },
+    {
+      "match_id": "dd4f0c76-9333-4cd1-ac14-505a2b9509ed",
+      "division_id": "0a7c6d48-f376-4e6b-89d5-3ef87a37fb13",
+      "area_id": "57c734fd-1807-46a2-83d6-685deeec577a",
+      "interval_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb",
+      "slot_id": "19a82da4-e89c-48ae-9f4e-38e7cf4a61cb:10",
+      "start_epoch_ms": 1794717000000,
+      "end_epoch_ms": 1794718800000,
+      "fixed": false
+    },
+    {
+      "match_id": "f5c4081c-b9aa-42e9-a706-f3792ed28ffa",
+      "division_id": "d540f9c5-bc5a-4ef4-8226-5a0308e583d5",
+      "area_id": "8783e8d1-7ade-406b-8878-af07840721eb",
+      "interval_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8",
+      "slot_id": "0649f4d5-40d1-40fc-8767-e550d9480ad8:10",
+      "start_epoch_ms": 1794717000000,
+      "end_epoch_ms": 1794718800000,
+      "fixed": false
+    },
+    {
+      "match_id": "b8a7c2e4-5b3d-4d76-a42c-be224f4945aa",
+      "division_id": "25836f2e-5732-4891-9f3c-8fed5be77c4e",
+      "area_id": "f6f0ede1-d582-438d-a2ed-4330218342d3",
+      "interval_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5",
+      "slot_id": "e93151e0-899e-4bdc-abfd-1d6f2245ddb5:11",
+      "start_epoch_ms": 1794718800000,
+      "end_epoch_ms": 1794720600000,
+      "fixed": false
+    }
+  ]
+}

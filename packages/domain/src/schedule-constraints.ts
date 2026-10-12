@@ -2161,7 +2161,9 @@ export function diagnoseScheduleInfeasibility(problem: ScheduleProblem): readonl
             code: "official_unavailable",
             severity: "required",
             matchIds: [match.id],
-            message: `Official ${officialId} has no available window matching any valid slot for match ${match.id}`,
+            message:
+              `Official ${officialId} has no available window matching any valid slot for match ${match.id}. ` +
+              `Widen the official's availability or assign another official.`,
           });
         }
       }
@@ -2208,12 +2210,86 @@ export function diagnoseScheduleInfeasibility(problem: ScheduleProblem): readonl
         code: "official_overlap",
         severity: "hard",
         matchIds: assignedMatches.map((m) => m.id),
-        message: `Official ${officialId} is assigned to ${assignedMatches.length} matches but only ${maxSequentialSlots} non-overlapping slots are available`,
+        message:
+          `Official ${officialId} is assigned to ${assignedMatches.length} matches but only ${maxSequentialSlots} ` +
+          `non-overlapping slots are available. Widen the official's availability or assign another official.`,
       });
     }
   }
 
   violations.push(...diagnoseCapacityInfeasibility(problem));
+  violations.push(...diagnoseLockedConflicts(problem));
+  return violations;
+}
+
+/**
+ * Locked and published matches never move, so two of them that already break a hard or required
+ * rule between themselves make every schedule invalid: a shared possible participant, official or
+ * playing area at overlapping times, or a shared participant closer than the required rest.
+ */
+function diagnoseLockedConflicts(problem: ScheduleProblem): ScheduleViolation[] {
+  const violations: ScheduleViolation[] = [];
+  const restMinutes = Math.max(
+    problem.constraints.minimumRest.mode === "required" ? problem.constraints.minimumRest.value.minutes : 0,
+    problem.constraints.avoidConsecutiveMatches.mode === "required"
+      ? problem.constraints.avoidConsecutiveMatches.value.minutes
+      : 0,
+  );
+  const fixed = problem.matches
+    .filter((match) => match.fixedAssignment)
+    .sort(
+      (left, right) =>
+        left.fixedAssignment!.startEpochMs - right.fixedAssignment!.startEpochMs || left.id.localeCompare(right.id),
+    );
+  for (let index = 0; index < fixed.length; index += 1) {
+    for (let other = index + 1; other < fixed.length; other += 1) {
+      const left = fixed[index]!;
+      const right = fixed[other]!;
+      const a = left.fixedAssignment!;
+      const b = right.fixedAssignment!;
+      const overlap = a.startEpochMs < b.endEpochMs && b.startEpochMs < a.endEpochMs;
+      const gapMinutes = (b.startEpochMs - a.endEpochMs) / MINUTE_MS;
+      const pair = `Locked matches ${left.id} (${localTimeLabel(a.startEpochMs, problem.timeZone)}) and ${right.id} (${localTimeLabel(b.startEpochMs, problem.timeZone)})`;
+      const fix = "Unlock or move one of them";
+      const entries = left.possibleEntryIds.filter((entryId) => right.possibleEntryIds.includes(entryId));
+      const officials = left.officialIds.filter((officialId) => right.officialIds.includes(officialId));
+      if (overlap && a.areaId === b.areaId) {
+        violations.push({
+          code: "area_overlap",
+          severity: "hard",
+          matchIds: [left.id, right.id],
+          message: `${pair} use playing area ${a.areaId} at the same time. ${fix}.`,
+        });
+      }
+      if (overlap && entries.length > 0) {
+        violations.push({
+          code: "possible_entry_overlap",
+          severity: "hard",
+          matchIds: [left.id, right.id],
+          message: `${pair} overlap and both may involve ${listLabel(entries)}. ${fix}.`,
+        });
+      }
+      if (overlap && officials.length > 0) {
+        violations.push({
+          code: "official_overlap",
+          severity: "hard",
+          matchIds: [left.id, right.id],
+          message: `${pair} overlap and share official ${listLabel(officials)}. ${fix} or assign another official.`,
+        });
+      }
+      if (!overlap && entries.length > 0 && restMinutes > 0 && gapMinutes < restMinutes) {
+        violations.push({
+          code: "minimum_rest",
+          severity: "required",
+          matchIds: [left.id, right.id],
+          amount: restMinutes - gapMinutes,
+          message:
+            `${pair} leave ${listLabel(entries)} only ${gapMinutes} minutes of rest, but ${restMinutes} minutes are ` +
+            `required. ${fix}, or reduce the required rest.`,
+        });
+      }
+    }
+  }
   return violations;
 }
 
@@ -2367,6 +2443,37 @@ function diagnoseCapacityInfeasibility(problem: ScheduleProblem): ScheduleViolat
   const earliestFinish = new Map<string, number>();
   const blocked = new Set<string>();
   const sortedSlots = [...problem.slots].sort((left, right) => left.startEpochMs - right.startEpochMs);
+  const matchesById = new Map(problem.matches.map((match) => [match.id, match]));
+  // Matches sharing a possible participant can never overlap, so one entry's prerequisite matches
+  // run one after another: the k-th of them cannot end before k non-overlapping slots (with the
+  // required rest between them) have passed. Group play feeding a knockout is the usual case.
+  const sequentialPrerequisiteReady = (match: SchedulingMatch): number => {
+    const prerequisites = [...(ancestors.get(match.id) ?? [])].map((id) => matchesById.get(id)!);
+    if (prerequisites.length === 0) return Number.NEGATIVE_INFINITY;
+    let ready = Number.NEGATIVE_INFINITY;
+    const countByEntryAndDuration = new Map<string, number>();
+    for (const prerequisite of prerequisites)
+      for (const entryId of new Set(prerequisite.possibleEntryIds)) {
+        const key = `${prerequisite.durationMinutes}|${entryId}`;
+        countByEntryAndDuration.set(key, (countByEntryAndDuration.get(key) ?? 0) + 1);
+      }
+    for (const [key, count] of countByEntryAndDuration) {
+      const duration = Number(key.slice(0, key.indexOf("|")));
+      let placed = 0;
+      let nextStart = Number.NEGATIVE_INFINITY;
+      let lastEnd = Number.NEGATIVE_INFINITY;
+      for (const slot of sortedSlots) {
+        if (slotMinutes(slot) !== duration || slot.startEpochMs < nextStart) continue;
+        placed += 1;
+        lastEnd = slot.endEpochMs;
+        nextStart = slot.endEpochMs + restMinutes * MINUTE_MS;
+        if (placed === count) break;
+      }
+      // Too few slots for this entry at all: the capacity finding covers that case.
+      if (placed === count) ready = Math.max(ready, lastEnd + restMinutes * MINUTE_MS);
+    }
+    return ready;
+  };
   for (const match of topologicalMatches(problem.matches)) {
     if (match.dependencyMatchIds.some((id) => blocked.has(id))) {
       blocked.add(match.id);
@@ -2375,6 +2482,7 @@ function diagnoseCapacityInfeasibility(problem: ScheduleProblem): ScheduleViolat
     const ready = Math.max(
       Number.NEGATIVE_INFINITY,
       ...match.dependencyMatchIds.map((id) => earliestFinish.get(id)! + restMinutes * MINUTE_MS),
+      sequentialPrerequisiteReady(match),
     );
     const fixed = match.fixedAssignment;
     const start = fixed

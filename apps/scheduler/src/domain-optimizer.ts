@@ -24,11 +24,11 @@ type VerifiedSchedule = {
   quality: ReturnType<typeof evaluateScheduleQuality>;
 };
 
-type GeneratedSchedules = ReadonlyArray<
-  {
-    candidate: ReturnType<typeof generateScheduleCandidates>[number];
-  } & VerifiedSchedule
->;
+type GeneratedSchedule = {
+  candidate: ReturnType<typeof generateScheduleCandidates>[number];
+  backToBackCount: number;
+} & VerifiedSchedule;
+type GeneratedSchedules = ReadonlyArray<GeneratedSchedule>;
 
 export class DomainScheduleOptimizer implements ScheduleOptimizer {
   readonly #maxIterationsPerRun: number;
@@ -105,6 +105,38 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
         }
         bestScore = verifiedSeed.quality.score;
       }
+      const toYield = (generated: GeneratedSchedule) => ({
+        iteration: generated.candidate.iteration,
+        result: {
+          schema_version: 1 as const,
+          job_id: request.input.job_id,
+          source_revision: request.input.source_revision,
+          result_revision: 0,
+          status: "valid" as const,
+          assignments: generated.candidate.assignments.map(toTransportAssignment),
+          violations: generated.validation.violations.map(toTransportViolation),
+          quality: toTransportQuality(generated.quality),
+          assignment_hash: "0".repeat(64),
+        },
+      });
+      // The rest-aware construction goes first, so on a score tie it is the one kept. Its
+      // back-to-back count is then a ceiling: a greedy candidate with more back-to-backs is never
+      // offered, so "0 back-to-backs when a witness exists" holds whatever the score weights say.
+      let backToBackCeiling = Number.POSITIVE_INFINITY;
+      const preserving = request.input.constraints.preserve_existing_schedule.mode !== "ignored";
+      const restAware = await session.request<GeneratedSchedule | false>(
+        { operation: "rest_aware", iteration: request.startIteration },
+        request.signal,
+        request.maxYieldIntervalMs,
+      );
+      if (restAware === null) return;
+      if (restAware !== false && restAware.validation.valid && restAware.quality.valid) {
+        backToBackCeiling = restAware.backToBackCount;
+        if (restAware.quality.score > bestScore) {
+          bestScore = restAware.quality.score;
+          yield toYield(restAware);
+        }
+      }
       const endIteration = request.startIteration + this.#maxIterationsPerRun;
       for (let iteration = request.startIteration; iteration < endIteration; iteration += 1) {
         if (request.signal.aborted) return;
@@ -117,33 +149,31 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
         for (const constructed of generated) {
           if (request.signal.aborted) return;
           if (!constructed.validation.valid || !constructed.quality.valid) continue;
-          let { candidate, validation, quality } = constructed;
-          if (quality.score > bestScore) {
-            const improved = await session.request<GeneratedSchedules[number]>(
-              { operation: "improve", iteration: candidate.iteration, assignments: candidate.assignments },
+          let chosen = constructed;
+          if (chosen.quality.score > bestScore) {
+            const improved = await session.request<GeneratedSchedule>(
+              {
+                operation: "improve",
+                iteration: chosen.candidate.iteration,
+                assignments: chosen.candidate.assignments,
+              },
               request.signal,
               request.maxYieldIntervalMs,
             );
             if (improved === null) return;
-            if (improved.validation.valid && improved.quality.valid && improved.quality.score >= quality.score) {
-              ({ candidate, validation, quality } = improved);
+            if (improved.validation.valid && improved.quality.valid && improved.quality.score >= chosen.quality.score) {
+              chosen = improved;
             }
-            bestScore = quality.score;
           }
-          yield {
-            iteration: candidate.iteration,
-            result: {
-              schema_version: 1 as const,
-              job_id: request.input.job_id,
-              source_revision: request.input.source_revision,
-              result_revision: 0,
-              status: "valid" as const,
-              assignments: candidate.assignments.map(toTransportAssignment),
-              violations: validation.violations.map(toTransportViolation),
-              quality: toTransportQuality(quality),
-              assignment_hash: "0".repeat(64),
-            },
-          };
+          // Raised even when the candidate is not offered, so local search is spent once per
+          // score level rather than on every iteration that the ceiling then rejects.
+          if (chosen.quality.score > bestScore) bestScore = chosen.quality.score;
+          if (chosen.backToBackCount > backToBackCeiling) continue;
+          // Without a rest-aware construction, the first schedule offered sets the ceiling, so a
+          // later higher-scoring one cannot bring back-to-backs back. Re-planning is exempt:
+          // there, keeping matches in place outranks spacing.
+          if (backToBackCeiling === Number.POSITIVE_INFINITY && !preserving) backToBackCeiling = chosen.backToBackCount;
+          yield toYield(chosen);
         }
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
@@ -348,7 +378,7 @@ function setting<Input, Output>(
   return { mode: input.mode, value, ...(input.weight === undefined ? {} : { weight: input.weight }) };
 }
 
-function toDomainAssignment(assignment: TransportAssignment): ScheduleAssignment {
+export function toDomainAssignment(assignment: TransportAssignment): ScheduleAssignment {
   return {
     matchId: assignment.match_id,
     divisionId: assignment.division_id,
