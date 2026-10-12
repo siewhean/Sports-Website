@@ -83,7 +83,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build dependencies
-        run: pnpm --filter @matchday/domain --filter @matchday/scheduler --filter @matchday/config --filter @matchday/database build
+        run: pnpm --filter @matchday/domain --filter @matchday/jobs --filter @matchday/scheduler --filter @matchday/config --filter @matchday/database build
       - name: Run fast simulation (PR / push)
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.event_name != 'workflow_dispatch')
         run: pnpm simulate:tournament:fast
