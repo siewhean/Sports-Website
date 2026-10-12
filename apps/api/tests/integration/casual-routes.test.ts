@@ -13,7 +13,8 @@ import {
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
-const databaseUrl = process.env.DATABASE_URL!;
+const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
+const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
 const schema = `test_casual_${randomUUID().replaceAll("-", "")}`;
 let sql: Sql;
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -27,78 +28,78 @@ const identityHeaders = (token = "owner") => ({
 });
 type Created = { game: { id: string }; host_token: string; viewer_token: string };
 
-beforeAll(async () => {
-  await migrateDatabase({
-    databaseUrl,
-    schema,
-    migrationsDirectory: fileURLToPath(new URL("../../../../packages/database/migrations", import.meta.url)),
+describeInfrastructure("real PostgreSQL casual game lifecycle", () => {
+  beforeAll(async () => {
+    await migrateDatabase({
+      databaseUrl,
+      schema,
+      migrationsDirectory: fileURLToPath(new URL("../../../../packages/database/migrations", import.meta.url)),
+    });
+    sql = postgres(databaseUrl, { max: 10, onnotice: () => undefined, connection: { search_path: schema } });
+    const accounts = await sql<
+      { id: string }[]
+    >`INSERT INTO accounts(primary_email,display_name,email_verified_at) VALUES('casual-owner@matchday.test','Owner',now()),('casual-friend@matchday.test','Friend',now()),('casual-stranger@matchday.test','Stranger',now()) RETURNING id`;
+    [ownerId, friendId, strangerId] = accounts.map((account) => account.id) as [string, string, string];
+    const ids: Record<string, string> = { owner: ownerId, friend: friendId, stranger: strangerId };
+    const identity = {
+      authenticate: vi.fn(async (token: string) => {
+        if (!ids[token]) throw new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Sign in required");
+        return {
+          account: {
+            id: ids[token],
+            primaryEmail: `casual-${token}@matchday.test`,
+            displayName: token,
+            status: "active",
+            emailVerifiedAt: new Date(),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          sessionId: randomUUID(),
+          sessionToken: token,
+          csrfToken: `csrf-${token}`,
+          idleExpiresAt: new Date(Date.now() + 60000),
+          absoluteExpiresAt: new Date(Date.now() + 60000),
+        };
+      }),
+      verifyCsrfToken: vi.fn((token: string, csrf: string) => csrf === `csrf-${token}`),
+    } as unknown as IdentityApiRuntime;
+    app = await buildApp({
+      config: testConfig({
+        DATABASE_URL: databaseUrl,
+        API_ALLOWED_ORIGINS: "http://localhost:3000",
+        MATCHDAY_PUBLIC_ORIGIN: "http://localhost:3000",
+      }),
+      probes: healthyProbes,
+      casualSql: sql,
+      identityRuntime: identity,
+      rateLimitMax: 10000,
+    });
+  }, 30_000);
+  afterAll(async () => {
+    await app?.close();
+    await sql?.end();
+    await dropTestSchema(databaseUrl, schema);
   });
-  sql = postgres(databaseUrl, { max: 10, onnotice: () => undefined, connection: { search_path: schema } });
-  const accounts = await sql<
-    { id: string }[]
-  >`INSERT INTO accounts(primary_email,display_name,email_verified_at) VALUES('casual-owner@matchday.test','Owner',now()),('casual-friend@matchday.test','Friend',now()),('casual-stranger@matchday.test','Stranger',now()) RETURNING id`;
-  [ownerId, friendId, strangerId] = accounts.map((account) => account.id) as [string, string, string];
-  const ids: Record<string, string> = { owner: ownerId, friend: friendId, stranger: strangerId };
-  const identity = {
-    authenticate: vi.fn(async (token: string) => {
-      if (!ids[token]) throw new ApiError(401, ErrorCode.AUTHENTICATION_REQUIRED, "Sign in required");
-      return {
-        account: {
-          id: ids[token],
-          primaryEmail: `casual-${token}@matchday.test`,
-          displayName: token,
-          status: "active",
-          emailVerifiedAt: new Date(),
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        },
-        sessionId: randomUUID(),
-        sessionToken: token,
-        csrfToken: `csrf-${token}`,
-        idleExpiresAt: new Date(Date.now() + 60000),
-        absoluteExpiresAt: new Date(Date.now() + 60000),
-      };
-    }),
-    verifyCsrfToken: vi.fn((token: string, csrf: string) => csrf === `csrf-${token}`),
-  } as unknown as IdentityApiRuntime;
-  app = await buildApp({
-    config: testConfig({
-      DATABASE_URL: databaseUrl,
-      API_ALLOWED_ORIGINS: "http://localhost:3000",
-      MATCHDAY_PUBLIC_ORIGIN: "http://localhost:3000",
-    }),
-    probes: healthyProbes,
-    casualSql: sql,
-    identityRuntime: identity,
-    rateLimitMax: 10000,
-  });
-}, 30_000);
-afterAll(async () => {
-  await app?.close();
-  await sql?.end();
-  await dropTestSchema(databaseUrl, schema);
-});
-const create = async (settings: Record<string, unknown> = {}) => {
-  const response = await app.inject({
-    method: "POST",
-    url: "/api/v1/casual/games",
-    payload: { sport_id: "badminton", home_name: "Home", away_name: "Away", ...settings },
-  });
-  expect(response.statusCode).toBe(201);
-  expect(response.headers["cache-control"]).toContain("no-store");
-  return response.json<Created>();
-};
-const mutate = (game: Created, action: string, payload: Record<string, unknown> = {}) =>
-  app.inject({
-    method: "POST",
-    url: `/api/v1/casual/games/${game.game.id}/${action}`,
-    headers: { "x-casual-host-token": game.host_token },
-    payload,
-  });
-const watch = (game: Created) =>
-  app.inject({ method: "GET", url: `/api/v1/casual/games/${game.game.id}?viewer_token=${game.viewer_token}` });
+  const create = async (settings: Record<string, unknown> = {}) => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/casual/games",
+      payload: { sport_id: "badminton", home_name: "Home", away_name: "Away", ...settings },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.headers["cache-control"]).toContain("no-store");
+    return response.json<Created>();
+  };
+  const mutate = (game: Created, action: string, payload: Record<string, unknown> = {}) =>
+    app.inject({
+      method: "POST",
+      url: `/api/v1/casual/games/${game.game.id}/${action}`,
+      headers: { "x-casual-host-token": game.host_token },
+      payload,
+    });
+  const watch = (game: Created) =>
+    app.inject({ method: "GET", url: `/api/v1/casual/games/${game.game.id}?viewer_token=${game.viewer_token}` });
 
-describe("real PostgreSQL casual game lifecycle", () => {
   it("creates each supported sport and keeps capability hashes private", async () => {
     for (const sport_id of ["badminton", "basketball", "canoe_polo", "table_tennis", "volleyball"]) {
       const game = await create({ sport_id });

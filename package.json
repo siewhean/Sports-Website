@@ -48,6 +48,8 @@
     "test:a11y": "pnpm --filter @matchday/web test:a11y",
     "test:visual": "pnpm --filter @matchday/web test:visual",
     "seed:staging:pilot": "pnpm --filter @matchday/api exec tsx scripts/seed-staging-pilot.ts",
+    "simulate:tournament": "pnpm --filter @matchday/api exec tsx scripts/simulate-tournament.ts",
+    "simulate:tournament:fast": "pnpm --filter @matchday/api exec tsx scripts/simulate-tournament.ts --profile=fast",
     "test:load:public": "pnpm --filter @matchday/api exec tsx scripts/run-load-public.ts",
     "test:load:scoring": "pnpm --filter @matchday/api exec tsx scripts/run-load-scoring.ts",
     "test:load:component": "pnpm --filter @matchday/api exec tsx scripts/run-load-public.ts --mode=component && pnpm --filter @matchday/api exec tsx scripts/run-load-scoring.ts --mode=component",
