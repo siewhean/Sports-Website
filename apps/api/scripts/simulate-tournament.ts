@@ -140,13 +140,14 @@ function createSimulationClient(
 
 /** Helper to seed an 8-team competition with division, entries and capacity entirely via API */
 async function createStandardTournament(ctx: SimContext, sport: SportId, prefix = "std") {
+  const slug = safeSlug(`${prefix}-${sport}`);
   const compRes = await ctx.request({
     method: "POST",
     url: "/api/v1/competitions/phase3",
     payload: {
       organisation_id: ctx.organisationId,
       name: `Sim ${sport} ${prefix}`,
-      slug: safeSlug(`${prefix}-${sport}`),
+      slug,
       sport_code: sport,
       venue: "Jurong West Sports Hall",
       address: "20 Jurong West St 93",
@@ -159,7 +160,7 @@ async function createStandardTournament(ctx: SimContext, sport: SportId, prefix 
     },
     expectedStatuses: [201],
   });
-  const comp = compRes.json<{ id: string; slug: string }>();
+  const comp = compRes.json<{ id: string }>();
 
   // Division with 8 entries
   const divRes = await ctx.request({
@@ -207,11 +208,11 @@ async function createStandardTournament(ctx: SimContext, sport: SportId, prefix 
     expectedStatuses: [200],
   });
 
-  return { comp, division };
+  return { comp: { id: comp.id, slug }, division };
 }
 
-/** Pure API helper to create format revision, publish format, and generate/publish schedule */
-async function materializeAndPublishFormat(
+/** Pure API helper to create and publish a format revision without generating a schedule */
+async function materializeAndPublishFormatOnly(
   ctx: SimContext,
   competitionId: string,
   divisionId: string,
@@ -242,23 +243,44 @@ async function materializeAndPublishFormat(
     expectedStatuses: [200],
   });
 
+  return { formatId: format.id };
+}
+
+/** Pure API helper to create format revision, publish format, and generate/publish schedule */
+async function materializeAndPublishFormat(
+  ctx: SimContext,
+  competitionId: string,
+  divisionId: string,
+  graph: FormatGraph,
+) {
+  const { formatId } = await materializeAndPublishFormatOnly(ctx, competitionId, divisionId, graph);
+
   // 4. Generate schedule revision via API
   const schedRes = await ctx.request({
     method: "POST",
     url: `/api/v1/competitions/${competitionId}/schedule-revisions/generate`,
-    payload: { format_revision_id: format.id },
+    payload: { format_revision_id: formatId },
     expectedStatuses: [200],
   });
   const sched = schedRes.json<{ id: string; revision: number }>();
 
-  // 5. Publish schedule revision via API
+  // 5. Mark schedule revision ready for review via API
   await ctx.request({
     method: "POST",
-    url: `/api/v1/competitions/${competitionId}/schedule-revisions/${sched.id}/publish`,
+    url: `/api/v1/schedule-revisions/${sched.id}/ready`,
+    payload: { idempotency_key: randomUUID(), expected_revision: sched.revision },
     expectedStatuses: [200],
   });
 
-  return { formatId: format.id, sched };
+  // 6. Publish schedule revision via API
+  await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${sched.id}/publish`,
+    payload: { idempotency_key: randomUUID(), expected_revision: sched.revision },
+    expectedStatuses: [200],
+  });
+
+  return { formatId, sched };
 }
 
 let simWriterIndex = 0;
@@ -292,8 +314,8 @@ async function scorer(ctx: SimContext, competitionId: string, matchId: string) {
   });
   const writer = exchangeRes.json<{ session_id: string; session_token: string; generation: number }>();
   const scoringHeaders = {
-    "x-session-id": writer.session_id,
-    "x-session-token": writer.session_token,
+    "x-scoring-session-id": writer.session_id,
+    "x-scoring-session-token": writer.session_token,
     "x-writer-generation": String(writer.generation),
   };
 
@@ -454,7 +476,14 @@ async function runScenario1(ctx: SimContext): Promise<void> {
       url: `/api/v1/competitions/${comp.id}/schedule-workspace`,
       expectedStatuses: [200],
     });
-    const ws = wsRes.json<{ source_revision: number; capacity_revision: number }>();
+    const ws = wsRes.json<{
+      generation: {
+        source_revision: number;
+        capacity_revision: number;
+        objective: string;
+        constraints: unknown;
+      };
+    }>();
 
     const areas = await ctx.sql<{ id: string }[]>`SELECT id FROM playing_areas WHERE competition_id=${comp.id}`;
     const areaId = areas[0]?.id ?? randomUUID();
@@ -464,10 +493,10 @@ async function runScenario1(ctx: SimContext): Promise<void> {
       url: `/api/v1/competitions/${comp.id}/schedule-jobs`,
       payload: {
         idempotency_key: randomUUID(),
-        expected_source_revision: ws.source_revision,
-        expected_capacity_revision: ws.capacity_revision,
-        objective: "balanced",
-        constraints: defaultConstraints(areaId),
+        expected_source_revision: ws.generation.source_revision,
+        expected_capacity_revision: ws.generation.capacity_revision,
+        objective: ws.generation.objective ?? "balanced",
+        constraints: ws.generation.constraints ?? defaultConstraints(areaId),
       },
       expectedStatuses: [202],
     });
@@ -484,7 +513,7 @@ async function runScenario1(ctx: SimContext): Promise<void> {
     // 2. Play all group stage matches (matches with populated entry slots)
     const initialMatches = await ctx.sql<{ id: string }[]>`
       SELECT id FROM matches
-      WHERE format_revision_id=${formatId} AND stage='group' AND home_entry_id IS NOT NULL AND away_entry_id IS NOT NULL
+      WHERE format_revision_id=${formatId} AND graph_stage_id='groups' AND home_entry_id IS NOT NULL AND away_entry_id IS NOT NULL
       ORDER BY ordinal`;
 
     if (initialMatches.length === 0) throw new Error(`No playable pool matches found for ${sport}`);
@@ -516,7 +545,7 @@ async function runScenario1(ctx: SimContext): Promise<void> {
     // 5. Verify knockout advancement: group winners/runners-up advanced into semifinals!
     const semiMatches = await ctx.sql<{ id: string; home_entry_id: string | null; away_entry_id: string | null }[]>`
       SELECT id, home_entry_id, away_entry_id FROM matches
-      WHERE format_revision_id=${formatId} AND stage='semifinal'
+      WHERE format_revision_id=${formatId} AND graph_stage_id='championship' AND round_number=1
       ORDER BY ordinal`;
 
     if (semiMatches.length === 0) throw new Error(`No semifinal matches found for ${sport}`);
@@ -537,7 +566,7 @@ async function runScenario1(ctx: SimContext): Promise<void> {
     // 6. Verify final match participants populated from semifinal winners!
     const finalMatches = await ctx.sql<{ id: string; home_entry_id: string | null; away_entry_id: string | null }[]>`
       SELECT id, home_entry_id, away_entry_id FROM matches
-      WHERE format_revision_id=${formatId} AND stage='final'
+      WHERE format_revision_id=${formatId} AND graph_stage_id='championship' AND round_number=2
       ORDER BY ordinal`;
 
     if (finalMatches.length === 0) throw new Error(`No final match found for ${sport}`);
@@ -658,7 +687,7 @@ async function runScenario3(ctx: SimContext): Promise<void> {
     method: "PUT",
     url: `/api/v1/competitions/${comp.id}/officials/${official.id}/availability`,
     payload: {
-      windows: [{ date: "2027-04-01", start_time: "09:00", end_time: "14:00" }],
+      windows: [{ starts_at: "2027-04-01T09:00:00.000Z", ends_at: "2027-04-01T14:00:00.000Z" }],
     },
     expectedStatuses: [200],
   });
@@ -689,6 +718,55 @@ async function runScenario3(ctx: SimContext): Promise<void> {
   }
   if (!ws.assignments.some((a) => a.official_id === official.id)) {
     throw new Error("Match assignment not found in workspace");
+  }
+
+  // 5. Test schedule constraint enforcement for official availability
+  const schedWsRes = await ctx.request({
+    method: "GET",
+    url: `/api/v1/competitions/${comp.id}/schedule-workspace`,
+    expectedStatuses: [200],
+  });
+  const schedWs = schedWsRes.json<{
+    generation: {
+      source_revision: number;
+      capacity_revision: number;
+      objective: string;
+      constraints: unknown;
+    };
+  }>();
+
+  const areas = await ctx.sql<{ id: string }[]>`SELECT id FROM playing_areas WHERE competition_id=${comp.id}`;
+  const areaId = areas[0]?.id ?? randomUUID();
+  const constraints = {
+    ...defaultConstraints(areaId),
+    official_availability: {
+      mode: "required" as const,
+      value: { by_official_id: {} },
+    },
+  };
+
+  const jobRes = await ctx.request({
+    method: "POST",
+    url: `/api/v1/competitions/${comp.id}/schedule-jobs`,
+    payload: {
+      idempotency_key: randomUUID(),
+      expected_source_revision: schedWs.generation.source_revision,
+      expected_capacity_revision: schedWs.generation.capacity_revision,
+      objective: "balanced",
+      constraints,
+    },
+    expectedStatuses: [202],
+  });
+  const job = jobRes.json<{ job: { id: string } }>();
+
+  const optRes = await ctx.request({
+    method: "GET",
+    url: `/api/v1/schedule-jobs/${job.job.id}/options`,
+    expectedStatuses: [200],
+  });
+  const options = optRes.json<unknown[]>();
+  if (!Array.isArray(options) || options.length === 0) {
+    throw new Error("Expected schedule options respecting official availability");
   }
 }
 
@@ -748,26 +826,47 @@ async function runScenario4(ctx: SimContext): Promise<void> {
 async function runScenario5(ctx: SimContext): Promise<void> {
   const { comp, division } = await createStandardTournament(ctx, "badminton", "s5-locks");
   const template = createDefaultFormatTemplates(8).find((t) => t.strategy === "compact_knockout")!;
-  const { formatId, sched } = await materializeAndPublishFormat(ctx, comp.id, division.id, template.graph);
+  const { formatId } = await materializeAndPublishFormatOnly(ctx, comp.id, division.id, template.graph);
 
-  const scheduled = await ctx.sql<{ match_id: string; playing_area_id: string; starts_at: Date; ends_at: Date }[]>`
-    SELECT match_id, playing_area_id, starts_at, ends_at FROM scheduled_matches
-    WHERE schedule_revision_id=${sched.id} ORDER BY starts_at`;
+  // Generate draft schedule revision (status is 'draft', allowing locks)
+  const schedRes = await ctx.request({
+    method: "POST",
+    url: `/api/v1/competitions/${comp.id}/schedule-revisions/generate`,
+    payload: { format_revision_id: formatId },
+    expectedStatuses: [200],
+  });
+  const sched = schedRes.json<{ id: string; revision: number }>();
 
-  if (scheduled.length < 2) throw new Error("Expected at least 2 scheduled matches");
-  const targetMatch = scheduled[0]!;
-  const otherMatch = scheduled[1]!;
+  // Read draft assignments via API
+  const draftDetailRes = await ctx.request({
+    method: "GET",
+    url: `/api/v1/schedule-revisions/${sched.id}`,
+    expectedStatuses: [200],
+  });
+  const draftDetail = draftDetailRes.json<{
+    assignments: Array<{
+      match_id: string;
+      area_id: string;
+      slot_id: string;
+      start_epoch_ms: number;
+      end_epoch_ms: number;
+    }>;
+  }>();
 
-  // 1. Lock first match via API
+  if (draftDetail.assignments.length < 2) throw new Error("Expected at least 2 scheduled matches");
+  const targetMatch = draftDetail.assignments[0]!;
+  const otherMatch = draftDetail.assignments[1]!;
+
+  // 1. Lock first match on draft revision via API
   await ctx.request({
     method: "POST",
     url: `/api/v1/schedule-revisions/${sched.id}/locks`,
     payload: {
       idempotency_key: randomUUID(),
       match_id: targetMatch.match_id,
-      playing_area_id: targetMatch.playing_area_id,
-      start_epoch_ms: new Date(targetMatch.starts_at).getTime(),
-      end_epoch_ms: new Date(targetMatch.ends_at).getTime(),
+      playing_area_id: targetMatch.area_id,
+      start_epoch_ms: targetMatch.start_epoch_ms,
+      end_epoch_ms: targetMatch.end_epoch_ms,
     },
     expectedStatuses: [200],
   });
@@ -779,7 +878,7 @@ async function runScenario5(ctx: SimContext): Promise<void> {
     payload: { format_revision_id: formatId },
     expectedStatuses: [200],
   });
-  const regen = regenRes.json<{ id: string }>();
+  const regen = regenRes.json<{ id: string; revision: number }>();
 
   // 3. Test manual move validation (PR #98 fix):
   // Moving the locked match MUST be rejected with fixed_match_moved violation
@@ -788,10 +887,10 @@ async function runScenario5(ctx: SimContext): Promise<void> {
     url: `/api/v1/schedule-revisions/${regen.id}/moves/validate`,
     payload: {
       match_id: targetMatch.match_id,
-      playing_area_id: otherMatch.playing_area_id,
-      slot_id: "other-slot",
-      start_epoch_ms: new Date(otherMatch.starts_at).getTime(),
-      end_epoch_ms: new Date(otherMatch.ends_at).getTime(),
+      playing_area_id: otherMatch.area_id,
+      slot_id: otherMatch.slot_id,
+      start_epoch_ms: otherMatch.start_epoch_ms,
+      end_epoch_ms: otherMatch.end_epoch_ms,
     },
     expectedStatuses: [200],
   });
@@ -814,10 +913,10 @@ async function runScenario5(ctx: SimContext): Promise<void> {
     url: `/api/v1/schedule-revisions/${regen.id}/moves/validate`,
     payload: {
       match_id: otherMatch.match_id,
-      playing_area_id: otherMatch.playing_area_id,
-      slot_id: "valid-slot",
-      start_epoch_ms: new Date(otherMatch.starts_at).getTime(),
-      end_epoch_ms: new Date(otherMatch.ends_at).getTime(),
+      playing_area_id: otherMatch.area_id,
+      slot_id: otherMatch.slot_id,
+      start_epoch_ms: otherMatch.start_epoch_ms,
+      end_epoch_ms: otherMatch.end_epoch_ms,
     },
     expectedStatuses: [200],
   });
@@ -825,6 +924,37 @@ async function runScenario5(ctx: SimContext): Promise<void> {
   if (!unlockedValidation.validation.valid) {
     throw new Error("Expected moving unlocked match in place to be valid");
   }
+
+  // 4. Actually execute move on unlocked match via API (creates next revision)
+  const executeMoveRes = await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${regen.id}/moves`,
+    payload: {
+      idempotency_key: randomUUID(),
+      expected_revision: regen.revision,
+      match_id: otherMatch.match_id,
+      playing_area_id: otherMatch.area_id,
+      slot_id: otherMatch.slot_id,
+      start_epoch_ms: otherMatch.start_epoch_ms,
+      end_epoch_ms: otherMatch.end_epoch_ms,
+    },
+    expectedStatuses: [201],
+  });
+  const moved = executeMoveRes.json<{ id: string; revision: number }>();
+
+  // 5. Mark ready and publish the moved schedule revision
+  await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${moved.id}/ready`,
+    payload: { idempotency_key: randomUUID(), expected_revision: moved.revision },
+    expectedStatuses: [200],
+  });
+  await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${moved.id}/publish`,
+    payload: { idempotency_key: randomUUID(), expected_revision: moved.revision },
+    expectedStatuses: [200],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -897,14 +1027,16 @@ async function runScenario7(ctx: SimContext): Promise<void> {
   const court1 = areas.find((a) => a.name === "Court 1")!;
   const court2 = areas.find((a) => a.name === "Court 2")!;
 
-  // Mid-day court closure: replace capacity with Court 1 only
+  // Mid-day court closure: replace capacity with revision: 1, keeping both Court 1 and Court 2
+  // so existing scheduled_matches foreign keys remain valid, but closing Court 2 (availability: [])
   await ctx.request({
     method: "PUT",
     url: `/api/v1/competitions/${comp.id}/capacity`,
     payload: {
-      revision: 2,
+      revision: 1,
       areas: [
         {
+          id: court1.id,
           name: "Court 1",
           slot_minutes: 60,
           availability: [
@@ -912,12 +1044,31 @@ async function runScenario7(ctx: SimContext): Promise<void> {
             { date: "2027-04-02", start_time: "09:00", end_time: "18:00" },
           ],
         },
+        {
+          id: court2.id,
+          name: "Court 2",
+          slot_minutes: 60,
+          availability: [],
+        },
       ],
     },
     expectedStatuses: [200],
   });
 
-  // Re-plan schedule with updated capacity (Court 1 only) via real generate route
+  // Verify workspace detects stale input state following the capacity change
+  const wsRes = await ctx.request({
+    method: "GET",
+    url: `/api/v1/competitions/${comp.id}/schedule-workspace`,
+    expectedStatuses: [200],
+  });
+  const ws = wsRes.json<{ current_revision_input_state: string }>();
+  if (ws.current_revision_input_state !== "stale") {
+    throw new Error(
+      `Expected current_revision_input_state to be stale after capacity change, got ${ws.current_revision_input_state}`,
+    );
+  }
+
+  // Re-plan schedule with updated capacity via real generate route
   const reSchedRes = await ctx.request({
     method: "POST",
     url: `/api/v1/competitions/${comp.id}/schedule-revisions/generate`,
@@ -926,10 +1077,17 @@ async function runScenario7(ctx: SimContext): Promise<void> {
   });
   const reSched = reSchedRes.json<{ id: string; revision: number }>();
 
-  // Publish updated revision via real publish route
+  // Mark ready and publish updated revision via real routes
   await ctx.request({
     method: "POST",
-    url: `/api/v1/competitions/${comp.id}/schedule-revisions/${reSched.id}/publish`,
+    url: `/api/v1/schedule-revisions/${reSched.id}/ready`,
+    payload: { idempotency_key: randomUUID(), expected_revision: reSched.revision },
+    expectedStatuses: [200],
+  });
+  await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${reSched.id}/publish`,
+    payload: { idempotency_key: randomUUID(), expected_revision: reSched.revision },
     expectedStatuses: [200],
   });
 
@@ -988,10 +1146,18 @@ async function runScenario8(ctx: SimContext): Promise<void> {
     url: `/api/v1/competitions/${comp.id}/divisions/${division.id}/standings`,
     expectedStatuses: [200],
   });
-  const standings = standingsRes.json<{ standings: Array<{ entry_id: string; status?: string; rank?: number }> }>();
+  const standings = standingsRes.json<{
+    standings: unknown;
+    advancement_slots: Array<{ match_id: string; entry_id: string | null }>;
+  }>();
   if (!standings || !standings.standings) throw new Error("Standings missing after recalculate");
 
-  // Verify winning away team advanced into knockout
+  const hasAdvancedWinner = standings.advancement_slots?.some((s) => s.entry_id === targetMatch.away_entry_id);
+  if (!hasAdvancedWinner) {
+    throw new Error("Walkover winner was not advanced in division advancement slots");
+  }
+
+  // Verify winning away team advanced into knockout match in database
   const advancedMatches = await ctx.sql<{ id: string; home_entry_id: string | null; away_entry_id: string | null }[]>`
     SELECT id, home_entry_id, away_entry_id FROM matches
     WHERE format_revision_id=${formatId} AND (home_entry_id=${targetMatch.away_entry_id} OR away_entry_id=${targetMatch.away_entry_id})`;
@@ -1006,30 +1172,68 @@ async function runScenario8(ctx: SimContext): Promise<void> {
 async function runScenario9(ctx: SimContext): Promise<void> {
   const { comp } = await createStandardTournament(ctx, "basketball", "s9-ai");
 
-  // 1. Read format recommendations via API
+  // 1. Resume setup draft to ensure draft exists
+  const resumeRes = await ctx.request({
+    method: "POST",
+    url: `/api/v1/competitions/${comp.id}/setup-draft/resume`,
+    payload: { idempotency_key: randomUUID() },
+    expectedStatuses: [200],
+  });
+  const draft = resumeRes.json<{ revision: number }>();
+
+  // 2. Set format_preferences on the setup draft so recommendV1Format has required preferences
+  await ctx.request({
+    method: "PATCH",
+    url: `/api/v1/competitions/${comp.id}/setup-draft`,
+    payload: {
+      expected_revision: draft.revision,
+      idempotency_key: randomUUID(),
+      step: {
+        step_id: "format_preferences",
+        value: {
+          minimum_matches: { per_entry: 1 },
+          ranking: { rank_all_entries: false },
+          knockout: { required: true },
+          placement: { required: false },
+          qualification: { cross_group_allowed: true },
+          priority: { value: "speed" },
+        },
+      },
+    },
+    expectedStatuses: [200],
+  });
+
+  // 3. Read rules-based format recommendations via API
   const recRes = await ctx.request({
     method: "POST",
     url: `/api/v1/competitions/${comp.id}/v1-format-recommendations`,
     payload: { idempotency_key: randomUUID() },
     expectedStatuses: [200],
   });
-  const recs = recRes.json<{ recommendations?: unknown[] }>();
-  if (!Array.isArray(recs.recommendations) || recs.recommendations.length === 0) {
-    throw new Error("Expected rules-based format recommendations");
+  const recDoc = recRes.json<{
+    values: {
+      format_recommendations?: {
+        recommendations: Array<{ id: string; name: string }>;
+      };
+    };
+  }>();
+  const recs = recDoc.values?.format_recommendations?.recommendations;
+  if (!Array.isArray(recs) || recs.length === 0) {
+    throw new Error("Expected rules-based format recommendations in setup document");
   }
 
-  // 2. Read AI usage & quota boundaries via API
+  // 4. Read AI usage & quota boundaries via API
   const usageRes = await ctx.request({
     method: "GET",
     url: `/api/v1/organisations/${ctx.organisationId}/ai/usage`,
     expectedStatuses: [200],
   });
-  const usage = usageRes.json<{ organisation_id: string }>();
+  const usage = usageRes.json<{ organisation_id: string; actions: unknown[] }>();
   if (usage.organisation_id !== ctx.organisationId) {
     throw new Error("AI usage organisation ID mismatch");
   }
 
-  // 3. Call AI competition-brief via API
+  // 5. Call AI competition-brief via API (exercises quota check, ledger, and fallback boundaries)
   const briefRes = await ctx.request({
     method: "POST",
     url: `/api/v1/organisations/${ctx.organisationId}/ai/competition-brief`,
@@ -1040,8 +1244,11 @@ async function runScenario9(ctx: SimContext): Promise<void> {
     },
     expectedStatuses: [200],
   });
-  const brief = briefRes.json<{ proposal?: unknown }>();
-  if (!brief) throw new Error("AI competition brief returned empty response");
+  const brief = briefRes.json<{
+    status: string;
+    usage?: { actions: Array<{ action: string; remaining_units: number }> };
+  }>();
+  if (!brief || !brief.status) throw new Error("AI competition brief returned empty response");
 }
 
 // ---------------------------------------------------------------------------
