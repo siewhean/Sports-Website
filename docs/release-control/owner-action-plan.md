@@ -4,7 +4,7 @@ Prepared 11 October 2026; no provider changes, payments or live procedures perfo
 
 ## A. Facts to provide privately
 
-Supply legal business name, UEN/registration, registered address, monitored DPO and support contacts, Singapore dispute forum reviewed by counsel, release scope (private/public/paid), beta participants, outage tolerance and required RPO/RTO. Do not paste credentials. Replace the five `legalPlaceholders` in `packages/ui/src/legal.ts` through a reviewed source change and update policy date/provider list. Confirm US-West/Phoenix disclosures match actual processing; do not describe OCI as Singapore without evidence. Technical privacy/export/deletion/retention controls remain mandatory. Counsel sign-off is `DEFERRED_TO_FIRST_COMMERCIAL_RELEASE`; human-only exercises remain `WAIVED_NOT_EXECUTED` if not done.
+Supply legal business name, UEN/registration, registered address, monitored DPO and support contacts, Singapore dispute forum reviewed by counsel, release scope (private/public/paid), beta participants, outage tolerance and the architecture decision needed to meet the existing provisional ADR0001 durability targets. Do not paste credentials. Replace the five `legalPlaceholders` in `packages/ui/src/legal.ts` through a reviewed source change and update policy date/provider list. Confirm US-West/Phoenix disclosures match actual processing; do not describe OCI as Singapore without evidence. Technical privacy/export/deletion/retention controls remain mandatory. Counsel sign-off is `DEFERRED_TO_FIRST_COMMERCIAL_RELEASE`; human-only exercises remain `WAIVED_NOT_EXECUTED` if not done.
 
 ## B. Accounts / configuration approvals
 
@@ -27,7 +27,7 @@ Current setup is not proof of delivery or operation. Follow actual provider cons
 
 ## C. Decisions requiring approval
 
-1. Resolve binding backup discrepancy: 15-minute WAL recovery,30-day daily/90-day weekly retention,monthly restores,cross-region versus current nightly14/8/quarterly/single-region. Approve compliant engineering or submit formal architecture decision; nobody may waive it in this checklist.
+1. Resolve the binding architecture/recovery discrepancy against [provisional ADR0001](../decisions/0001-phase0-architecture-contracts.md): acknowledged writes require RPO 0 for process, host and availability-zone failure using managed multi-AZ PostgreSQL; full regional disaster requires RPO no more than 15 minutes and RTO under one hour using WAL/PITR and cross-region backups. Original Gate F additionally requires 30-day daily/90-day weekly retention and monthly restores. Current single-host nightly14/8/quarterly/single-region source does not establish these targets; actual measured RPO/RTO remain UNKNOWN. Approve compliant topology and recovery engineering, or review a formal architecture-decision proposal with explicit costs, failure scope and residual risk. A new decision requires owner approval; no waiver or relaxed target is approved by this checklist.
 2. Approve private-beta scope, participants, support coverage, acceptable outage and pilot timing. Payments remain excluded unless separately certified. Public/commercial dates depend on real gates, not estimated engineering completion.
 3. Approve provider spend, data-processing terms, geography/disclosures, account-deletion/Auth0 procedure, DPO response process and legal review before first paid release.
 4. Approve independent deployment operator, window, rollback/incident authority and exact-SHA release only after combined source/CI review. No main merge authorization is implied.
