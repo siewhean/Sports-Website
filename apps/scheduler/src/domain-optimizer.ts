@@ -123,6 +123,7 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
       // back-to-back count is then a ceiling: a greedy candidate with more back-to-backs is never
       // offered, so "0 back-to-backs when a witness exists" holds whatever the score weights say.
       let backToBackCeiling = Number.POSITIVE_INFINITY;
+      let pending: GeneratedSchedule | null = null;
       const preserving = request.input.constraints.preserve_existing_schedule.mode !== "ignored";
       const restAware = await session.request<GeneratedSchedule | false>(
         { operation: "rest_aware", iteration: request.startIteration },
@@ -132,11 +133,18 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
       if (restAware === null) return;
       if (restAware !== false && restAware.validation.valid && restAware.quality.valid) {
         backToBackCeiling = restAware.backToBackCount;
-        if (restAware.quality.score > bestScore) {
-          bestScore = restAware.quality.score;
-          yield toYield(restAware);
-        }
+        // Held back until the first greedy candidate is scored, so the first schedule offered is
+        // already the better of the two. A best that changes moments after it appears makes an
+        // organiser's "use schedule" refer to a superseded option.
+        if (restAware.quality.score > bestScore) pending = restAware;
       }
+      const offerPending = function* () {
+        if (pending === null) return;
+        if (pending.quality.score > bestScore) bestScore = pending.quality.score;
+        const held = pending;
+        pending = null;
+        yield toYield(held);
+      };
       const endIteration = request.startIteration + this.#maxIterationsPerRun;
       for (let iteration = request.startIteration; iteration < endIteration; iteration += 1) {
         if (request.signal.aborted) return;
@@ -165,6 +173,15 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
               chosen = improved;
             }
           }
+          const beatsPending =
+            pending !== null &&
+            chosen.backToBackCount <= backToBackCeiling &&
+            chosen.quality.score > pending.quality.score;
+          if (pending !== null && !beatsPending) {
+            yield* offerPending();
+            if (request.signal.aborted) return;
+          }
+          pending = null;
           // Raised even when the candidate is not offered, so local search is spent once per
           // score level rather than on every iteration that the ceiling then rejects.
           if (chosen.quality.score > bestScore) bestScore = chosen.quality.score;
@@ -177,6 +194,8 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
         }
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
+      // No greedy candidate at all (or none valid): the rest-aware schedule is still offered.
+      yield* offerPending();
     } finally {
       if (this.#activeSessions.get(request.input) === session) this.#activeSessions.delete(request.input);
       session.close();
