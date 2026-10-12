@@ -82,7 +82,7 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
   const summary = {
     qa_item: "GATE-F-PRODUCTION-SIMULATION",
     candidate_sha: sha,
-    simulation_environment: "isolated_staging_simulation_stack",
+    simulation_environment: "source_audits_only",
     verdict: "PENDING",
     production_certification: false,
     pending_reasons: pendingReasons,

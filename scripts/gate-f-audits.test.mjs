@@ -276,6 +276,7 @@ test("runGateFProductionSimulation executes all components", async () => {
     const res = await runGateFProductionSimulation(SHA, { artifactsDir });
     assert.equal(res.verdict, "PENDING");
     assert.equal(res.production_certification, false);
+    assert.equal(res.simulation_environment, "source_audits_only");
     assert.equal(res.components.migration_expand_contract, "PASS");
     assert.equal(res.components.zero_downtime_rollback, "PENDING");
     assert.equal(res.components.backup_restore, "PENDING");
