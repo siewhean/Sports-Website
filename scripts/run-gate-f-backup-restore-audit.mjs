@@ -105,6 +105,12 @@ async function validateEvidence(evidence, candidateSha, evidenceFile, maxEvidenc
     text(r.host_id) &&
     r.database_id !== e.source?.database_id &&
     r.host_id !== e.source?.host_id, "isolated_restore_target");
+  require(Number.isFinite(e.recovery?.measured_rpo_seconds) &&
+    e.recovery.measured_rpo_seconds >= 0 &&
+    e.recovery.measured_rpo_seconds <= 900, "recovery_rpo_budget_15_minutes");
+  require(Number.isFinite(e.recovery?.measured_rto_seconds) &&
+    e.recovery.measured_rto_seconds > 0 &&
+    e.recovery.measured_rto_seconds < 3600, "recovery_rto_budget_under_one_hour");
   const dates = [b.created_at, b.recovered_through_at, r.started_at, r.completed_at, e.captured_at];
   require(dates.every(timestamp), "UTC_timestamps");
   if (dates.every(timestamp)) {
@@ -225,6 +231,10 @@ export async function runGateFBackupRestoreAudit(candidateSha, options = {}) {
     qa_item: "OPS-011",
     candidate_sha: candidateSha,
     evidence_scope: "production_backup_and_isolated_restore",
+    // Even an in-budget isolated restore proves neither regional failure recovery
+    // nor zero loss of acknowledged writes across host/AZ failure.
+    regional_disaster_recovery_verified: false,
+    host_az_rpo_zero_verified: false,
     schedule_contract: {
       wal_archiving_interval_minutes: BACKUP_SCHEDULE_CONTRACT.wal_archiving_interval_minutes,
       frequency: BACKUP_SCHEDULE_CONTRACT.frequency,
@@ -253,8 +263,16 @@ export async function runGateFBackupRestoreAudit(candidateSha, options = {}) {
       {
         qa_item: "OPS-012",
         candidate_sha: candidateSha,
+        evidence_scope: "REGIONAL_DISASTER_RECOVERY_NOT_EXECUTED",
+        failure_mode: "NOT_VERIFIED",
+        required_failure_mode: "full_region_loss",
+        required_regional_rpo_max_seconds: 900,
+        required_regional_rto_less_than_seconds: 3600,
         verdict: "PENDING",
-        pending_reasons: ["independent_disaster_recovery_evidence_required"],
+        pending_reasons: [
+          "independent_disaster_recovery_evidence_required",
+          "qualified_regional_failure_mode_and_in_budget_recovery_not_verified",
+        ],
         generated_at: new Date().toISOString(),
       },
       null,
