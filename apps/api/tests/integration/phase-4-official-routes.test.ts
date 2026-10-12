@@ -2112,7 +2112,8 @@ describe("Phase 4 Officials & Availability API (Checkpoint 3)", () => {
       const daily = body.diagnostics.find((item) => item.code === "maximum_matches_per_day");
       expect(daily).toMatchObject({ severity: "required" });
       expect(daily!.match_ids.length).toBeGreaterThan(0);
-      expect(daily!.message).toContain("Team 1");
+      // The message names up to six entries in id order (random UUIDs), so any entry name may appear.
+      expect(daily!.message).toMatch(/Team \d/);
       expect(daily!.message).toContain("over 1 day(s)");
       expect(daily!.message).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
     });
