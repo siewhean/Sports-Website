@@ -363,6 +363,8 @@ export type Phase2DomainAdapter = {
     entries: readonly { id: string; name: string; seed: number }[];
     /** Phase 4 materialises stable database match IDs from canonical graph IDs. */
     graphMatchIds?: Readonly<Record<string, string>>;
+    /** Entry IDs in rank order for each completed V1 pool, keyed by pool (or round-robin stage) ID. */
+    groupRankings?: Readonly<Record<string, readonly string[]>>;
   }): { bracket: unknown; conflicts?: unknown };
   correctionConflicts(input: {
     format: Record<string, unknown>;
@@ -5178,14 +5180,45 @@ export class Phase2Runtime {
       ),
       "Format not found",
     );
-    const graphMatches = await tx.unsafe<{ id: string; graph_match_id: string | null }>(
-      `SELECT id,graph_match_id FROM matches WHERE format_revision_id=$1 AND graph_match_id IS NOT NULL`,
+    const graphMatches = await tx.unsafe<{
+      id: string;
+      graph_match_id: string | null;
+      graph_stage_id: string | null;
+      graph_pool_id: string | null;
+      graph_purpose: string | null;
+    }>(
+      `SELECT id,graph_match_id,graph_stage_id,graph_pool_id,graph_purpose
+       FROM matches WHERE format_revision_id=$1 AND graph_match_id IS NOT NULL`,
       [format.id],
     );
     const graphMatchIds = Object.fromEntries(
       graphMatches.flatMap((match) => (match.graph_match_id ? [[match.graph_match_id, match.id]] : [])),
     );
-    const bracket = this.domain.resolveBracket({ format: format.definition, results, entries, graphMatchIds });
+    // A V1 pool feeds later stages only once all of its matches have results,
+    // and is ranked with the sport's own standings rules.
+    const poolMatchIds = new Map<string, Set<string>>();
+    for (const match of graphMatches) {
+      const poolId = match.graph_purpose === "pool" ? (match.graph_pool_id ?? match.graph_stage_id) : null;
+      if (poolId) poolMatchIds.set(poolId, (poolMatchIds.get(poolId) ?? new Set<string>()).add(match.id));
+    }
+    const groupRankings: Record<string, readonly string[]> = {};
+    for (const [poolId, matchIds] of poolMatchIds) {
+      const poolResults = standingsResults.filter((result) => matchIds.has(result.matchId));
+      if (poolResults.length !== matchIds.size) continue;
+      const poolEntryIds = new Set(poolResults.flatMap((result) => [result.homeEntryId, result.awayEntryId]));
+      groupRankings[poolId] = calculateStandings(
+        entries.filter((entry) => poolEntryIds.has(entry.id)),
+        poolResults,
+        standingsConfig,
+      ).map((row) => row.entryId);
+    }
+    const bracket = this.domain.resolveBracket({
+      format: format.definition,
+      results,
+      entries,
+      graphMatchIds,
+      groupRankings,
+    });
     const resolved = bracket.bracket as {
       matches?: readonly { matchId: string; homeEntryId: string | null; awayEntryId: string | null }[];
     };
@@ -5235,7 +5268,9 @@ export class Phase2Runtime {
           controlled: boolean;
         }>(
           `SELECT a.entry_id,a.control,m.state,
-                  EXISTS (SELECT 1 FROM match_dependencies md WHERE md.match_id=m.id AND md.slot=$2) AS controlled
+                  (EXISTS (SELECT 1 FROM match_dependencies md WHERE md.match_id=m.id AND md.slot=$2)
+                   OR EXISTS (SELECT 1 FROM format_match_sources fms WHERE fms.match_id=m.id AND fms.slot=$2
+                     AND fms.source_kind IN ('stage_rank','winner','loser'))) AS controlled
            FROM matches m
            LEFT JOIN advancement_slots a ON a.match_id=m.id AND a.slot=$2
            WHERE m.id=$1 FOR UPDATE OF m`,
