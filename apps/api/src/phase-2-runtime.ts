@@ -43,6 +43,8 @@ import {
 /** Public segment/time detail derived from a reducer state or a persisted result snapshot. */
 function publicScoreDetails(
   raw: unknown,
+  /** Only published result snapshots may carry the walkover flag; live, unfinalised state never does. */
+  published = false,
 ): Pick<PublicMatchResult, "current_segment" | "segments" | "recorded_time_seconds" | "walkover"> {
   const state =
     typeof raw === "string" ? jsonValue<Record<string, unknown>>(raw) : (raw as Record<string, unknown> | null);
@@ -70,7 +72,7 @@ function publicScoreDetails(
     recorded_time_seconds: lastTimed ? (lastTimed.manualTimeSeconds as number) : null,
     // A walkover/forfeit keeps the sport pack's forfeit scoreline in home_score/away_score;
     // this flag lets clients present it as "W/O" instead of a played score.
-    ...(state.exceptionalOutcome === "walkover" && (state.winner === "home" || state.winner === "away")
+    ...(published && state.exceptionalOutcome === "walkover" && (state.winner === "home" || state.winner === "away")
       ? { walkover: { winner: state.winner as "home" | "away" } }
       : {}),
   };
@@ -5608,7 +5610,7 @@ export class Phase2Runtime {
       away_score: match.away_score,
       state: match.state,
       updated_at: serializedDate(match.created_at),
-      ...publicScoreDetails(match.snapshot),
+      ...publicScoreDetails(match.snapshot, true),
     }));
     const liveCutoff = liveMatchStaleCutoff(this.now(), this.liveMatchStaleAfterMs);
     const liveMatches = await tx.unsafe<{
@@ -5697,16 +5699,34 @@ export class Phase2Runtime {
             [competitionId],
           )
         : [];
-    const groupsByDivision = new Map<string, Array<{ id: string; entry_ids: string[] }>>();
+    // Public-safety: the internal graph pool/stage ids never leave the API. Groups are published as
+    // positional letters (A, B, ...) in deterministic pool order, and entry_ids are restricted to
+    // entries already present in the division's published standings rows (which carry entryId).
+    const poolsByDivision = new Map<string, Map<string, string[]>>();
     for (const row of poolMembership) {
-      const groups = groupsByDivision.get(row.division_id) ?? [];
-      let group = groups.find((candidate) => candidate.id === row.pool_id);
-      if (!group) {
-        group = { id: row.pool_id, entry_ids: [] };
-        groups.push(group);
-      }
-      group.entry_ids.push(row.entry_id);
-      groupsByDivision.set(row.division_id, groups);
+      const pools = poolsByDivision.get(row.division_id) ?? new Map<string, string[]>();
+      pools.set(row.pool_id, [...(pools.get(row.pool_id) ?? []), row.entry_id]);
+      poolsByDivision.set(row.division_id, pools);
+    }
+    const groupsByDivision = new Map<string, Array<{ id: string; entry_ids: string[] }>>();
+    for (const [divisionId, pools] of poolsByDivision) {
+      const snapshot = standingsByDivision.get(divisionId);
+      const rows = snapshot ? jsonValue<unknown>(snapshot.standings) : [];
+      const publishedEntryIds = new Set(
+        (Array.isArray(rows) ? rows : []).flatMap((row) =>
+          row && typeof row === "object" && typeof (row as { entryId?: unknown }).entryId === "string"
+            ? [(row as { entryId: string }).entryId]
+            : [],
+        ),
+      );
+      const groups = [...pools.keys()]
+        .sort()
+        .map((poolId, index) => ({
+          id: String.fromCharCode(65 + (index % 26)) + (index >= 26 ? String(Math.floor(index / 26)) : ""),
+          entry_ids: pools.get(poolId)!.filter((entryId) => publishedEntryIds.has(entryId)),
+        }))
+        .filter((group) => group.entry_ids.length > 0);
+      groupsByDivision.set(divisionId, groups);
     }
     const bracketByDivision = new Map(bracket.map((snapshot) => [snapshot.division_id, snapshot]));
     const publicDivisions: PublicDivisionProjection[] = divisions.map((division) => {

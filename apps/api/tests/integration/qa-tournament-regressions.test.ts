@@ -287,10 +287,21 @@ describeInfrastructure("QA mock-tournament regressions", () => {
     );
     expect(poolIds.size).toBeGreaterThan(1);
     const groups = (division.standings as { groups?: Array<{ id: string; entry_ids: string[] }> }).groups;
-    expect(groups?.map((group) => group.id).sort()).toEqual([...poolIds].sort());
+    // Public-safety: groups are positional letters, never internal graph pool/stage ids.
+    expect(groups?.map((group) => group.id)).toEqual(["A", "B"].slice(0, poolIds.size));
     const members = groups!.flatMap((group) => group.entry_ids);
     expect(new Set(members).size).toBe(members.length);
     expect(members).toEqual(expect.arrayContaining([first.home_entry_id, first.away_entry_id]));
+    // Every group member is already public as a standings row entryId.
+    const standingRows = (division.standings as { standings: Array<{ entryId: string }> }).standings;
+    const publicEntryIds = new Set(standingRows.map((row) => row.entryId));
+    expect(members.every((entryId) => publicEntryIds.has(entryId!))).toBe(true);
+    // The new group field carries no internal graph pool ids as values.
+    const serialisedGroups = JSON.stringify(groups);
+    for (const poolId of poolIds) expect(serialisedGroups).not.toContain(`"${poolId}"`);
+    const serialised = JSON.stringify(projection);
+    expect(serialised).not.toContain("graph_pool_id");
+    expect(serialised).not.toContain("walkover_winner");
   });
 
   it("withdraws an entry mid-group after a completed set-sport match", async () => {
