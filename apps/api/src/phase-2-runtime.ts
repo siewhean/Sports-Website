@@ -29,6 +29,7 @@ import {
 import type { PostgresJsSql } from "@matchday/identity";
 import type { CompetitionPublicationNotifier } from "./competition-publication-notifier.js";
 import { standingsResultFromSnapshot } from "./standings-results.js";
+import { RepairRepository } from "./repositories/repair.repository.js";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import { applyLiveOverlay, liveOverlayRowsSql, liveOverlayUpdatedAt, parseLiveOverlay } from "./public-live-overlay.js";
 import {
@@ -4855,6 +4856,9 @@ export class Phase2Runtime {
           actor.accountId,
         ],
       );
+      // The insert above creates this correction's result repair case (DB trigger); close any older
+      // unpublished case for the same match now, on the write, so reads never mutate (Track R2.3).
+      await new RepairRepository(tx).reconcileStaleCases(competitionId, tx, matchId);
       const conflicts = await tx.unsafe<{
         id: string;
         corrected_match_id: string;
