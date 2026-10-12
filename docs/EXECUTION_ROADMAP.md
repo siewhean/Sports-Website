@@ -230,14 +230,14 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 - R1.3 A CI job (`.github/workflows/tournament-simulation.yml`) that runs the simulation against a fresh database on every PR touching `apps/api`, `apps/scheduler` or `packages/domain` (`fast` profile) and nightly (`full` profile).
 - R1.4 A 5xx budget check: the simulation fails if any request returns 5xx (zero tolerance budget).
 - R1.5 Document `SCORING_ACCESS_RATE_LIMIT_HMAC_KEYRING` and `SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT` in `.env.example` and verified clean environment template test suite.
-- R1.6 Integration-test environment: suites that need `DATABASE_URL` (`account-data-rights`, `casual-routes`) get safe fallbacks from the shared test setup.
+- R1.6 Integration-test environment: suites that need `DATABASE_URL` (`account-data-rights`, `casual-routes`) fail loudly when unconfigured, preventing test runs from touching production/default databases.
 
 **Checkpoint CP1 — Correctness baseline**
 
-- [x] PRs #97, #98, #99 merged; `main` green on all required checks.
-- [x] `pnpm simulate:tournament` completes all nine scenarios locally and in CI with zero 5xx responses.
-- [x] Groups → knockout → final advancement verified for championship-focus, full-placement and compact-knockout templates in all five sports.
-- [x] A fresh clone boots against a fresh database using only `.env.example` values.
+- [ ] PRs #97, #98, #99 merged; `main` green on all required checks.
+- [ ] `pnpm simulate:tournament` completes all nine scenarios locally and in CI with zero 5xx responses.
+- [ ] Groups → knockout → final advancement verified for championship-focus, full-placement and compact-knockout templates in all five sports.
+- [ ] A fresh clone boots against a fresh database using only `.env.example` values.
 
 ---
 

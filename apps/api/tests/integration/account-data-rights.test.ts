@@ -13,7 +13,7 @@ import { PdpaRetentionJob } from "../../src/pdpa-retention.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
-const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
+const databaseUrl = process.env.DATABASE_URL ?? "";
 const schema = `test_pdpa_${randomUUID().replaceAll("-", "")}`;
 const origin = "http://localhost:3000";
 type ExportBody = {
