@@ -1080,6 +1080,10 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     expect(checkpointed.explored_candidates).toBeGreaterThanOrEqual(1);
     if (!checkpointed.current_best_option_id || !checkpointed.current_best)
       throw new Error("Expected a current-best option");
+    // Regression: the options list once selected a non-existent `warnings` column and always failed.
+    const options = await journeyRuntime.listScheduleOptions({ accountId }, generated.job.id);
+    expect(options.map((option) => option.id)).toContain(checkpointed.current_best_option_id);
+    expect(options.every((option) => option.job_id === generated.job.id)).toBe(true);
     const accepted = await journeyRuntime.acceptScheduleOption(
       { accountId },
       generated.job.id,

@@ -12,6 +12,8 @@ import {
   type BalancedCanoePoloFormat,
   type CanoePoloResult,
   type CanoePoloScoreEvent,
+  type FormatGraph,
+  type FormatParticipantSource,
   type MatchNode,
   type MatchParticipantSource,
 } from "@matchday/domain";
@@ -244,7 +246,7 @@ export const phase2DomainAdapter: Phase2DomainAdapter = {
     return { standings, explanation: standings.map((row) => ({ entry_id: row.entryId, rules: row.explanations })) };
   },
 
-  resolveBracket({ format, results, entries }) {
+  resolveBracket({ format, results, entries, graphMatchIds, groupRankings: v1GroupRankings }) {
     const domainResults: CanoePoloResult[] = results
       .filter((result) => result.homeEntryId !== null && result.awayEntryId !== null)
       .map((result, index) => ({
@@ -258,12 +260,40 @@ export const phase2DomainAdapter: Phase2DomainAdapter = {
       }));
     const parsed = formatValue(format);
     // V1 uses the Phase 3 canonical graph format. It has no legacy `groups`
-    // array for this adapter to resolve; its advancement is already owned by
-    // the graph projection. A round-robin finalisation must still publish its
-    // result and standings rather than failing while attempting a second,
-    // incompatible bracket interpretation.
+    // array; its derived slots resolve from the runtime's rankings of completed
+    // pools (sport-specific standings) and from the finalised winner/loser of
+    // the source graph match.
     if (!Array.isArray(parsed.groups)) {
-      return { bracket: { matches: [], qualifiedEntryIds: [], championEntryId: null } };
+      const graph = parsed as unknown as Partial<FormatGraph>;
+      if (!Array.isArray(graph.matches)) {
+        return { bracket: { matches: [], qualifiedEntryIds: [], championEntryId: null } };
+      }
+      const resultByGraphId = new Map<string, (typeof results)[number]>();
+      for (const [graphId, matchId] of Object.entries(graphMatchIds ?? {})) {
+        const result = results.find((candidate) => candidate.matchId === matchId);
+        if (result) resultByGraphId.set(graphId, result);
+      }
+      // undefined: not a derived slot; null: derived but not yet decided.
+      const resolveSource = (source: FormatParticipantSource): string | null | undefined => {
+        if (source.type === "stage_rank") {
+          return v1GroupRankings?.[source.groupId ?? source.stageId]?.[source.rank - 1] ?? null;
+        }
+        if (source.type === "winner" || source.type === "loser") {
+          const result = resultByGraphId.get(source.matchId);
+          if (!result?.homeEntryId || !result.awayEntryId || result.homeScore === result.awayScore) return null;
+          const homeWon = result.homeScore > result.awayScore;
+          return homeWon === (source.type === "winner") ? result.homeEntryId : result.awayEntryId;
+        }
+        return undefined;
+      };
+      const matches = graph.matches.flatMap((match) => {
+        const matchId = graphMatchIds?.[match.id];
+        const home = resolveSource(match.home);
+        const away = resolveSource(match.away);
+        if (!matchId || (home === undefined && away === undefined)) return [];
+        return [{ matchId, homeEntryId: home ?? null, awayEntryId: away ?? null }];
+      });
+      return { bracket: { matches, qualifiedEntryIds: [], championEntryId: null } };
     }
     const groupRankings = Object.fromEntries(
       parsed.groups.map((group) => {
