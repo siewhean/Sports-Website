@@ -125,12 +125,29 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
       let backToBackCeiling = Number.POSITIVE_INFINITY;
       let pending: GeneratedSchedule | null = null;
       const preserving = request.input.constraints.preserve_existing_schedule.mode !== "ignored";
-      const restAware = await session.request<GeneratedSchedule | false>(
-        { operation: "rest_aware", iteration: request.startIteration },
+      // The search budget follows the yield deadline (about 20 nodes per millisecond leaves a wide
+      // margin on slow runners): 120 000 nodes at the 30 s production default.
+      const constructedRestAware = await session.request<GeneratedSchedule | false>(
+        {
+          operation: "rest_aware",
+          iteration: request.startIteration,
+          maxNodes: Math.max(1_000, Math.min(120_000, Math.floor(request.maxYieldIntervalMs * 20))),
+        },
         request.signal,
         request.maxYieldIntervalMs,
       );
-      if (restAware === null) return;
+      if (constructedRestAware === null) return;
+      let restAware: GeneratedSchedule | false = constructedRestAware;
+      if (restAware !== false) {
+        const improved = await session.request<GeneratedSchedule>(
+          { operation: "improve", iteration: request.startIteration, assignments: restAware.candidate.assignments },
+          request.signal,
+          request.maxYieldIntervalMs,
+        );
+        if (improved === null) return;
+        if (improved.validation.valid && improved.quality.valid && improved.quality.score >= restAware.quality.score)
+          restAware = improved;
+      }
       if (restAware !== false && restAware.validation.valid && restAware.quality.valid) {
         backToBackCeiling = restAware.backToBackCount;
         // Held back until the first greedy candidate is scored, so the first schedule offered is
@@ -178,8 +195,11 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
             chosen.backToBackCount <= backToBackCeiling &&
             chosen.quality.score > pending.quality.score;
           if (pending !== null && !beatsPending) {
+            // One candidate per iteration: the processor requires strictly increasing iterations,
+            // and a greedy candidate that does not beat the rest-aware one cannot win anyway.
+            if (chosen.quality.score > bestScore) bestScore = chosen.quality.score;
             yield* offerPending();
-            if (request.signal.aborted) return;
+            continue;
           }
           pending = null;
           // Raised even when the candidate is not offered, so local search is spent once per

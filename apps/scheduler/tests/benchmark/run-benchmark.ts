@@ -38,7 +38,13 @@ export type ScenarioResult = {
   matches: number;
   slots: number;
   iterations: number;
+  /** Wall clock for the whole job. */
   jobTimeMs: number;
+  /**
+   * CPU time this test process spent on the job (main thread plus solver thread). Unlike wall
+   * clock it does not grow when other suites share the runner, so CI asserts the targets on it.
+   */
+  jobCpuMs: number;
   /** null: the job found no schedule (no_solution). */
   metrics: ScheduleMetrics | null;
   assignments: readonly ScheduleAssignment[] | null;
@@ -89,7 +95,9 @@ export async function runScenario(scenario: BenchmarkScenario): Promise<Scenario
   const optimizer = new DomainScheduleOptimizer({ maxIterationsPerRun: iterations, workerExecArgv: [] });
   const signal = new AbortController().signal;
   const started = performance.now();
+  const cpuStart = process.cpuUsage();
   let best: ScheduleJobResult | null = null;
+  let lastIteration = -1;
   for await (const candidate of optimizer.optimize({
     input,
     seed: null,
@@ -97,10 +105,16 @@ export async function runScenario(scenario: BenchmarkScenario): Promise<Scenario
     signal,
     maxYieldIntervalMs: 60_000,
   })) {
+    // The processor rejects a run whose iterations do not strictly increase.
+    if (candidate.iteration <= lastIteration)
+      throw new Error(`${scenario.id}: iteration ${candidate.iteration} repeated`);
+    lastIteration = candidate.iteration;
     const verified = await optimizer.verifyCandidate(input, candidate.result, { signal, maxYieldIntervalMs: 60_000 });
     if (verified !== null && isStrictImprovement(verified, best)) best = verified;
   }
   const jobTimeMs = Math.round(performance.now() - started);
+  const cpu = process.cpuUsage(cpuStart);
+  const jobCpuMs = Math.round((cpu.user + cpu.system) / 1000);
   const assignments = best?.assignments.map(toDomainAssignment) ?? null;
   return {
     id: scenario.id,
@@ -110,6 +124,7 @@ export async function runScenario(scenario: BenchmarkScenario): Promise<Scenario
     slots: scenario.problem.slots.length,
     iterations,
     jobTimeMs,
+    jobCpuMs,
     metrics: assignments ? scheduleMetrics(scenario.problem, assignments) : null,
     assignments,
     diagnostics:
@@ -178,21 +193,22 @@ export function markdownReport(input: {
     "# Scheduler benchmark (Track R3)",
     "",
     `Generated ${input.generatedAt} by \`pnpm bench:scheduler\` (apps/scheduler/tests/benchmark).`,
-    "Job time is the whole optimiser run (one solver thread, every candidate re-verified).",
+    "Job time is the whole optimiser run (one solver thread, every candidate re-verified), wall clock; CPU is the",
+    "process CPU time for the same run, which CI asserts because it does not grow when suites share a runner.",
     "",
     "## Feasible fixtures",
     "",
-    "| Fixture | Matches / slots | Iterations | Job time | Score | Back-to-backs | Min / avg rest | Rest SD | Days | Court spread | Moved |",
-    "|---|---|---|---|---|---|---|---|---|---|---|",
+    "| Fixture | Matches / slots | Iterations | Job time | CPU | Score | Back-to-backs | Min / avg rest | Rest SD | Days | Court spread | Moved |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|",
   ];
   for (const result of input.results.filter((item) => item.kind === "feasible")) {
     const metrics = result.metrics;
     lines.push(
-      `| ${result.id} | ${result.matches} / ${result.slots} | ${result.iterations} | ${(result.jobTimeMs / 1000).toFixed(2)} s | ` +
+      `| ${result.id} | ${result.matches} / ${result.slots} | ${result.iterations} | ${(result.jobTimeMs / 1000).toFixed(2)} s | ${(result.jobCpuMs / 1000).toFixed(2)} s | ` +
         (metrics
           ? `${metrics.score} | ${metrics.backToBacks} | ${cell(metrics.minimumRestMinutes)} / ${cell(metrics.averageRestMinutes)} | ` +
             `${metrics.restSpreadMinutes} | ${metrics.days} | ${metrics.courtLoadSpreadMinutes} | ${metrics.movedMatches} |`
-          : "**no_solution** | | | | | | |"),
+          : "**no_solution** | | | | | | | |"),
     );
   }
   lines.push("", "## Infeasible fixtures", "", "| Fixture | Job time | Diagnostic | Message |", "|---|---|---|---|");

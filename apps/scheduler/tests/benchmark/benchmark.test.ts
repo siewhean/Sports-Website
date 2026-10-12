@@ -72,7 +72,9 @@ describe("R3 benchmark: feasible fixtures never return no_solution", () => {
 describe("R3 benchmark: job time targets", () => {
   const timed = feasible.filter((scenario) => scenario.expectation.jobTimeTargetMs !== undefined);
   it.each(timed.map((scenario) => [scenario.id, scenario] as const))("%s", (_id, scenario) => {
-    expect(results.get(scenario.id)!.jobTimeMs).toBeLessThanOrEqual(scenario.expectation.jobTimeTargetMs!);
+    // CPU time: wall clock is reported, but in CI this suite shares the runner with every other
+    // package's tests, which inflates wall clock without the solver doing more work.
+    expect(results.get(scenario.id)!.jobCpuMs).toBeLessThanOrEqual(scenario.expectation.jobTimeTargetMs!);
   });
 });
 

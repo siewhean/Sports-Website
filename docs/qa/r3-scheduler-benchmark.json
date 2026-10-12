@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-12T15:45:09.822Z",
+  "generatedAt": "2026-10-12T18:16:35.749Z",
   "node": "v24.18.0",
   "results": [
     {
@@ -9,7 +9,8 @@
       "matches": 28,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 318,
+      "jobTimeMs": 559,
+      "jobCpuMs": 723,
       "metrics": {
         "score": 81.25,
         "backToBacks": 0,
@@ -30,7 +31,8 @@
       "matches": 104,
       "slots": 144,
       "iterations": 64,
-      "jobTimeMs": 5168,
+      "jobTimeMs": 8606,
+      "jobCpuMs": 7878,
       "metrics": {
         "score": 59.72,
         "backToBacks": 0,
@@ -51,7 +53,8 @@
       "matches": 16,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 626,
+      "jobTimeMs": 968,
+      "jobCpuMs": 1226,
       "metrics": {
         "score": 63,
         "backToBacks": 2,
@@ -72,7 +75,8 @@
       "matches": 28,
       "slots": 28,
       "iterations": 64,
-      "jobTimeMs": 730,
+      "jobTimeMs": 1395,
+      "jobCpuMs": 1617,
       "metrics": {
         "score": 75,
         "backToBacks": 4,
@@ -93,7 +97,8 @@
       "matches": 28,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 288,
+      "jobTimeMs": 789,
+      "jobCpuMs": 886,
       "metrics": {
         "score": 63.75,
         "backToBacks": 1,
@@ -114,7 +119,8 @@
       "matches": 28,
       "slots": 32,
       "iterations": 64,
-      "jobTimeMs": 325,
+      "jobTimeMs": 615,
+      "jobCpuMs": 775,
       "metrics": {
         "score": 54,
         "backToBacks": 6,
@@ -135,7 +141,8 @@
       "matches": 66,
       "slots": 72,
       "iterations": 64,
-      "jobTimeMs": 1207,
+      "jobTimeMs": 2582,
+      "jobCpuMs": 3055,
       "metrics": {
         "score": 75.11,
         "backToBacks": 0,
@@ -156,7 +163,8 @@
       "matches": 16,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 341,
+      "jobTimeMs": 771,
+      "jobCpuMs": 783,
       "metrics": {
         "score": 79.75,
         "backToBacks": 0,
@@ -177,7 +185,8 @@
       "matches": 24,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 884,
+      "jobTimeMs": 1418,
+      "jobCpuMs": 1646,
       "metrics": {
         "score": 60,
         "backToBacks": 8,
@@ -198,7 +207,8 @@
       "matches": 32,
       "slots": 72,
       "iterations": 64,
-      "jobTimeMs": 769,
+      "jobTimeMs": 1256,
+      "jobCpuMs": 1464,
       "metrics": {
         "score": 72.75,
         "backToBacks": 0,
@@ -219,7 +229,8 @@
       "matches": 48,
       "slots": 72,
       "iterations": 64,
-      "jobTimeMs": 1912,
+      "jobTimeMs": 3356,
+      "jobCpuMs": 3570,
       "metrics": {
         "score": 61.5,
         "backToBacks": 128,
@@ -240,7 +251,8 @@
       "matches": 96,
       "slots": 216,
       "iterations": 64,
-      "jobTimeMs": 5271,
+      "jobTimeMs": 8915,
+      "jobCpuMs": 8302,
       "metrics": {
         "score": 72.65,
         "backToBacks": 0,
@@ -261,7 +273,8 @@
       "matches": 16,
       "slots": 54,
       "iterations": 64,
-      "jobTimeMs": 400,
+      "jobTimeMs": 749,
+      "jobCpuMs": 845,
       "metrics": {
         "score": 80.53,
         "backToBacks": 0,
@@ -282,7 +295,8 @@
       "matches": 24,
       "slots": 54,
       "iterations": 64,
-      "jobTimeMs": 516,
+      "jobTimeMs": 984,
+      "jobCpuMs": 1147,
       "metrics": {
         "score": 76,
         "backToBacks": 0,
@@ -303,7 +317,8 @@
       "matches": 32,
       "slots": 108,
       "iterations": 64,
-      "jobTimeMs": 1008,
+      "jobTimeMs": 1534,
+      "jobCpuMs": 1876,
       "metrics": {
         "score": 74.79,
         "backToBacks": 0,
@@ -324,7 +339,8 @@
       "matches": 48,
       "slots": 108,
       "iterations": 64,
-      "jobTimeMs": 1480,
+      "jobTimeMs": 2429,
+      "jobCpuMs": 2784,
       "metrics": {
         "score": 59,
         "backToBacks": 32,
@@ -345,7 +361,8 @@
       "matches": 96,
       "slots": 162,
       "iterations": 64,
-      "jobTimeMs": 7714,
+      "jobTimeMs": 10141,
+      "jobCpuMs": 10184,
       "metrics": {
         "score": 60.73,
         "backToBacks": 344,
@@ -366,7 +383,8 @@
       "matches": 16,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 350,
+      "jobTimeMs": 470,
+      "jobCpuMs": 672,
       "metrics": {
         "score": 79.9,
         "backToBacks": 0,
@@ -387,7 +405,8 @@
       "matches": 24,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 848,
+      "jobTimeMs": 1188,
+      "jobCpuMs": 1598,
       "metrics": {
         "score": 60,
         "backToBacks": 8,
@@ -408,7 +427,8 @@
       "matches": 32,
       "slots": 72,
       "iterations": 64,
-      "jobTimeMs": 827,
+      "jobTimeMs": 1268,
+      "jobCpuMs": 1679,
       "metrics": {
         "score": 76.5,
         "backToBacks": 0,
@@ -429,7 +449,8 @@
       "matches": 48,
       "slots": 72,
       "iterations": 64,
-      "jobTimeMs": 1970,
+      "jobTimeMs": 2574,
+      "jobCpuMs": 3410,
       "metrics": {
         "score": 59.71,
         "backToBacks": 120,
@@ -450,7 +471,8 @@
       "matches": 96,
       "slots": 162,
       "iterations": 64,
-      "jobTimeMs": 5711,
+      "jobTimeMs": 7514,
+      "jobCpuMs": 7553,
       "metrics": {
         "score": 58,
         "backToBacks": 90,
@@ -471,7 +493,8 @@
       "matches": 16,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 349,
+      "jobTimeMs": 586,
+      "jobCpuMs": 700,
       "metrics": {
         "score": 79.9,
         "backToBacks": 0,
@@ -492,7 +515,8 @@
       "matches": 24,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 815,
+      "jobTimeMs": 935,
+      "jobCpuMs": 1395,
       "metrics": {
         "score": 60,
         "backToBacks": 8,
@@ -513,7 +537,8 @@
       "matches": 32,
       "slots": 72,
       "iterations": 64,
-      "jobTimeMs": 1000,
+      "jobTimeMs": 1004,
+      "jobCpuMs": 1545,
       "metrics": {
         "score": 76.5,
         "backToBacks": 0,
@@ -534,7 +559,8 @@
       "matches": 48,
       "slots": 72,
       "iterations": 64,
-      "jobTimeMs": 2535,
+      "jobTimeMs": 2313,
+      "jobCpuMs": 3139,
       "metrics": {
         "score": 59.71,
         "backToBacks": 120,
@@ -555,7 +581,8 @@
       "matches": 96,
       "slots": 162,
       "iterations": 64,
-      "jobTimeMs": 6054,
+      "jobTimeMs": 6163,
+      "jobCpuMs": 6963,
       "metrics": {
         "score": 58,
         "backToBacks": 90,
@@ -576,7 +603,8 @@
       "matches": 16,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 335,
+      "jobTimeMs": 347,
+      "jobCpuMs": 539,
       "metrics": {
         "score": 79.75,
         "backToBacks": 0,
@@ -597,7 +625,8 @@
       "matches": 24,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 858,
+      "jobTimeMs": 893,
+      "jobCpuMs": 1330,
       "metrics": {
         "score": 60,
         "backToBacks": 8,
@@ -618,7 +647,8 @@
       "matches": 32,
       "slots": 72,
       "iterations": 64,
-      "jobTimeMs": 768,
+      "jobTimeMs": 816,
+      "jobCpuMs": 1213,
       "metrics": {
         "score": 72.75,
         "backToBacks": 0,
@@ -639,7 +669,8 @@
       "matches": 48,
       "slots": 72,
       "iterations": 64,
-      "jobTimeMs": 1925,
+      "jobTimeMs": 2207,
+      "jobCpuMs": 2936,
       "metrics": {
         "score": 61.5,
         "backToBacks": 128,
@@ -660,7 +691,8 @@
       "matches": 96,
       "slots": 216,
       "iterations": 64,
-      "jobTimeMs": 4939,
+      "jobTimeMs": 7587,
+      "jobCpuMs": 6896,
       "metrics": {
         "score": 72.65,
         "backToBacks": 0,
@@ -681,7 +713,8 @@
       "matches": 28,
       "slots": 12,
       "iterations": 64,
-      "jobTimeMs": 173,
+      "jobTimeMs": 183,
+      "jobCpuMs": 268,
       "metrics": null,
       "diagnostics": [
         {
@@ -697,7 +730,8 @@
       "matches": 28,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 3830,
+      "jobTimeMs": 4107,
+      "jobCpuMs": 4141,
       "metrics": null,
       "diagnostics": [
         {
@@ -713,7 +747,8 @@
       "matches": 28,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 1345,
+      "jobTimeMs": 1313,
+      "jobCpuMs": 1508,
       "metrics": null,
       "diagnostics": [
         {
@@ -729,7 +764,8 @@
       "matches": 16,
       "slots": 24,
       "iterations": 64,
-      "jobTimeMs": 291,
+      "jobTimeMs": 338,
+      "jobCpuMs": 552,
       "metrics": null,
       "diagnostics": [
         {
@@ -749,7 +785,8 @@
       "matches": 28,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 1029,
+      "jobTimeMs": 939,
+      "jobCpuMs": 1142,
       "metrics": null,
       "diagnostics": [
         {
@@ -765,7 +802,8 @@
       "matches": 28,
       "slots": 36,
       "iterations": 64,
-      "jobTimeMs": 152,
+      "jobTimeMs": 162,
+      "jobCpuMs": 231,
       "metrics": null,
       "diagnostics": [
         {
@@ -779,25 +817,25 @@
     {
       "id": "S1 badminton 8 entries, 2 courts, 1 day",
       "formats": 4,
-      "totalMs": 12,
+      "totalMs": 11,
       "statuses": "feasible, feasible, feasible, feasible"
     },
     {
       "id": "S2-like canoe polo 4 x 16 entries, 4 courts, 2 days",
       "formats": 4,
-      "totalMs": 152,
+      "totalMs": 184,
       "statuses": "infeasible, not_checked, feasible, infeasible"
     },
     {
       "id": "48 entries, 6 courts, 3 days",
       "formats": 4,
-      "totalMs": 260,
+      "totalMs": 330,
       "statuses": "feasible, feasible, feasible, infeasible"
     },
     {
       "id": "4 x 48 entries, 8 courts, 3 days",
       "formats": 4,
-      "totalMs": 180,
+      "totalMs": 209,
       "statuses": "infeasible, not_checked, not_checked, infeasible"
     }
   ]

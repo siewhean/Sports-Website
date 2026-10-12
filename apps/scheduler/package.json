@@ -14,7 +14,7 @@
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" --max-warnings=0",
-    "test:unit": "vitest run tests/unit tests/benchmark",
+    "test:unit": "vitest run tests/unit && vitest run tests/benchmark",
     "bench": "SCHEDULER_BENCHMARK_FULL=1 SCHEDULER_BENCHMARK_REPORT=../../docs/qa/r3-scheduler-benchmark vitest run tests/benchmark",
     "test:integration": "vitest run tests/integration --passWithNoTests"
   },

@@ -37,15 +37,15 @@ port.on("message", (message) => {
       const { assignments } = improveSchedule(problem, message.assignments, { seed: message.iteration });
       port.postMessage({ id: message.id, ok: true, result: checked(message.iteration, assignments) });
     } else if (message.operation === "rest_aware") {
-      // Bounded witness search for the fewest back-to-backs, then the same local search. `false`
-      // (not null) when nothing is found, because a null result means "aborted" to the session.
-      const constructed = constructRestAwareSchedule(problem);
-      if (constructed === null) {
-        port.postMessage({ id: message.id, ok: true, result: false });
-      } else {
-        const { assignments } = improveSchedule(problem, constructed.assignments, { seed: message.iteration });
-        port.postMessage({ id: message.id, ok: true, result: checked(message.iteration, assignments) });
-      }
+      // Bounded witness search for the fewest back-to-backs; local search runs as a separate
+      // "improve" request so each request stays within the yield deadline. `false` (not null)
+      // when nothing is found, because a null result means "aborted" to the session.
+      const constructed = constructRestAwareSchedule(problem, { maxNodes: message.maxNodes });
+      port.postMessage({
+        id: message.id,
+        ok: true,
+        result: constructed === null ? false : checked(message.iteration, constructed.assignments),
+      });
     } else if (message.operation === "verify") {
       port.postMessage({
         id: message.id,
