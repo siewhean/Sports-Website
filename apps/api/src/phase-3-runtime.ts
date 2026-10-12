@@ -100,6 +100,10 @@ export type Phase3CapacityResponse = {
     sort_order: number;
     slot_minutes: number;
     fixed_reserve_slots: number;
+    /** Open matches in published/ready-for-review schedules that use this area. */
+    scheduled_match_count: number;
+    /** Dropped from the last capacity save but kept because scheduled matches still use it. */
+    retained: boolean;
     availability: Array<{
       id: string;
       date: string;
@@ -122,10 +126,11 @@ export type Phase3CapacityResponse = {
   effective: ReturnType<Phase3DomainAdapter["capacity"]>;
   affected_matches?: Array<{
     match_id: string;
+    match_code: string;
     playing_area_id: string;
     starts_at: string;
     ends_at: string;
-    reason: string;
+    reason: "playing_area_removed" | "playing_area_unavailable" | "outside_availability_windows";
   }>;
   replan_required?: boolean;
 };
@@ -2343,13 +2348,27 @@ export class Phase3Runtime {
         `SELECT id, name FROM playing_areas WHERE competition_id=$1`,
         [competitionId],
       );
-      const existingByName = new Map(existingAreas.map((a) => [a.name.toLowerCase().trim(), a.id]));
+      // Areas are matched by the id the client echoes back from the capacity view, so a rename
+      // updates the existing court in place. The request contract keeps `id` optional for older
+      // clients; only for those id-less areas do we fall back, explicitly, to an exact
+      // (case/space-insensitive) name match against an existing area that no other submitted area
+      // claims by id. Anything else is a genuinely new court.
+      const claimedIds = new Set(input.areas.flatMap((area) => (area.id ? [area.id] : [])));
+      const unclaimedByName = new Map(
+        existingAreas
+          .filter((area) => !claimedIds.has(area.id))
+          .map((area) => [area.name.toLowerCase().trim(), area.id] as const),
+      );
+      const preparedAreas = input.areas.map((area, index) => {
+        let id = area.id;
+        if (!id) {
+          const nameKey = area.name.toLowerCase().trim();
+          id = unclaimedByName.get(nameKey) ?? randomUUID();
+          unclaimedByName.delete(nameKey);
+        }
+        return { ...area, id, sortOrder: area.sortOrder ?? index };
+      });
 
-      const preparedAreas = input.areas.map((area, index) => ({
-        ...area,
-        id: area.id ?? existingByName.get(area.name.toLowerCase().trim()) ?? randomUUID(),
-        sortOrder: area.sortOrder ?? index,
-      }));
       const availability = preparedAreas.flatMap((area) =>
         area.availability.map((window) => ({
           id: window.id ?? randomUUID(),
@@ -2476,12 +2495,13 @@ export class Phase3Runtime {
 
       const scheduledInReviewOrPublished = await tx.unsafe<{
         match_id: string;
+        match_code: string;
         playing_area_id: string;
         starts_at: Date | string;
         ends_at: Date | string;
         state: string;
       }>(
-        `SELECT sm.match_id, sm.playing_area_id, sm.starts_at, sm.ends_at, m.state
+        `SELECT sm.match_id, m.code AS match_code, sm.playing_area_id, sm.starts_at, sm.ends_at, m.state
          FROM scheduled_matches sm
          JOIN schedule_revisions sr ON sr.id = sm.schedule_revision_id
          JOIN matches m ON m.id = sm.match_id
@@ -2493,10 +2513,11 @@ export class Phase3Runtime {
 
       const affectedMatches: Array<{
         match_id: string;
+        match_code: string;
         playing_area_id: string;
         starts_at: string;
         ends_at: string;
-        reason: string;
+        reason: "playing_area_removed" | "playing_area_unavailable" | "outside_availability_windows";
       }> = [];
 
       if (scheduledInReviewOrPublished.length > 0) {
@@ -2511,6 +2532,7 @@ export class Phase3Runtime {
           if (!preparedIdSet.has(match.playing_area_id)) {
             affectedMatches.push({
               match_id: match.match_id,
+              match_code: match.match_code,
               playing_area_id: match.playing_area_id,
               starts_at: new Date(match.starts_at).toISOString(),
               ends_at: new Date(match.ends_at).toISOString(),
@@ -2528,6 +2550,7 @@ export class Phase3Runtime {
           if (hasUnavailableOverlap) {
             affectedMatches.push({
               match_id: match.match_id,
+              match_code: match.match_code,
               playing_area_id: match.playing_area_id,
               starts_at: new Date(match.starts_at).toISOString(),
               ends_at: new Date(match.ends_at).toISOString(),
@@ -2545,6 +2568,7 @@ export class Phase3Runtime {
           if (!fitsAvailability) {
             affectedMatches.push({
               match_id: match.match_id,
+              match_code: match.match_code,
               playing_area_id: match.playing_area_id,
               starts_at: new Date(match.starts_at).toISOString(),
               ends_at: new Date(match.ends_at).toISOString(),
@@ -2766,15 +2790,22 @@ export class Phase3Runtime {
       sort_order: number;
       slot_minutes: number;
       fixed_reserve_slots: number;
+      scheduled_match_count: number;
+      retained: boolean;
     }>(
-      `SELECT pa.id,pa.name,pa.sort_order,COALESCE(pa.slot_minutes,30)::int AS slot_minutes,pa.fixed_reserve_slots
+      // Every area is listed. An area dropped from the last capacity save is kept (not deleted)
+      // while scheduled matches still reference it; it has no availability and is flagged
+      // `retained` with its open scheduled-match count so the organiser can re-plan those matches.
+      `SELECT pa.id,pa.name,pa.sort_order,COALESCE(pa.slot_minutes,30)::int AS slot_minutes,pa.fixed_reserve_slots,
+         (SELECT count(*)::int FROM scheduled_matches sm
+            JOIN schedule_revisions sr ON sr.id=sm.schedule_revision_id
+            JOIN matches m ON m.id=sm.match_id
+           WHERE sm.playing_area_id=pa.id AND sr.status IN ('published','ready_for_review')
+             AND m.state NOT IN ('final','corrected')) AS scheduled_match_count,
+         NOT EXISTS (SELECT 1 FROM competition_availability_windows caw WHERE caw.playing_area_id=pa.id)
+           AND EXISTS (SELECT 1 FROM scheduled_matches sm WHERE sm.playing_area_id=pa.id) AS retained
        FROM playing_areas pa
        WHERE pa.competition_id=$1
-         AND (
-           EXISTS (SELECT 1 FROM competition_availability_windows caw WHERE caw.playing_area_id=pa.id)
-           OR EXISTS (SELECT 1 FROM playing_area_unavailable_intervals pau WHERE pau.playing_area_id=pa.id)
-           OR NOT EXISTS (SELECT 1 FROM competition_availability_windows WHERE competition_id=$1)
-         )
        ORDER BY pa.sort_order,pa.id`,
       [competitionId],
     );
@@ -2857,6 +2888,8 @@ export class Phase3Runtime {
         sort_order: area.sort_order,
         slot_minutes: area.slot_minutes,
         fixed_reserve_slots: area.fixed_reserve_slots,
+        scheduled_match_count: area.scheduled_match_count,
+        retained: area.retained,
         availability: available
           .filter((window) => window.area_id === area.id)
           .map((window) => ({

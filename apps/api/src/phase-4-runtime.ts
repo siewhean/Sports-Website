@@ -4649,6 +4649,18 @@ export class Phase4Runtime {
     });
   }
 
+  /**
+   * Competition-day delay tool (Track R2.2). Two explicit modes:
+   * - time delay: `delay_minutes > 0`, optionally filtered to one `playing_area_id` and/or to
+   *   matches starting at or after `from_epoch_ms`;
+   * - court relocation: `target_playing_area_id` with a mandatory source `playing_area_id`,
+   *   optionally combined with a delay.
+   * Locked, solver-fixed and started/finished matches are never moved. The resulting revision is
+   * validated against the accepted solver snapshot exactly like a manual move (authoritative
+   * capacity slots, so venue hours and unavailable periods; court, entry and official overlaps;
+   * dependency order; rest and every required constraint). Any violation rejects the whole delay
+   * with 422 and names the conflicting matches; nothing is written.
+   */
   async delayScheduleMatches(
     actor: Phase3Actor,
     revisionId: string,
@@ -4705,9 +4717,7 @@ export class Phase4Runtime {
           format_revision_id: string;
           revision: number;
           source_job_id: string | null;
-          input_hash: string;
           status: string;
-          quality: JsonObject | string | null;
         }>(`SELECT * FROM schedule_revisions WHERE id=$1 FOR UPDATE`, [revisionId]),
         ErrorCode.SCHEDULE_REVISION_NOT_FOUND,
         "Schedule revision not found",
@@ -4718,65 +4728,128 @@ export class Phase4Runtime {
         throw new ApiError(409, ErrorCode.SCHEDULE_REVISION_IMMUTABLE, "Schedule revision is immutable");
 
       const delayMinutes = input.delay_minutes ?? 0;
-      if (delayMinutes < 0 || delayMinutes > 720)
-        throw new ApiError(422, ErrorCode.SCHEDULE_INVALID, "Delay minutes must be between 0 and 720");
-      if (delayMinutes === 0 && !input.target_playing_area_id)
-        throw new ApiError(
-          422,
-          ErrorCode.SCHEDULE_INVALID,
-          "Either delay_minutes > 0 or target_playing_area_id must be provided",
-        );
-
-      if (input.target_playing_area_id) {
-        const targetArea = (
+      const relocating = input.target_playing_area_id !== undefined;
+      if (relocating) {
+        if (!input.playing_area_id)
+          throw new ApiError(
+            422,
+            ErrorCode.SCHEDULE_INVALID,
+            "Choose the court to move matches from before choosing a target court",
+          );
+        if (input.playing_area_id === input.target_playing_area_id)
+          throw new ApiError(422, ErrorCode.SCHEDULE_INVALID, "The target court must differ from the source court");
+      } else if (delayMinutes <= 0) {
+        throw new ApiError(422, ErrorCode.SCHEDULE_INVALID, "Enter a delay of at least one minute");
+      }
+      for (const areaId of [input.playing_area_id, input.target_playing_area_id]) {
+        if (!areaId) continue;
+        const area = (
           await tx.unsafe<{ id: string }>(`SELECT id FROM playing_areas WHERE id=$1 AND competition_id=$2`, [
-            input.target_playing_area_id,
+            areaId,
             parent.competition_id,
           ])
         )[0];
-        if (!targetArea) throw new ApiError(404, ErrorCode.NOT_FOUND, "Target playing area not found");
+        if (!area) throw new ApiError(404, ErrorCode.NOT_FOUND, "Playing area not found");
       }
 
-      const scheduledMatches = await tx.unsafe<{
-        match_id: string;
-        playing_area_id: string;
-        starts_at: Date | string;
-        ends_at: Date | string;
-        state: string;
-      }>(
-        `SELECT sm.match_id, sm.playing_area_id, sm.starts_at, sm.ends_at, m.state
-         FROM scheduled_matches sm
-         JOIN matches m ON m.id = sm.match_id
-         WHERE sm.schedule_revision_id = $1
-         ORDER BY sm.starts_at ASC, sm.match_id ASC`,
+      if (!parent.source_job_id)
+        throw new ApiError(409, ErrorCode.SCHEDULE_SOURCE_MISSING, "Schedule revision has no solver source");
+      const job = first(
+        await tx.unsafe<{ input_snapshot: JsonObject | string }>(
+          `SELECT input_snapshot FROM schedule_generation_jobs WHERE id=$1`,
+          [parent.source_job_id],
+        ),
+        ErrorCode.SCHEDULE_JOB_NOT_FOUND,
+        "Schedule source job not found",
+      );
+      // Same fence as a manual move: capacity, entries and published formats must still match the
+      // accepted solver input, otherwise the organiser must re-plan (regenerate) instead.
+      await this.assertScheduleJobCurrent(tx, parent.source_job_id, false);
+      const problem = this.problemFromSnapshot(job.input_snapshot);
+      const revision = await this.revisionDetail(tx, revisionId);
+
+      const matchRows = await tx.unsafe<{ id: string; code: string; state: string }>(
+        `SELECT m.id,m.code,m.state FROM scheduled_matches sm JOIN matches m ON m.id=sm.match_id
+         WHERE sm.schedule_revision_id=$1`,
         [revisionId],
       );
-
+      const matchById = new Map(matchRows.map((row) => [row.id, row]));
+      const lockedIds = new Set(
+        (
+          await tx.unsafe<{ match_id: string }>(
+            `SELECT match_id FROM schedule_assignment_locks WHERE competition_id=$1`,
+            [parent.competition_id],
+          )
+        ).map((row) => row.match_id),
+      );
+      const fixedIds = new Set(
+        problem.matches.filter((match) => match.fixedAssignment !== undefined).map((match) => match.id),
+      );
+      const slotByPlacement = new Map(
+        problem.slots.map((slot) => [`${slot.areaId}|${slot.startEpochMs}|${slot.endEpochMs}`, slot] as const),
+      );
       const delayMs = delayMinutes * 60_000;
-      let delayedCount = 0;
-      const newAssignments = scheduledMatches.map((sm) => {
-        const startEpoch = new Date(sm.starts_at).getTime();
-        const endEpoch = new Date(sm.ends_at).getTime();
-        const isStartedOrDone = ["in_progress", "final", "corrected"].includes(sm.state);
-        const matchArea = !input.playing_area_id || sm.playing_area_id === input.playing_area_id;
-        const matchFromTime = input.from_epoch_ms === undefined || startEpoch >= input.from_epoch_ms;
-
-        if (!isStartedOrDone && matchArea && matchFromTime) {
-          delayedCount += 1;
-          return {
-            match_id: sm.match_id,
-            playing_area_id: input.target_playing_area_id ?? sm.playing_area_id,
-            start_epoch_ms: startEpoch + delayMs,
-            end_epoch_ms: endEpoch + delayMs,
-          };
+      const movedIds: string[] = [];
+      const outsideCapacity: string[] = [];
+      const next = this.domainAssignments(revision.assignments).map((assignment) => {
+        const current = { ...assignment, fixed: fixedIds.has(assignment.matchId) };
+        const state = matchById.get(assignment.matchId)?.state ?? "pending";
+        const untouchable =
+          current.fixed || lockedIds.has(assignment.matchId) || ["in_progress", "final", "corrected"].includes(state);
+        const inScope =
+          (!input.playing_area_id || assignment.areaId === input.playing_area_id) &&
+          (input.from_epoch_ms === undefined || assignment.startEpochMs >= input.from_epoch_ms);
+        if (!inScope || untouchable) return current;
+        const areaId = input.target_playing_area_id ?? assignment.areaId;
+        const startEpochMs = assignment.startEpochMs + delayMs;
+        const endEpochMs = assignment.endEpochMs + delayMs;
+        const slot = slotByPlacement.get(`${areaId}|${startEpochMs}|${endEpochMs}`);
+        movedIds.push(assignment.matchId);
+        if (!slot) {
+          outsideCapacity.push(assignment.matchId);
+          return { ...current, areaId, startEpochMs, endEpochMs };
         }
-        return {
-          match_id: sm.match_id,
-          playing_area_id: sm.playing_area_id,
-          start_epoch_ms: startEpoch,
-          end_epoch_ms: endEpoch,
-        };
+        return { ...current, areaId, intervalId: slot.intervalId, slotId: slot.id, startEpochMs, endEpochMs };
       });
+      const label = (matchId: string) => matchById.get(matchId)?.code ?? matchId;
+      if (movedIds.length === 0)
+        throw new ApiError(
+          422,
+          ErrorCode.SCHEDULE_INVALID,
+          "No unlocked, unstarted matches on the chosen court and time can be delayed",
+        );
+      if (outsideCapacity.length > 0)
+        throw new ApiError(
+          422,
+          ErrorCode.SCHEDULE_SLOT_INVALID,
+          `Delay rejected: ${outsideCapacity.map(label).join(", ")} would fall outside the court's available time ` +
+            "(venue hours or an unavailable period) or off the match slot grid",
+        );
+      const validation = validateSchedule(problem, next);
+      if (!validation.valid) {
+        const blocking = validation.violations.filter((violation) => violation.severity !== "preferred");
+        const reported = blocking.length ? blocking : validation.violations;
+        const described = reported
+          .slice(0, 8)
+          .map((violation) => `${violation.code.replaceAll("_", " ")} (${violation.matchIds.map(label).join(", ")})`);
+        throw new ApiError(
+          422,
+          ErrorCode.SCHEDULE_INVALID,
+          `Delay rejected: it would create ${reported.length} conflict${reported.length === 1 ? "" : "s"}: ` +
+            described.join("; "),
+        );
+      }
+      const quality = this.wireQuality(evaluateScheduleQuality(problem, next));
+      const assignments = next.map((assignment) => ({
+        match_id: assignment.matchId,
+        division_id: assignment.divisionId,
+        area_id: assignment.areaId,
+        interval_id: assignment.intervalId,
+        slot_id: assignment.slotId,
+        start_epoch_ms: assignment.startEpochMs,
+        end_epoch_ms: assignment.endEpochMs,
+        fixed: assignment.fixed,
+      }));
 
       const nextId = randomUUID();
       const nextRevision = first(
@@ -4787,47 +4860,27 @@ export class Phase4Runtime {
         ErrorCode.REVISION_FAILED,
         "Revision could not be allocated",
       ).revision;
-
-      const formatRevisionId = parent.format_revision_id;
-
-      let sourceJobId: string | null = parent.source_job_id;
-      if (sourceJobId) {
-        const { current } = await this.scheduleJobCurrentState(tx, sourceJobId, false);
-        if (!current) {
-          sourceJobId = null;
-        }
-      }
-
       await tx.unsafe(
         `INSERT INTO schedule_revisions(id,competition_id,format_revision_id,revision,input_hash,status,created_by,parent_revision_id,source_job_id,quality)
            VALUES($1,$2,$3,$4,phase4_sha256_json($5::jsonb),'draft',$6,$7,$8,$9::jsonb)`,
         [
           nextId,
           parent.competition_id,
-          formatRevisionId,
+          parent.format_revision_id,
           nextRevision,
-          { parent_revision_id: revisionId, assignments: newAssignments },
+          { parent_revision_id: revisionId, assignments },
           actor.accountId,
           revisionId,
-          sourceJobId,
-          parent.quality ?? {},
+          parent.source_job_id,
+          quality,
         ],
       );
-
       await tx.unsafe(
         `INSERT INTO schedule_revision_formats(schedule_revision_id,competition_id,division_id,format_revision_id)
-           SELECT $1,competition_id,division_id,format_revision_id FROM schedule_revision_formats WHERE schedule_revision_id=$2
-         ON CONFLICT DO NOTHING`,
+           SELECT $1,competition_id,division_id,format_revision_id FROM schedule_revision_formats WHERE schedule_revision_id=$2`,
         [nextId, revisionId],
       );
-      await tx.unsafe(
-        `INSERT INTO schedule_revision_formats(schedule_revision_id,competition_id,division_id,format_revision_id)
-           SELECT $1,competition_id,division_id,id FROM format_revisions WHERE id=$2
-         ON CONFLICT DO NOTHING`,
-        [nextId, formatRevisionId],
-      );
-
-      for (const assignment of newAssignments) {
+      for (const assignment of assignments) {
         await tx.unsafe(
           `INSERT INTO scheduled_matches(schedule_revision_id,match_id,competition_id,playing_area_id,starts_at,ends_at)
              VALUES($1,$2,$3,$4,to_timestamp($5::double precision/1000),to_timestamp($6::double precision/1000))`,
@@ -4835,30 +4888,27 @@ export class Phase4Runtime {
             nextId,
             assignment.match_id,
             parent.competition_id,
-            assignment.playing_area_id,
+            assignment.area_id,
             assignment.start_epoch_ms,
             assignment.end_epoch_ms,
           ],
         );
       }
-
       await tx.unsafe(`SELECT set_config('matchday.phase4_accept_schedule','on',true)`);
       await tx.unsafe(
         `UPDATE schedule_revisions SET assignment_hash=phase4_schedule_assignment_hash(id),status='ready_for_review',updated_at=now() WHERE id=$1`,
         [nextId],
       );
       await tx.unsafe(`SELECT set_config('matchday.phase4_accept_schedule','off',true)`);
-
       await tx.unsafe(
         `INSERT INTO phase4_mutation_receipts(organisation_id,idempotency_key,operation,request_hash,response) VALUES($1,$2,'schedule.delay',$3,$4::jsonb)`,
         [
           access.organisation_id,
           input.idempotency_key,
           requestHash,
-          { revision_id: nextId, delayed_count: delayedCount },
+          { revision_id: nextId, delayed_count: movedIds.length },
         ],
       );
-
       await this.evidence(
         tx,
         actor,
@@ -4870,16 +4920,16 @@ export class Phase4Runtime {
         {
           parent_revision_id: revisionId,
           delay_minutes: delayMinutes,
-          playing_area_id: input.playing_area_id,
-          target_playing_area_id: input.target_playing_area_id,
-          delayed_count: delayedCount,
+          playing_area_id: input.playing_area_id ?? null,
+          target_playing_area_id: input.target_playing_area_id ?? null,
+          from_epoch_ms: input.from_epoch_ms ?? null,
+          delayed_match_ids: movedIds,
         },
       );
-
       return {
         ...(await this.revisionDetail(tx, nextId)),
         idempotent_replay: false,
-        delayed_count: delayedCount,
+        delayed_count: movedIds.length,
       };
     });
   }

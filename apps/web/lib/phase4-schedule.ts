@@ -31,6 +31,9 @@ export const phase4ScheduleMachine = {
   unlockKey: "schedule-unlock",
   moveKey: "schedule-move",
   moveNotice: "moved",
+  delayAction: "delay",
+  delayKey: "schedule-delay",
+  delayNotice: "delayed",
   queued: "queued",
   running: "running",
   best: "valid_best_found",
@@ -1098,6 +1101,78 @@ export function parseScheduleMoveResponse(value: unknown): ScheduleMoveEnvelope 
 
 export function isScheduleMoveResponse(value: unknown): boolean {
   return parseScheduleMoveResponse(value) !== null;
+}
+
+export type ScheduleDelayEnvelope = Readonly<{ revision: ScheduleRevision; delayedCount: number }>;
+
+export function parseScheduleDelayResponse(value: unknown): ScheduleDelayEnvelope | null {
+  const item = record(value);
+  if (!item || !Number.isSafeInteger(item.delayed_count) || (item.delayed_count as number) < 1) return null;
+  const { delayed_count: delayedCount, ...revision } = item;
+  const parsedRevision = parseScheduleRevisionView(revision, true, true);
+  return parsedRevision ? { revision: parsedRevision, delayedCount: delayedCount as number } : null;
+}
+
+export function isScheduleDelayResponse(value: unknown): boolean {
+  return parseScheduleDelayResponse(value) !== null;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Exact-shape guard for the delay command the BFF forwards to POST /schedule-revisions/:id/delays. */
+export function isScheduleDelayBody(value: unknown): boolean {
+  const item = record(value);
+  if (!item) return false;
+  const allowed = new Set([
+    "idempotency_key",
+    "expected_revision",
+    "delay_minutes",
+    "playing_area_id",
+    "target_playing_area_id",
+    "from_epoch_ms",
+  ]);
+  if (Object.keys(item).some((key) => !allowed.has(key))) return false;
+  if (!nonEmpty(item.idempotency_key) || !Number.isSafeInteger(item.expected_revision)) return false;
+  const minutes = item.delay_minutes;
+  if (minutes !== undefined && (!Number.isSafeInteger(minutes) || (minutes as number) < 0 || (minutes as number) > 720))
+    return false;
+  for (const key of ["playing_area_id", "target_playing_area_id"] as const)
+    if (item[key] !== undefined && !UUID_PATTERN.test(String(item[key]))) return false;
+  if (
+    item.from_epoch_ms !== undefined &&
+    (!Number.isSafeInteger(item.from_epoch_ms) || (item.from_epoch_ms as number) < 0)
+  )
+    return false;
+  if (item.target_playing_area_id !== undefined)
+    return item.playing_area_id !== undefined && item.playing_area_id !== item.target_playing_area_id;
+  return typeof minutes === "number" && minutes > 0;
+}
+
+/**
+ * Converts a wall-clock `YYYY-MM-DDTHH:MM` in `timeZone` to epoch milliseconds. Iterates the zone
+ * offset twice so DST transitions resolve to the same instant the competition clock shows.
+ */
+export function zonedLocalDateTimeToEpoch(local: string, timeZone: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(local);
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match.map(Number) as [number, number, number, number, number, number];
+  const wallClock = Date.UTC(year, month - 1, day, hour, minute);
+  const offsetAt = (epoch: number) => {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).formatToParts(new Date(epoch));
+    const get = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+    return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute")) - epoch;
+  };
+  let epoch = wallClock - offsetAt(wallClock);
+  epoch = wallClock - offsetAt(epoch);
+  return Number.isFinite(epoch) ? epoch : null;
 }
 
 export function parseScheduleLockResponse(value: unknown): ScheduleLock | null {
