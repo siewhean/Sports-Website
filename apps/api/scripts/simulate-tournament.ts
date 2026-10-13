@@ -207,16 +207,16 @@ async function createStandardTournament(ctx: SimContext, sport: SportId, prefix 
           name: "Court 1",
           slot_minutes: 60,
           availability: [
-            { date: "2027-04-01", start_time: "09:00", end_time: "18:00" },
-            { date: "2027-04-02", start_time: "09:00", end_time: "18:00" },
+            { date: "2027-04-01", start_time: "08:00", end_time: "20:00" },
+            { date: "2027-04-02", start_time: "08:00", end_time: "20:00" },
           ],
         },
         {
           name: "Court 2",
           slot_minutes: 60,
           availability: [
-            { date: "2027-04-01", start_time: "09:00", end_time: "18:00" },
-            { date: "2027-04-02", start_time: "09:00", end_time: "18:00" },
+            { date: "2027-04-01", start_time: "08:00", end_time: "20:00" },
+            { date: "2027-04-02", start_time: "08:00", end_time: "20:00" },
           ],
         },
       ],
@@ -1346,6 +1346,7 @@ async function runScenario6(ctx: SimContext): Promise<void> {
     await writer1New.append({ type: "point", team_slot: "home", segment_number: 1 });
   }
   await writer1New.append({ type: "set_completion", team_slot: "home", segment_number: 1 });
+  await writer1New.append({ type: "point", team_slot: "away", segment_number: 2 });
   for (let pt = 0; pt < 25; pt++) {
     await writer1New.append({ type: "point", team_slot: "home", segment_number: 2 });
   }
@@ -1373,19 +1374,32 @@ async function runScenario6(ctx: SimContext): Promise<void> {
   }
   lastResultVersion = finalTruth.publication.result_version;
 
-  // 7. Organiser score correction route on finalised match
+  // 7. Organiser score correction route on finalised match: reverse the away point
+  const auditRes = await ctx.request({
+    method: "GET",
+    url: `/api/v1/competitions/${comp.id}/matches/${playable[0]!.id}/scoring-audit`,
+    expectedStatuses: [200],
+  });
+  const auditData = auditRes.json<{
+    events: Array<{ event_id: string; event_type: string; side: string | null }>;
+  }>();
+  const awayPointEvent = auditData.events.find((e) => e.event_type === "point" && e.side === "away");
+  if (!awayPointEvent) throw new Error("Expected away point event in audit");
+
   await ctx.request({
     method: "POST",
     url: `/api/v1/competitions/${comp.id}/matches/${playable[0]!.id}/corrections`,
     payload: {
       client_event_id: randomUUID(),
-      reason: "Official review score adjustment",
+      reason: "Official review score adjustment: away point disallowed",
       expected_aggregate_version: finalReceipt.aggregate_version,
       events: [
         {
-          type: "point",
-          team_slot: "away",
-          segment_number: 2,
+          client_event_id: randomUUID(),
+          type: "reversal",
+          occurred_at: new Date().toISOString(),
+          reversal_target_event_id: awayPointEvent.event_id,
+          reason: "Away point disallowed upon review",
         },
       ],
     },
@@ -1448,8 +1462,8 @@ async function runScenario7(ctx: SimContext): Promise<void> {
           name: "Court 1",
           slot_minutes: 60,
           availability: [
-            { date: "2027-04-01", start_time: "09:00", end_time: "18:00" },
-            { date: "2027-04-02", start_time: "09:00", end_time: "18:00" },
+            { date: "2027-04-01", start_time: "08:00", end_time: "20:00" },
+            { date: "2027-04-02", start_time: "08:00", end_time: "20:00" },
           ],
         },
         {
@@ -1774,6 +1788,8 @@ async function main() {
       VALUES (${organisationId}, 'Simulation Athletic Union', ${`sim-org-${randomUUID().slice(0, 8)}`})`;
     await tx`INSERT INTO organisation_memberships (organisation_id, account_id, role, status)
       VALUES (${organisationId}, ${accountId}, 'owner', 'active')`;
+    await tx`INSERT INTO organisation_subscriptions (organisation_id, tier, status, current_period_end)
+      VALUES (${organisationId}, 'organiser_pro', 'active', now() + interval '1 year')`;
   });
 
   // Activate sport packs
