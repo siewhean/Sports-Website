@@ -4,13 +4,22 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ["v*"]
+  schedule:
+    # Nightly full tournament simulation at 03:00 UTC
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       generate_linux_visual_baselines:
         description: Generate linux visual baselines and upload them as an artifact (does not commit anything)
         type: boolean
         default: false
+      simulation_profile:
+        description: Tournament simulation profile (fast or full)
+        type: choice
+        options:
+          - fast
+          - full
+        default: fast
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -301,7 +310,13 @@ jobs:
         run: npm install --global pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: pnpm simulate:tournament:fast
+      - name: Run Tournament Simulation
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.simulation_profile }}" = "full" ]; then
+            pnpm simulate:tournament:full
+          else
+            pnpm simulate:tournament:fast
+          fi
 
   visual-baselines:
     # Manual only: produces linux baselines as a downloadable artifact for a human to review and commit.
