@@ -542,7 +542,7 @@ async function badmintonHomeWin(ctx: SimContext, competitionId: string, matchId:
 async function tableTennisHomeWin(ctx: SimContext, competitionId: string, matchId: string) {
   const writer = await scorer(ctx, competitionId, matchId);
   await writer.append({ type: "match_started" });
-  for (const segment of [1, 2]) {
+  for (const segment of [1, 2, 3]) {
     for (let point = 0; point < 11; point += 1) {
       await writer.append({ type: "point", team_slot: "home", segment_number: segment });
     }
@@ -1872,6 +1872,12 @@ async function main() {
       }),
       verifyCsrfToken: () => true,
     } as unknown as any,
+    rateLimitMax: 100_000,
+    authenticatedRateLimitMax: 100_000,
+    anonymousRateLimitMax: 100_000,
+    publicReadRateLimitMax: 100_000,
+    scoringSessionRateLimitMax: 100_000,
+    resolveRateLimitAccountId: async () => accountId,
   });
 
   const requestStats = {
