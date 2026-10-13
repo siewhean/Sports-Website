@@ -468,14 +468,22 @@ async function scorer(ctx: SimContext, competitionId: string, matchId: string) {
     expectedStatuses: [200],
   });
   const writer = exchangeRes.json<{ session_id: string; session_token: string; generation: number }>();
+  return createWriterFromSession(ctx, writer, 0);
+}
+
+function createWriterFromSession(
+  ctx: SimContext,
+  session: { session_id: string; session_token: string; generation: number },
+  initialSequence = 0,
+) {
   const scoringHeaders = {
-    "x-scoring-session-id": writer.session_id,
-    "x-scoring-session-token": writer.session_token,
-    "x-writer-generation": String(writer.generation),
+    "x-scoring-session-id": session.session_id,
+    "x-scoring-session-token": session.session_token,
+    "x-writer-generation": String(session.generation),
   };
 
-  let sequence = 0;
-  const append = async (command: Record<string, unknown>) => {
+  let sequence = initialSequence;
+  const append = async (command: Record<string, unknown>, expectedStatuses = [200]) => {
     const res = await ctx.request({
       method: "POST",
       url: "/api/v1/scoring/events",
@@ -486,14 +494,15 @@ async function scorer(ctx: SimContext, competitionId: string, matchId: string) {
         occurred_at: new Date().toISOString(),
         ...command,
       },
-      expectedStatuses: [200],
+      expectedStatuses,
     });
-    const receipt = res.json<{ aggregate_version: number }>();
-    sequence += 1;
-    return receipt;
+    if (expectedStatuses.includes(200)) {
+      sequence += 1;
+    }
+    return res.json<{ aggregate_version?: number }>();
   };
 
-  const finalise = async () => {
+  const finalise = async (expectedStatuses = [200]) => {
     const res = await ctx.request({
       method: "POST",
       url: "/api/v1/scoring/finalise",
@@ -503,12 +512,12 @@ async function scorer(ctx: SimContext, competitionId: string, matchId: string) {
         expected_sequence: sequence,
         occurred_at: new Date().toISOString(),
       },
-      expectedStatuses: [200],
+      expectedStatuses,
     });
-    return res.json();
+    return res.json<{ aggregate_version?: number }>();
   };
 
-  return { append, finalise };
+  return { append, finalise, session, scoringHeaders, getSequence: () => sequence };
 }
 
 async function walkover(ctx: SimContext, competitionId: string, matchId: string, winner: "home" | "away") {
@@ -695,8 +704,11 @@ async function runScenario1(ctx: SimContext): Promise<void> {
           url: `/api/v1/public/competitions/${comp.slug}/current`,
           expectedStatuses: [200],
         });
-        const pub = publicRes.json<{ results: Array<{ match_id: string; state: string }>; bracket: unknown }>();
-        const finalResult = pub.results.find((r) => r.match_id === finalMatch.id);
+        const pub = publicRes.json<{
+          results: Array<{ id?: string; match_id?: string; state: string }>;
+          bracket: unknown;
+        }>();
+        const finalResult = pub.results.find((r) => (r.id ?? r.match_id) === finalMatch.id);
         if (!finalResult || finalResult.state !== "final") {
           throw new Error(`Final match result not final in public projection for ${sport}`);
         }
@@ -751,16 +763,16 @@ async function runScenario2(ctx: SimContext): Promise<void> {
   });
 
   // 3. Create 4 divisions via API:
-  // Div 1: 16 teams (championship_focus -> 32 matches)
-  // Div 2: 12 teams (championship_focus -> 24 matches)
-  // Div 3: 8 teams  (championship_focus -> 16 matches)
-  // Div 4: 16 teams (championship_focus -> 32 matches)
-  // Total = 32 + 24 + 16 + 32 = 104 matches!
+  // Div 1: 16 teams (full_placement -> 38 matches)
+  // Div 2: 16 teams (championship_focus -> 32 matches)
+  // Div 3: 8 teams  (full_placement -> 18 matches)
+  // Div 4: 8 teams  (championship_focus -> 16 matches)
+  // Total = 38 + 32 + 18 + 16 = 104 matches!
   const divisionSpecs = [
-    { name: "Open Division A", entryCount: 16 },
-    { name: "Open Division B", entryCount: 12 },
-    { name: "Open Division C", entryCount: 8 },
-    { name: "Women Division", entryCount: 16 },
+    { name: "Open Division A", entryCount: 16, strategy: "full_placement" as const },
+    { name: "Open Division B", entryCount: 16, strategy: "championship_focus" as const },
+    { name: "Open Division C", entryCount: 8, strategy: "full_placement" as const },
+    { name: "Women Division", entryCount: 8, strategy: "championship_focus" as const },
   ] as const;
 
   for (const spec of divisionSpecs) {
@@ -785,7 +797,7 @@ async function runScenario2(ctx: SimContext): Promise<void> {
     });
 
     // Materialize and publish format via API
-    const template = createDefaultFormatTemplates(spec.entryCount).find((t) => t.strategy === "championship_focus")!;
+    const template = createDefaultFormatTemplates(spec.entryCount).find((t) => t.strategy === spec.strategy)!;
     await materializeAndPublishFormatOnly(ctx, comp.id, div.id, template.graph);
   }
 
@@ -1304,7 +1316,7 @@ async function runScenario6(ctx: SimContext): Promise<void> {
   const matchingTakeover = takeovers.find((t) => t.match_id === playable[0]!.id);
   if (!matchingTakeover) throw new Error("Takeover request not found for organiser review");
 
-  await ctx.request({
+  const approveRes = await ctx.request({
     method: "POST",
     url: `/api/v1/competitions/${comp.id}/takeover-requests/${matchingTakeover.id}/approve`,
     payload: {
@@ -1313,17 +1325,32 @@ async function runScenario6(ctx: SimContext): Promise<void> {
     },
     expectedStatuses: [200],
   });
+  const resolution = approveRes.json<{ status: string; generation: number }>();
 
-  // 6. Complete and finalise Match 1
+  // Verify stale writer (writer1) is rejected with 409 STALE_WRITER_GENERATION
+  await writer1.append({ type: "point", team_slot: "home", segment_number: 1 }, [409]);
+
+  // Create active writer from candidateSession with updated generation
+  const writer1New = createWriterFromSession(
+    ctx,
+    {
+      session_id: candidateSession.session_id,
+      session_token: candidateSession.session_token,
+      generation: resolution.generation,
+    },
+    writer1.getSequence(),
+  );
+
+  // 6. Complete and finalise Match 1 using new writer
   for (let pt = 1; pt < 25; pt++) {
-    await writer1.append({ type: "point", team_slot: "home", segment_number: 1 });
+    await writer1New.append({ type: "point", team_slot: "home", segment_number: 1 });
   }
-  await writer1.append({ type: "set_completion", team_slot: "home", segment_number: 1 });
+  await writer1New.append({ type: "set_completion", team_slot: "home", segment_number: 1 });
   for (let pt = 0; pt < 25; pt++) {
-    await writer1.append({ type: "point", team_slot: "home", segment_number: 2 });
+    await writer1New.append({ type: "point", team_slot: "home", segment_number: 2 });
   }
-  await writer1.append({ type: "set_completion", team_slot: "home", segment_number: 2 });
-  const finalReceipt = (await writer1.finalise()) as { aggregate_version: number };
+  await writer1New.append({ type: "set_completion", team_slot: "home", segment_number: 2 });
+  const finalReceipt = (await writer1New.finalise()) as { aggregate_version: number };
 
   // Read public truth: verify monotonic result version increase after match finalisation
   const pubResFinal = await ctx.request({
@@ -1333,12 +1360,16 @@ async function runScenario6(ctx: SimContext): Promise<void> {
   });
   const finalTruth = pubResFinal.json<{
     publication: { result_version: number };
-    results: Array<{ match_id: string; state: string }>;
+    results: Array<{ id?: string; match_id?: string; state: string }>;
   }>();
   if (finalTruth.publication.result_version <= lastResultVersion) {
     throw new Error(
       `Result version did not increase after match finalisation: was ${lastResultVersion}, now ${finalTruth.publication.result_version}`,
     );
+  }
+  const match1Final = finalTruth.results.find((r) => (r.id ?? r.match_id) === playable[0]!.id);
+  if (!match1Final || match1Final.state !== "final") {
+    throw new Error("Match 1 result not marked final in public projection");
   }
   lastResultVersion = finalTruth.publication.result_version;
 
@@ -1386,15 +1417,19 @@ async function runScenario7(ctx: SimContext): Promise<void> {
   const court1 = areas.find((a) => a.name === "Court 1")!;
   const court2 = areas.find((a) => a.name === "Court 2")!;
 
+  type SchedMatch = { id?: string; match_id?: string; area?: { id: string }; playing_area_id?: string };
+  const getMatchId = (m: SchedMatch) => (m.id ?? m.match_id)!;
+  const getAreaId = (m: SchedMatch) => (m.area?.id ?? m.playing_area_id)!;
+
   // Read initial public schedule
   const initialPubRes = await ctx.request({
     method: "GET",
     url: `/api/v1/public/competitions/${comp.slug}/current`,
     expectedStatuses: [200],
   });
-  const initialPub = initialPubRes.json<{ schedule: Array<{ match_id: string; playing_area_id: string }> }>();
-  const initialCourt1Matches = initialPub.schedule.filter((s) => s.playing_area_id === court1.id);
-  const initialCourt2Matches = initialPub.schedule.filter((s) => s.playing_area_id === court2.id);
+  const initialPub = initialPubRes.json<{ schedule: SchedMatch[] }>();
+  const initialCourt1Matches = initialPub.schedule.filter((s) => getAreaId(s) === court1.id);
+  const initialCourt2Matches = initialPub.schedule.filter((s) => getAreaId(s) === court2.id);
 
   if (initialCourt1Matches.length === 0 || initialCourt2Matches.length === 0) {
     throw new Error("Expected initial matches on both Court 1 and Court 2");
@@ -1451,28 +1486,28 @@ async function runScenario7(ctx: SimContext): Promise<void> {
     url: `/api/v1/public/competitions/${comp.slug}/current`,
     expectedStatuses: [200],
   });
-  const pub = pubRes.json<{ schedule: Array<{ match_id: string; playing_area_id: string }> }>();
+  const pub = pubRes.json<{ schedule: SchedMatch[] }>();
   if (pub.schedule.length === 0) {
     throw new Error("Expected scheduled matches in public projection after replan");
   }
-  const court2Matches = pub.schedule.filter((s) => s.playing_area_id === court2.id);
+  const court2Matches = pub.schedule.filter((s) => getAreaId(s) === court2.id);
   if (court2Matches.length > 0) {
     throw new Error(`Public schedule still contains ${court2Matches.length} matches on closed Court 2`);
   }
 
   // Verify affected matches from Court 2 are now on Court 1
   for (const m of initialCourt2Matches) {
-    const moved = pub.schedule.find((s) => s.match_id === m.match_id);
-    if (!moved || moved.playing_area_id !== court1.id) {
-      throw new Error(`Affected match ${m.match_id} was not moved to Court 1`);
+    const moved = pub.schedule.find((s) => getMatchId(s) === getMatchId(m));
+    if (!moved || getAreaId(moved) !== court1.id) {
+      throw new Error(`Affected match ${getMatchId(m)} was not moved to Court 1`);
     }
   }
 
   // Verify matches originally on Court 1 are still scheduled on Court 1
   for (const m of initialCourt1Matches) {
-    const retained = pub.schedule.find((s) => s.match_id === m.match_id);
-    if (!retained || retained.playing_area_id !== court1.id) {
-      throw new Error(`Original Court 1 match ${m.match_id} missing from Court 1`);
+    const retained = pub.schedule.find((s) => getMatchId(s) === getMatchId(m));
+    if (!retained || getAreaId(retained) !== court1.id) {
+      throw new Error(`Original Court 1 match ${getMatchId(m)} missing from Court 1`);
     }
   }
 }
