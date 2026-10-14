@@ -18,6 +18,11 @@
 CREATE OR REPLACE FUNCTION phase6_org_ai_quota(target_organisation uuid)
   RETURNS TABLE(base_limit integer, base_used integer, credits_granted integer, credits_remaining integer, remaining integer)
 AS $$
+#variable_conflict use_column
+BEGIN
+  -- plpgsql (not LANGUAGE sql) so the body is resolved at call time via search_path,
+  -- like the other phase4/phase6 functions; schema-scoped migration runs depend on it.
+  RETURN QUERY
   WITH base AS (
     SELECT COALESCE((
       SELECT 100 FROM organisation_subscriptions s
@@ -39,8 +44,9 @@ AS $$
   )
   SELECT b.base_limit,b.base_used,c.granted,c.remaining,
     (GREATEST(b.base_limit-b.base_used,0)+c.remaining)::integer
-  FROM base b CROSS JOIN credits c
-$$ LANGUAGE sql STABLE;
+  FROM base b CROSS JOIN credits c;
+END;
+$$ LANGUAGE plpgsql STABLE;
 
 CREATE OR REPLACE FUNCTION phase4_finalize_ai_action(target_ledger uuid, final_outcome text, final_cache_status text,
   result_value jsonb, result_expires_at timestamptz, attempt_count integer, elapsed_ms integer,
