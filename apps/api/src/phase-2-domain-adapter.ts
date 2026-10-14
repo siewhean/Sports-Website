@@ -273,16 +273,25 @@ export const phase2DomainAdapter: Phase2DomainAdapter = {
         const result = results.find((candidate) => candidate.matchId === matchId);
         if (result) resultByGraphId.set(graphId, result);
       }
+      // The latest finalised (or corrected) result decides a match; a walkover
+      // is already recorded as the sport's forfeit score. A draw decides nothing.
+      const decided = (result: (typeof results)[number] | undefined) => {
+        if (!result?.homeEntryId || !result.awayEntryId || result.homeScore === result.awayScore) return null;
+        const homeWon = result.homeScore > result.awayScore;
+        return {
+          winnerEntryId: homeWon ? result.homeEntryId : result.awayEntryId,
+          loserEntryId: homeWon ? result.awayEntryId : result.homeEntryId,
+        };
+      };
       // undefined: not a derived slot; null: derived but not yet decided.
       const resolveSource = (source: FormatParticipantSource): string | null | undefined => {
         if (source.type === "stage_rank") {
           return v1GroupRankings?.[source.groupId ?? source.stageId]?.[source.rank - 1] ?? null;
         }
         if (source.type === "winner" || source.type === "loser") {
-          const result = resultByGraphId.get(source.matchId);
-          if (!result?.homeEntryId || !result.awayEntryId || result.homeScore === result.awayScore) return null;
-          const homeWon = result.homeScore > result.awayScore;
-          return homeWon === (source.type === "winner") ? result.homeEntryId : result.awayEntryId;
+          const outcome = decided(resultByGraphId.get(source.matchId));
+          if (!outcome) return null;
+          return source.type === "winner" ? outcome.winnerEntryId : outcome.loserEntryId;
         }
         return undefined;
       };
@@ -291,9 +300,54 @@ export const phase2DomainAdapter: Phase2DomainAdapter = {
         const home = resolveSource(match.home);
         const away = resolveSource(match.away);
         if (!matchId || (home === undefined && away === undefined)) return [];
-        return [{ matchId, homeEntryId: home ?? null, awayEntryId: away ?? null }];
+        const outcome = decided(resultByGraphId.get(match.id));
+        return [
+          {
+            matchId,
+            homeEntryId: home ?? null,
+            awayEntryId: away ?? null,
+            winnerEntryId: outcome?.winnerEntryId ?? null,
+            loserEntryId: outcome?.loserEntryId ?? null,
+          },
+        ];
       });
-      return { bracket: { matches, qualifiedEntryIds: [], championEntryId: null } };
+      // The championship final is the terminal match of the championship
+      // stage: its winner is the champion and its loser the runner-up. Any
+      // championship-purpose match whose winner feeds nothing else qualifies,
+      // so hand-built graphs without terminalMatchIds still resolve.
+      const consumedWinners = new Set(
+        graph.matches.flatMap((match) =>
+          [match.home, match.away].flatMap((source) => (source.type === "winner" ? [source.matchId] : [])),
+        ),
+      );
+      const terminal = new Set(graph.terminalMatchIds ?? []);
+      const championshipFinal = graph.matches.find(
+        (match) => match.purpose === "championship" && (terminal.has(match.id) || !consumedWinners.has(match.id)),
+      );
+      const finalOutcome = championshipFinal ? decided(resultByGraphId.get(championshipFinal.id)) : null;
+      // Every entry that has reached a knockout (non-pool) match has qualified.
+      const qualifiedEntryIds = [
+        ...new Set(
+          graph.matches
+            .filter((match) => match.purpose !== "pool")
+            .flatMap((match) => {
+              const result = resultByGraphId.get(match.id);
+              return [
+                result?.homeEntryId ?? resolveSource(match.home) ?? null,
+                result?.awayEntryId ?? resolveSource(match.away) ?? null,
+              ];
+            })
+            .filter((entryId): entryId is string => typeof entryId === "string"),
+        ),
+      ];
+      return {
+        bracket: {
+          matches,
+          qualifiedEntryIds,
+          championEntryId: finalOutcome?.winnerEntryId ?? null,
+          runnerUpEntryId: finalOutcome?.loserEntryId ?? null,
+        },
+      };
     }
     const groupRankings = Object.fromEntries(
       parsed.groups.map((group) => {
