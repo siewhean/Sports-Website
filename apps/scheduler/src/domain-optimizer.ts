@@ -89,6 +89,9 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
     const session = new SolverSession(toProblem(request.input), this.#workerExecArgv);
     this.#activeSessions.set(request.input, session);
     try {
+      // Local search is spent only on candidates that beat the best so far (the persisted seed on a
+      // continuation), so a job improves the few schedules that can win, deterministically.
+      let bestScore = Number.NEGATIVE_INFINITY;
       if (request.seed !== null) {
         const seed = request.seed.assignments.map(toDomainAssignment);
         const verifiedSeed = await session.request<VerifiedSchedule>(
@@ -100,6 +103,7 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
         if (!verifiedSeed.validation.valid || !verifiedSeed.quality.valid) {
           throw new Error("Persisted continuation seed is invalid");
         }
+        bestScore = verifiedSeed.quality.score;
       }
       const endIteration = request.startIteration + this.#maxIterationsPerRun;
       for (let iteration = request.startIteration; iteration < endIteration; iteration += 1) {
@@ -110,9 +114,22 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
           request.maxYieldIntervalMs,
         );
         if (generated === null) return;
-        for (const { candidate, validation, quality } of generated) {
+        for (const constructed of generated) {
           if (request.signal.aborted) return;
-          if (!validation.valid || !quality.valid) continue;
+          if (!constructed.validation.valid || !constructed.quality.valid) continue;
+          let { candidate, validation, quality } = constructed;
+          if (quality.score > bestScore) {
+            const improved = await session.request<GeneratedSchedules[number]>(
+              { operation: "improve", iteration: candidate.iteration, assignments: candidate.assignments },
+              request.signal,
+              request.maxYieldIntervalMs,
+            );
+            if (improved === null) return;
+            if (improved.validation.valid && improved.quality.valid && improved.quality.score >= quality.score) {
+              ({ candidate, validation, quality } = improved);
+            }
+            bestScore = quality.score;
+          }
           yield {
             iteration: candidate.iteration,
             result: {

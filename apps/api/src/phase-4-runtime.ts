@@ -37,6 +37,7 @@ import type {
 } from "@matchday/contracts";
 import {
   canonicaliseIntervals,
+  checkFormatScheduleFeasibility,
   deriveAssistedSetupProgress,
   deriveSchedulingMatches,
   diagnoseScheduleInfeasibility,
@@ -52,11 +53,13 @@ import {
   type FormatBuilderDocument,
   type FormatGraph,
   type CompetitionFormatRecommendation,
+  type CompetitionFormatRecommendationRequest,
   type ScheduleProblem,
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
+import { loadPreviousRevisionBaseline, withPreviousRevisionBaseline } from "./phase-4-schedule-baseline.js";
 import { assertChildInCompetition, assertDivisionInCompetition } from "./tenant-scope.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import {
@@ -152,6 +155,78 @@ function schedulingEntryIdsBySeed(
   }
   if (assigned.size !== entryCount) throw new Error(`Expected ${entryCount} active entries for the selected format`);
   return Object.fromEntries(assigned);
+}
+
+/** Workspace schedule defaults; the daily limit is derived from the formats by the caller. */
+function workspaceDefaultScheduleConstraints(input: {
+  dailyLimit: number;
+  finalTargetEpochMs: number;
+  featuredAreaId: string;
+  areaCount: number;
+}): ScheduleConstraints {
+  return {
+    minimum_rest: { mode: "preferred", value: { minutes: 60 }, weight: 4 },
+    maximum_matches_per_day: { mode: "required", value: { matches: input.dailyLimit } },
+    preferred_final_time: {
+      mode: "preferred",
+      value: { target_start_epoch_ms: input.finalTargetEpochMs, tolerance_minutes: 30 },
+      weight: 3,
+    },
+    entry_unavailable: { mode: "ignored", value: { by_entry_id: {} } },
+    official_availability: { mode: "ignored", value: { by_official_id: {} } },
+    featured_playing_area: { mode: "ignored", value: { area_id: input.featuredAreaId, match_ids: [] } },
+    avoid_consecutive_matches: { mode: "preferred", value: { minutes: 30 }, weight: 4 },
+    balance_early_matches: { mode: "preferred", value: { before_local_time: "09:00" }, weight: 2 },
+    balance_late_matches: { mode: "preferred", value: { at_or_after_local_time: "16:00" }, weight: 2 },
+    keep_division_together: {
+      mode: "preferred",
+      value: { maximum_area_count: Math.max(1, Math.min(2, input.areaCount)) },
+      weight: 2,
+    },
+    preserve_existing_schedule: { mode: "ignored", value: { maximum_shift_minutes: 0, by_match_id: {} } },
+  };
+}
+
+/** Interactive budget for checking suggested formats against the venue; later ones stay not_checked. */
+const RECOMMENDATION_SCHEDULE_CHECK_BUDGET_MS = 1_500;
+const RECOMMENDATION_SCHEDULE_CHECK_MAX_FORMATS = 5;
+const RECOMMENDATION_SCHEDULE_CHECK_MAX_SLOTS = 5000;
+/** Largest matches × slots solved in a request (~0.1-0.3 s worst case including relaxation rungs). */
+const RECOMMENDATION_SCHEDULE_CHECK_MAX_SOLVE_CELLS = 60_000;
+const RECOMMENDATION_SCHEDULE_CHECK_MAX_MATCHES = 600;
+
+/** Cuts availability windows into whole match slots, skipping any slot that touches an unavailable interval. */
+function capacityMatchSlots(
+  windows: readonly { id: string; playing_area_id: string; starts_at: Date | string; ends_at: Date | string }[],
+  unavailable: readonly { playing_area_id: string; starts_at: Date | string; ends_at: Date | string }[],
+  durationMinutes: number,
+): ScheduleProblem["slots"][number][] {
+  const durationMs = durationMinutes * 60_000;
+  const slots: ScheduleProblem["slots"][number][] = [];
+  for (const window of windows) {
+    const start = new Date(window.starts_at).getTime();
+    const end = new Date(window.ends_at).getTime();
+    for (let cursor = start, index = 1; cursor + durationMs <= end; cursor += durationMs, index += 1) {
+      const slotEnd = cursor + durationMs;
+      if (
+        unavailable.some(
+          (range) =>
+            range.playing_area_id === window.playing_area_id &&
+            new Date(range.starts_at).getTime() < slotEnd &&
+            new Date(range.ends_at).getTime() > cursor,
+        )
+      )
+        continue;
+      slots.push({
+        id: `${window.id}:${index}`,
+        intervalId: window.id,
+        areaId: window.playing_area_id,
+        startEpochMs: cursor,
+        endEpochMs: slotEnd,
+      });
+    }
+  }
+  return slots;
 }
 
 function first<T>(
@@ -919,6 +994,72 @@ export class Phase4Runtime {
     return { document, materialised };
   }
 
+  /**
+   * Checks each suggested format against the competition's real courts and windows with the
+   * workspace schedule defaults (daily limit derived per format). Undefined, so every suggestion
+   * stays not_checked, when capacity has no uniform-duration slots yet.
+   */
+  private async recommendationScheduleCheck(
+    tx: PostgresJsSql,
+    access: CompetitionAccess,
+  ): Promise<CompetitionFormatRecommendationRequest["checkSchedule"]> {
+    const areaRows = await tx.unsafe<{ id: string; slot_minutes: number }>(
+      `SELECT id,slot_minutes FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
+      [access.id],
+    );
+    if (areaRows.length === 0 || new Set(areaRows.map((area) => area.slot_minutes)).size !== 1) return undefined;
+    const durationMinutes = areaRows[0]!.slot_minutes;
+    const windows = await tx.unsafe<{
+      id: string;
+      playing_area_id: string;
+      starts_at: Date | string;
+      ends_at: Date | string;
+    }>(
+      `SELECT id,playing_area_id,starts_at,ends_at FROM competition_availability_windows
+       WHERE competition_id=$1 ORDER BY starts_at,playing_area_id,id`,
+      [access.id],
+    );
+    const unavailable = await tx.unsafe<{ playing_area_id: string; starts_at: Date | string; ends_at: Date | string }>(
+      `SELECT playing_area_id,starts_at,ends_at FROM playing_area_unavailable_intervals WHERE competition_id=$1`,
+      [access.id],
+    );
+    const slots = capacityMatchSlots(windows, unavailable, durationMinutes);
+    if (slots.length === 0 || slots.length > RECOMMENDATION_SCHEDULE_CHECK_MAX_SLOTS) return undefined;
+    let finalTargetEpochMs = slots[0]!.startEpochMs;
+    for (const slot of slots) if (slot.startEpochMs > finalTargetEpochMs) finalTargetEpochMs = slot.startEpochMs;
+    const constraints = this.domainConstraints(
+      workspaceDefaultScheduleConstraints({
+        dailyLimit: 4,
+        finalTargetEpochMs,
+        featuredAreaId: areaRows[0]!.id,
+        areaCount: areaRows.length,
+      }),
+    );
+    // Request-path bounds: at most N formats, a shared time budget checked before each, and a
+    // per-format size cap (matches, slots, matches × slots) so no single check is unbounded.
+    const startedAt = performance.now();
+    let checked = 0;
+    return (divisions) => {
+      if (
+        checked >= RECOMMENDATION_SCHEDULE_CHECK_MAX_FORMATS ||
+        performance.now() - startedAt > RECOMMENDATION_SCHEDULE_CHECK_BUDGET_MS
+      )
+        return { status: "not_checked", warningCodes: [] };
+      checked += 1;
+      const result = checkFormatScheduleFeasibility({
+        timeZone: access.timezone,
+        slots,
+        durationMinutes,
+        divisions,
+        constraints,
+        deriveDailyLimit: true,
+        maxSolveCells: RECOMMENDATION_SCHEDULE_CHECK_MAX_SOLVE_CELLS,
+        maxCheckMatches: RECOMMENDATION_SCHEDULE_CHECK_MAX_MATCHES,
+      });
+      return { status: result.status, warningCodes: result.warningCodes };
+    };
+  }
+
   private async generateSetupRecommendations(
     tx: PostgresJsSql,
     access: CompetitionAccess,
@@ -1042,7 +1183,9 @@ export class Phase4Runtime {
       };
     }
 
+    const checkSchedule = await this.recommendationScheduleCheck(tx, access);
     const generated = recommendCompetitionFormats({
+      ...(checkSchedule ? { checkSchedule } : {}),
       sportCode: access.sport_code,
       divisions: sourceEvidence.entries.map((division) => ({
         id: division.division_id,
@@ -3331,31 +3474,7 @@ export class Phase4Runtime {
       `SELECT playing_area_id,starts_at,ends_at FROM playing_area_unavailable_intervals WHERE competition_id=$1`,
       [competition.id],
     );
-    const durationMs = durationMinutes * 60_000;
-    const slots: ScheduleProblem["slots"][number][] = [];
-    for (const window of windows) {
-      const start = new Date(window.starts_at).getTime();
-      const end = new Date(window.ends_at).getTime();
-      for (let cursor = start, index = 1; cursor + durationMs <= end; cursor += durationMs, index += 1) {
-        const slotEnd = cursor + durationMs;
-        if (
-          unavailable.some(
-            (range) =>
-              range.playing_area_id === window.playing_area_id &&
-              new Date(range.starts_at).getTime() < slotEnd &&
-              new Date(range.ends_at).getTime() > cursor,
-          )
-        )
-          continue;
-        slots.push({
-          id: `${window.id}:${index}`,
-          intervalId: window.id,
-          areaId: window.playing_area_id,
-          startEpochMs: cursor,
-          endEpochMs: slotEnd,
-        });
-      }
-    }
+    const slots = capacityMatchSlots(windows, unavailable, durationMinutes);
     if (slots.length === 0)
       throw new ApiError(422, ErrorCode.CAPACITY_HAS_NO_SLOTS, "Capacity has no usable match slots");
     const formats = await tx.unsafe<{ id: string; division_id: string; definition: FormatGraph | string }>(
@@ -3472,18 +3591,23 @@ export class Phase4Runtime {
       }
     }
 
-    const effectiveConstraints: ScheduleConstraints = {
-      ...constraints,
-      official_availability: {
-        mode: constraints.official_availability?.mode ?? "ignored",
-        value: {
-          by_official_id: officialAvailabilityWindows,
+    // Minimal-change regeneration: the latest revision is the baseline, so unlocked matches whose
+    // previous slot is still valid stay put and only displaced ones move.
+    const effectiveConstraints: ScheduleConstraints = withPreviousRevisionBaseline(
+      {
+        ...constraints,
+        official_availability: {
+          mode: constraints.official_availability?.mode ?? "ignored",
+          value: {
+            by_official_id: officialAvailabilityWindows,
+          },
+          ...(constraints.official_availability?.weight !== undefined
+            ? { weight: constraints.official_availability.weight }
+            : {}),
         },
-        ...(constraints.official_availability?.weight !== undefined
-          ? { weight: constraints.official_availability.weight }
-          : {}),
       },
-    };
+      await loadPreviousRevisionBaseline(tx, competition.id, new Set(matchesWithOfficials.map((match) => match.id))),
+    );
 
     const locks = await tx.unsafe<{
       match_id: string;
@@ -4202,7 +4326,10 @@ export class Phase4Runtime {
       )
       .map(({ match_id }) => match_id);
     const completion = (assignments: typeof left.assignments) =>
-      assignments.length ? Math.max(...assignments.map((assignment) => assignment.end_epoch_ms)) : null;
+      assignments.reduce<number | null>(
+        (max, assignment) => (max === null || assignment.end_epoch_ms > max ? assignment.end_epoch_ms : max),
+        null,
+      );
     const leftCompletion = completion(left.assignments);
     const rightCompletion = completion(right.assignments);
     const leftRest = left.quality?.minimum_rest_minutes ?? null;
@@ -5241,27 +5368,12 @@ export class Phase4Runtime {
         ),
       ),
     );
-    const defaultConstraints: ScheduleConstraints = {
-      minimum_rest: { mode: "preferred", value: { minutes: 60 }, weight: 4 },
-      maximum_matches_per_day: { mode: "required", value: { matches: defaultDailyLimit } },
-      preferred_final_time: {
-        mode: "preferred",
-        value: { target_start_epoch_ms: finalTarget, tolerance_minutes: 30 },
-        weight: 3,
-      },
-      entry_unavailable: { mode: "ignored", value: { by_entry_id: {} } },
-      official_availability: { mode: "ignored", value: { by_official_id: {} } },
-      featured_playing_area: { mode: "ignored", value: { area_id: featuredAreaId, match_ids: [] } },
-      avoid_consecutive_matches: { mode: "preferred", value: { minutes: 30 }, weight: 4 },
-      balance_early_matches: { mode: "preferred", value: { before_local_time: "09:00" }, weight: 2 },
-      balance_late_matches: { mode: "preferred", value: { at_or_after_local_time: "16:00" }, weight: 2 },
-      keep_division_together: {
-        mode: "preferred",
-        value: { maximum_area_count: Math.max(1, Math.min(2, areaRows.length)) },
-        weight: 2,
-      },
-      preserve_existing_schedule: { mode: "ignored", value: { maximum_shift_minutes: 0, by_match_id: {} } },
-    };
+    const defaultConstraints = workspaceDefaultScheduleConstraints({
+      dailyLimit: defaultDailyLimit,
+      finalTargetEpochMs: finalTarget,
+      featuredAreaId,
+      areaCount: areaRows.length,
+    });
     const capacityHash =
       (await this.sql.unsafe<{ hash: string | null }>(`SELECT phase4_capacity_hash($1) hash`, [competitionId]))[0]
         ?.hash ?? null;

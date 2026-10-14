@@ -375,15 +375,22 @@ export type CompetitionFormatRecommendationRequest = {
   readonly placementRequired?: boolean;
   readonly crossGroupAllowed?: boolean;
   readonly priority?: "speed" | "simplicity" | "participation";
+  /**
+   * Optional schedule check for candidates that fit capacity (see checkFormatScheduleFeasibility).
+   * Feasible candidates rank before unchecked ones, and infeasible ones last.
+   */
+  readonly checkSchedule?: (
+    divisions: readonly Readonly<{ divisionId: string; graph: FormatGraph }>[],
+  ) => Readonly<{ status: "feasible" | "infeasible" | "not_checked"; warningCodes: readonly string[] }>;
 };
 
 export type CompetitionFormatRecommendation = {
   readonly id: string;
-  readonly strategy: FormatTemplateStrategy;
+  readonly strategy: FormatTemplateStrategy | "round_robin";
   readonly label: string;
   readonly advantage: string;
   readonly capacityStatus: "fits" | "tight" | "requires_changes";
-  readonly scheduleFeasibility: "infeasible" | "not_checked";
+  readonly scheduleFeasibility: "feasible" | "infeasible" | "not_checked";
   readonly matchCount: number;
   readonly guaranteedMatches: number;
   readonly rankingCoverage: "all_entries" | "podium" | "champion";
@@ -1569,22 +1576,28 @@ export function recommendCompetitionFormats(
   if (!Number.isSafeInteger(minimumGuaranteedMatches) || minimumGuaranteedMatches < 1)
     throw new Error("Minimum guaranteed matches must be a positive integer");
 
-  const strategies: readonly FormatTemplateStrategy[] = [
+  const strategies: readonly CompetitionFormatRecommendation["strategy"][] = [
     "full_placement",
     "championship_focus",
     "compact_knockout",
     "double_elimination",
+    "round_robin",
   ];
   const candidates = strategies.flatMap((strategy): CompetitionFormatRecommendation[] => {
     const divisions = request.divisions.map((division) => {
       if (!defaultFormatEntryCounts.includes(division.entryCount as DefaultFormatEntryCount))
         throw new Error(`Division ${division.id} has an unsupported entry count`);
       const template =
-        strategy === "double_elimination"
-          ? buildDoubleEliminationFormatTemplate(division.entryCount)
-          : createDefaultFormatTemplates(division.entryCount as DefaultFormatEntryCount).find(
-              (item) => item.strategy === strategy,
-            );
+        strategy === "round_robin"
+          ? (() => {
+              const graph = createRoundRobinFormatGraph(division.entryCount);
+              return { graph, metrics: calculateFormatMetrics(graph) };
+            })()
+          : strategy === "double_elimination"
+            ? buildDoubleEliminationFormatTemplate(division.entryCount)
+            : createDefaultFormatTemplates(division.entryCount as DefaultFormatEntryCount).find(
+                (item) => item.strategy === strategy,
+              );
       if (!template) throw new Error(`Missing ${strategy} template for division ${division.id}`);
       if (!validateFormatGraph(template.graph).valid) return null;
       return {
@@ -1602,11 +1615,13 @@ export function recommendCompetitionFormats(
     const purposes = new Set(
       exactDivisions.flatMap((division) => division.graph.matches.map((match) => match.purpose)),
     );
-    const rankingCoverage = purposes.has("classification")
-      ? "all_entries"
-      : purposes.has("placement")
-        ? "podium"
-        : "champion";
+    // A single round robin ranks every entry from its standings.
+    const rankingCoverage =
+      purposes.has("classification") || strategy === "round_robin"
+        ? "all_entries"
+        : purposes.has("placement")
+          ? "podium"
+          : "champion";
     const hasKnockout = exactDivisions.every((division) =>
       division.graph.stages.some((stage) => stage.kind === "single_elimination" || stage.kind === "consolation"),
     );
@@ -1621,6 +1636,9 @@ export function recommendCompetitionFormats(
     const spareMatchSlots = request.availableMatchSlots - matchCount;
     const fits = spareMatchSlots >= 0;
     const tight = fits && spareMatchSlots <= Math.max(1, Math.floor(request.availableMatchSlots * 0.1));
+    // Round robin is offered only when it fits; it is never the "needs more capacity" option.
+    if (strategy === "round_robin" && !fits) return [];
+    const schedule = fits && request.checkSchedule ? request.checkSchedule(exactDivisions) : null;
     return [
       {
         id: `competition-${strategy}`,
@@ -1632,7 +1650,9 @@ export function recommendCompetitionFormats(
               ? "Championship focus"
               : strategy === "double_elimination"
                 ? "Double elimination"
-                : "Compact knockout",
+                : strategy === "round_robin"
+                  ? "Round robin"
+                  : "Compact knockout",
         advantage:
           strategy === "full_placement"
             ? "Ranks every entry."
@@ -1640,29 +1660,34 @@ export function recommendCompetitionFormats(
               ? "Keeps complete group play with shorter finals."
               : strategy === "double_elimination"
                 ? "Guarantees two matches per entrant with upper and lower brackets."
-                : "Uses the fewest match slots.",
+                : strategy === "round_robin"
+                  ? "Every entry plays every other entry once."
+                  : "Uses the fewest match slots.",
         capacityStatus: fits ? (tight ? "tight" : "fits") : "requires_changes",
-        scheduleFeasibility: fits ? "not_checked" : "infeasible",
+        scheduleFeasibility: fits ? (schedule?.status ?? "not_checked") : "infeasible",
         matchCount,
         guaranteedMatches,
         rankingCoverage,
         availableMatchSlots: request.availableMatchSlots,
         spareMatchSlots,
         divisions: exactDivisions,
-        warningCodes: fits ? [] : ["insufficient_capacity"],
+        warningCodes: fits ? [...(schedule?.warningCodes ?? [])] : ["insufficient_capacity"],
       },
     ];
   });
   const priority = request.priority ?? "simplicity";
-  const preference: Record<typeof priority, readonly FormatTemplateStrategy[]> = {
-    speed: ["compact_knockout", "double_elimination", "championship_focus", "full_placement"],
-    simplicity: ["championship_focus", "compact_knockout", "double_elimination", "full_placement"],
-    participation: ["full_placement", "double_elimination", "championship_focus", "compact_knockout"],
+  const preference: Record<typeof priority, readonly CompetitionFormatRecommendation["strategy"][]> = {
+    speed: ["compact_knockout", "double_elimination", "championship_focus", "full_placement", "round_robin"],
+    simplicity: ["championship_focus", "round_robin", "compact_knockout", "double_elimination", "full_placement"],
+    participation: ["full_placement", "round_robin", "double_elimination", "championship_focus", "compact_knockout"],
   };
   const order = new Map(preference[priority].map((strategy, index) => [strategy, index]));
+  const feasibilityRank = { feasible: 0, not_checked: 1, infeasible: 2 } as const;
   const sorted = [...candidates].sort(
     (left, right) =>
-      (order.get(left.strategy) ?? 99) - (order.get(right.strategy) ?? 99) || left.id.localeCompare(right.id),
+      feasibilityRank[left.scheduleFeasibility] - feasibilityRank[right.scheduleFeasibility] ||
+      (order.get(left.strategy) ?? 99) - (order.get(right.strategy) ?? 99) ||
+      left.id.localeCompare(right.id),
   );
   const recommendations = sorted.filter((candidate) => candidate.capacityStatus !== "requires_changes").slice(0, 3);
   const requiresChanges =

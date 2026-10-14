@@ -1,6 +1,11 @@
 import { parentPort, workerData } from "node:worker_threads";
 
-import { evaluateScheduleQuality, generateScheduleCandidates, validateSchedule } from "@matchday/domain";
+import {
+  evaluateScheduleQuality,
+  generateScheduleCandidates,
+  improveSchedule,
+  validateSchedule,
+} from "@matchday/domain";
 
 if (parentPort === null) throw new Error("Schedule solver thread requires a parent port");
 const port = parentPort;
@@ -21,6 +26,17 @@ port.on("message", (message) => {
         quality: evaluateScheduleQuality(problem, candidate.assignments),
       }));
       port.postMessage({ id: message.id, ok: true, result });
+    } else if (message.operation === "improve") {
+      const { assignments } = improveSchedule(problem, message.assignments, { seed: message.iteration });
+      port.postMessage({
+        id: message.id,
+        ok: true,
+        result: {
+          candidate: { iteration: message.iteration, assignments },
+          validation: validateSchedule(problem, assignments),
+          quality: evaluateScheduleQuality(problem, assignments),
+        },
+      });
     } else if (message.operation === "verify") {
       port.postMessage({
         id: message.id,

@@ -272,6 +272,10 @@ describeInfrastructure("Gate B dynamic sport setup runtime", () => {
       selection.recommendations.length,
     );
     expect(selection.recommendations.every((item) => item.available_match_slots >= item.match_count)).toBe(true);
+    // Suggestions are checked against the real court windows, not left "not_checked".
+    expect(selection.recommendations.map((item) => item.scheduling_status)).toEqual(
+      selection.recommendations.map(() => "feasible"),
+    );
     expect(selection.recommendations.every((item) => item.division_formats.length === 2)).toBe(true);
     expect(
       selection.recommendations.every(

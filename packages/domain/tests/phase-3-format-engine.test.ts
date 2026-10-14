@@ -418,6 +418,7 @@ describe("Phase 3 capacity-first recommendations", () => {
       crossGroupAllowed: false,
     });
     expect(compactOnly.recommendations.map((item) => item.strategy)).toEqual([
+      "round_robin",
       "compact_knockout",
       "double_elimination",
     ]);
