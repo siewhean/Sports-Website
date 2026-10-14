@@ -1,0 +1,842 @@
+{
+  "generatedAt": "2026-10-12T18:16:35.749Z",
+  "node": "v24.18.0",
+  "results": [
+    {
+      "id": "s1-badminton-rr8",
+      "title": "S1 badminton round robin, 8 entries, 28 matches, 2 courts, 1 day (36 slots)",
+      "kind": "feasible",
+      "matches": 28,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 559,
+      "jobCpuMs": 723,
+      "metrics": {
+        "score": 81.25,
+        "backToBacks": 0,
+        "minimumRestMinutes": 30,
+        "averageRestMinutes": 40,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-17:00",
+        "totalDayMinutes": 480,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "s2-canoe-polo-104",
+      "title": "S2 canoe polo, 4 divisions (16/12/8/16), 104 matches, 4 courts, 2 days, limit 4",
+      "kind": "feasible",
+      "matches": 104,
+      "slots": 144,
+      "iterations": 64,
+      "jobTimeMs": 8606,
+      "jobCpuMs": 7878,
+      "metrics": {
+        "score": 59.72,
+        "backToBacks": 0,
+        "minimumRestMinutes": 30,
+        "averageRestMinutes": 185.18,
+        "restSpreadMinutes": 0,
+        "days": "11-14 08:00-18:00, 11-15 08:00-13:30",
+        "totalDayMinutes": 930,
+        "courtLoadSpreadMinutes": 60,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "s3-officials",
+      "title": "S3 championship focus 8 with four officials on partial windows (required)",
+      "kind": "feasible",
+      "matches": 16,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 968,
+      "jobCpuMs": 1226,
+      "metrics": {
+        "score": 63,
+        "backToBacks": 2,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 39.38,
+        "restSpreadMinutes": 12.99,
+        "days": "11-14 09:00-17:00",
+        "totalDayMinutes": 480,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "s4-exact-fit",
+      "title": "S4 exact fit: 28 round-robin matches on 28 slots (2 courts x 14)",
+      "kind": "feasible",
+      "matches": 28,
+      "slots": 28,
+      "iterations": 64,
+      "jobTimeMs": 1395,
+      "jobCpuMs": 1617,
+      "metrics": {
+        "score": 75,
+        "backToBacks": 4,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 30,
+        "restSpreadMinutes": 15,
+        "days": "11-14 09:00-16:00",
+        "totalDayMinutes": 420,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "s5-locks",
+      "title": "S5 three locks (one entry locked back to back), preferred rest",
+      "kind": "feasible",
+      "matches": 28,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 789,
+      "jobCpuMs": 886,
+      "metrics": {
+        "score": 63.75,
+        "backToBacks": 1,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 44.38,
+        "restSpreadMinutes": 9.92,
+        "days": "11-07 09:00-17:30",
+        "totalDayMinutes": 510,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "s7-repair-court-closed",
+      "title": "S7 re-planning: S1 published, court 2 closed 13:00-15:00, preserve existing (preferred, w50)",
+      "kind": "feasible",
+      "matches": 28,
+      "slots": 32,
+      "iterations": 64,
+      "jobTimeMs": 615,
+      "jobCpuMs": 775,
+      "metrics": {
+        "score": 54,
+        "backToBacks": 6,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 43.75,
+        "restSpreadMinutes": 15,
+        "days": "11-14 09:00-18:00",
+        "totalDayMinutes": 540,
+        "courtLoadSpreadMinutes": 120,
+        "movedMatches": 3
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "round-robin-12-two-days",
+      "title": "Badminton round robin, 12 entries, 66 matches, 2 courts, 2 days",
+      "kind": "feasible",
+      "matches": 66,
+      "slots": 72,
+      "iterations": 64,
+      "jobTimeMs": 2582,
+      "jobCpuMs": 3055,
+      "metrics": {
+        "score": 75.11,
+        "backToBacks": 0,
+        "minimumRestMinutes": 30,
+        "averageRestMinutes": 150,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-18:00, 11-15 09:00-16:30",
+        "totalDayMinutes": 990,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-badminton-8",
+      "title": "badminton 8 entries, championship focus, 16 matches, 2 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 16,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 771,
+      "jobCpuMs": 783,
+      "metrics": {
+        "score": 79.75,
+        "backToBacks": 0,
+        "minimumRestMinutes": 30,
+        "averageRestMinutes": 32.5,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-16:00",
+        "totalDayMinutes": 420,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-badminton-12",
+      "title": "badminton 12 entries, championship focus, 24 matches, 2 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 24,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 1418,
+      "jobCpuMs": 1646,
+      "metrics": {
+        "score": 60,
+        "backToBacks": 8,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 38.57,
+        "restSpreadMinutes": 14.14,
+        "days": "11-14 09:00-18:00",
+        "totalDayMinutes": 540,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-badminton-16",
+      "title": "badminton 16 entries, championship focus, 32 matches, 4 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 32,
+      "slots": 72,
+      "iterations": 64,
+      "jobTimeMs": 1256,
+      "jobCpuMs": 1464,
+      "metrics": {
+        "score": 72.75,
+        "backToBacks": 0,
+        "minimumRestMinutes": 30,
+        "averageRestMinutes": 31.88,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-18:00",
+        "totalDayMinutes": 540,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-badminton-24",
+      "title": "badminton 24 entries, championship focus, 48 matches, 4 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 48,
+      "slots": 72,
+      "iterations": 64,
+      "jobTimeMs": 3356,
+      "jobCpuMs": 3570,
+      "metrics": {
+        "score": 61.5,
+        "backToBacks": 128,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 20,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-17:30",
+        "totalDayMinutes": 510,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-badminton-48",
+      "title": "badminton 48 entries, championship focus, 96 matches, 6 courts, 2 day(s)",
+      "kind": "feasible",
+      "matches": 96,
+      "slots": 216,
+      "iterations": 64,
+      "jobTimeMs": 8915,
+      "jobCpuMs": 8302,
+      "metrics": {
+        "score": 72.65,
+        "backToBacks": 0,
+        "minimumRestMinutes": 30,
+        "averageRestMinutes": 135,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-18:00, 11-15 09:00-16:30",
+        "totalDayMinutes": 990,
+        "courtLoadSpreadMinutes": 60,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-table_tennis-8",
+      "title": "table tennis 8 entries, championship focus, 16 matches, 2 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 16,
+      "slots": 54,
+      "iterations": 64,
+      "jobTimeMs": 749,
+      "jobCpuMs": 845,
+      "metrics": {
+        "score": 80.53,
+        "backToBacks": 0,
+        "minimumRestMinutes": 40,
+        "averageRestMinutes": 41.67,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-15:40",
+        "totalDayMinutes": 400,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-table_tennis-12",
+      "title": "table tennis 12 entries, championship focus, 24 matches, 2 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 24,
+      "slots": 54,
+      "iterations": 64,
+      "jobTimeMs": 984,
+      "jobCpuMs": 1147,
+      "metrics": {
+        "score": 76,
+        "backToBacks": 0,
+        "minimumRestMinutes": 40,
+        "averageRestMinutes": 48.57,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-17:40",
+        "totalDayMinutes": 520,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-table_tennis-16",
+      "title": "table tennis 16 entries, championship focus, 32 matches, 4 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 32,
+      "slots": 108,
+      "iterations": 64,
+      "jobTimeMs": 1534,
+      "jobCpuMs": 1876,
+      "metrics": {
+        "score": 74.79,
+        "backToBacks": 0,
+        "minimumRestMinutes": 40,
+        "averageRestMinutes": 41.25,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-17:40",
+        "totalDayMinutes": 520,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-table_tennis-24",
+      "title": "table tennis 24 entries, championship focus, 48 matches, 4 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 48,
+      "slots": 108,
+      "iterations": 64,
+      "jobTimeMs": 2429,
+      "jobCpuMs": 2784,
+      "metrics": {
+        "score": 59,
+        "backToBacks": 32,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 35.56,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-18:00",
+        "totalDayMinutes": 540,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-table_tennis-48",
+      "title": "table tennis 48 entries, championship focus, 96 matches, 6 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 96,
+      "slots": 162,
+      "iterations": 64,
+      "jobTimeMs": 10141,
+      "jobCpuMs": 10184,
+      "metrics": {
+        "score": 60.73,
+        "backToBacks": 344,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 20.91,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-17:20",
+        "totalDayMinutes": 500,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-volleyball-8",
+      "title": "volleyball 8 entries, championship focus, 16 matches, 2 courts, 2 day(s)",
+      "kind": "feasible",
+      "matches": 16,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 470,
+      "jobCpuMs": 672,
+      "metrics": {
+        "score": 79.9,
+        "backToBacks": 0,
+        "minimumRestMinutes": 60,
+        "averageRestMinutes": 215,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-17:00, 11-15 09:00-14:00",
+        "totalDayMinutes": 780,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-volleyball-12",
+      "title": "volleyball 12 entries, championship focus, 24 matches, 2 courts, 2 day(s)",
+      "kind": "feasible",
+      "matches": 24,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 1188,
+      "jobCpuMs": 1598,
+      "metrics": {
+        "score": 60,
+        "backToBacks": 8,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 205.71,
+        "restSpreadMinutes": 28.28,
+        "days": "11-14 09:00-18:00, 11-15 09:00-18:00",
+        "totalDayMinutes": 1080,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-volleyball-16",
+      "title": "volleyball 16 entries, championship focus, 32 matches, 4 courts, 2 day(s)",
+      "kind": "feasible",
+      "matches": 32,
+      "slots": 72,
+      "iterations": 64,
+      "jobTimeMs": 1268,
+      "jobCpuMs": 1679,
+      "metrics": {
+        "score": 76.5,
+        "backToBacks": 0,
+        "minimumRestMinutes": 60,
+        "averageRestMinutes": 176.25,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-17:00, 11-15 09:00-18:00",
+        "totalDayMinutes": 1020,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-volleyball-24",
+      "title": "volleyball 24 entries, championship focus, 48 matches, 4 courts, 2 day(s)",
+      "kind": "feasible",
+      "matches": 48,
+      "slots": 72,
+      "iterations": 64,
+      "jobTimeMs": 2574,
+      "jobCpuMs": 3410,
+      "metrics": {
+        "score": 59.71,
+        "backToBacks": 120,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 140,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-18:00, 11-15 09:00-17:00",
+        "totalDayMinutes": 1020,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-volleyball-48",
+      "title": "volleyball 48 entries, championship focus, 96 matches, 6 courts, 3 day(s)",
+      "kind": "feasible",
+      "matches": 96,
+      "slots": 162,
+      "iterations": 64,
+      "jobTimeMs": 7514,
+      "jobCpuMs": 7553,
+      "metrics": {
+        "score": 58,
+        "backToBacks": 90,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 237.27,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-18:00, 11-15 09:00-18:00, 11-16 09:00-18:00",
+        "totalDayMinutes": 1620,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-basketball-8",
+      "title": "basketball 8 entries, championship focus, 16 matches, 2 courts, 2 day(s)",
+      "kind": "feasible",
+      "matches": 16,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 586,
+      "jobCpuMs": 700,
+      "metrics": {
+        "score": 79.9,
+        "backToBacks": 0,
+        "minimumRestMinutes": 60,
+        "averageRestMinutes": 215,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-17:00, 11-15 09:00-14:00",
+        "totalDayMinutes": 780,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-basketball-12",
+      "title": "basketball 12 entries, championship focus, 24 matches, 2 courts, 2 day(s)",
+      "kind": "feasible",
+      "matches": 24,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 935,
+      "jobCpuMs": 1395,
+      "metrics": {
+        "score": 60,
+        "backToBacks": 8,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 205.71,
+        "restSpreadMinutes": 28.28,
+        "days": "11-14 09:00-18:00, 11-15 09:00-18:00",
+        "totalDayMinutes": 1080,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-basketball-16",
+      "title": "basketball 16 entries, championship focus, 32 matches, 4 courts, 2 day(s)",
+      "kind": "feasible",
+      "matches": 32,
+      "slots": 72,
+      "iterations": 64,
+      "jobTimeMs": 1004,
+      "jobCpuMs": 1545,
+      "metrics": {
+        "score": 76.5,
+        "backToBacks": 0,
+        "minimumRestMinutes": 60,
+        "averageRestMinutes": 176.25,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-17:00, 11-15 09:00-18:00",
+        "totalDayMinutes": 1020,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-basketball-24",
+      "title": "basketball 24 entries, championship focus, 48 matches, 4 courts, 2 day(s)",
+      "kind": "feasible",
+      "matches": 48,
+      "slots": 72,
+      "iterations": 64,
+      "jobTimeMs": 2313,
+      "jobCpuMs": 3139,
+      "metrics": {
+        "score": 59.71,
+        "backToBacks": 120,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 140,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-18:00, 11-15 09:00-17:00",
+        "totalDayMinutes": 1020,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-basketball-48",
+      "title": "basketball 48 entries, championship focus, 96 matches, 6 courts, 3 day(s)",
+      "kind": "feasible",
+      "matches": 96,
+      "slots": 162,
+      "iterations": 64,
+      "jobTimeMs": 6163,
+      "jobCpuMs": 6963,
+      "metrics": {
+        "score": 58,
+        "backToBacks": 90,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 237.27,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-18:00, 11-15 09:00-18:00, 11-16 09:00-18:00",
+        "totalDayMinutes": 1620,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-canoe_polo-8",
+      "title": "canoe polo 8 entries, championship focus, 16 matches, 2 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 16,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 347,
+      "jobCpuMs": 539,
+      "metrics": {
+        "score": 79.75,
+        "backToBacks": 0,
+        "minimumRestMinutes": 30,
+        "averageRestMinutes": 32.5,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-16:00",
+        "totalDayMinutes": 420,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-canoe_polo-12",
+      "title": "canoe polo 12 entries, championship focus, 24 matches, 2 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 24,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 893,
+      "jobCpuMs": 1330,
+      "metrics": {
+        "score": 60,
+        "backToBacks": 8,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 38.57,
+        "restSpreadMinutes": 14.14,
+        "days": "11-14 09:00-18:00",
+        "totalDayMinutes": 540,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-canoe_polo-16",
+      "title": "canoe polo 16 entries, championship focus, 32 matches, 4 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 32,
+      "slots": 72,
+      "iterations": 64,
+      "jobTimeMs": 816,
+      "jobCpuMs": 1213,
+      "metrics": {
+        "score": 72.75,
+        "backToBacks": 0,
+        "minimumRestMinutes": 30,
+        "averageRestMinutes": 31.88,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-18:00",
+        "totalDayMinutes": 540,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-canoe_polo-24",
+      "title": "canoe polo 24 entries, championship focus, 48 matches, 4 courts, 1 day(s)",
+      "kind": "feasible",
+      "matches": 48,
+      "slots": 72,
+      "iterations": 64,
+      "jobTimeMs": 2207,
+      "jobCpuMs": 2936,
+      "metrics": {
+        "score": 61.5,
+        "backToBacks": 128,
+        "minimumRestMinutes": 0,
+        "averageRestMinutes": 20,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-17:30",
+        "totalDayMinutes": 510,
+        "courtLoadSpreadMinutes": 0,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "range-canoe_polo-48",
+      "title": "canoe polo 48 entries, championship focus, 96 matches, 6 courts, 2 day(s)",
+      "kind": "feasible",
+      "matches": 96,
+      "slots": 216,
+      "iterations": 64,
+      "jobTimeMs": 7587,
+      "jobCpuMs": 6896,
+      "metrics": {
+        "score": 72.65,
+        "backToBacks": 0,
+        "minimumRestMinutes": 30,
+        "averageRestMinutes": 135,
+        "restSpreadMinutes": 0,
+        "days": "11-14 09:00-18:00, 11-15 09:00-16:30",
+        "totalDayMinutes": 990,
+        "courtLoadSpreadMinutes": 60,
+        "movedMatches": 0
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "infeasible-capacity",
+      "title": "S4 venue too small: 28 round-robin matches, 12 slots",
+      "kind": "infeasible",
+      "matches": 28,
+      "slots": 12,
+      "iterations": 64,
+      "jobTimeMs": 183,
+      "jobCpuMs": 268,
+      "metrics": null,
+      "diagnostics": [
+        {
+          "code": "insufficient_capacity",
+          "message": "28 matches of 30 minutes need 840 court-minutes, but the venue windows provide 12 slots (360 court-minutes) over 1 day(s) (court-1: 6 slots; court-2: 6 slots). Add playing areas or time, or choose a smaller format."
+        }
+      ]
+    },
+    {
+      "id": "infeasible-daily-limit",
+      "title": "S1 with the old default: required limit of 4 per day, 7 matches per entry, 1 day",
+      "kind": "infeasible",
+      "matches": 28,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 4107,
+      "jobCpuMs": 4141,
+      "metrics": null,
+      "diagnostics": [
+        {
+          "code": "maximum_matches_per_day",
+          "message": "8 entries (rr:entry-1, rr:entry-2, rr:entry-3, rr:entry-4, rr:entry-5, rr:entry-6 and 2 more) may have to play up to 7 matches, but the required limit of 4 per day over 1 day(s) allows 4. Raise the daily limit to at least 7 or make it preferred."
+        }
+      ]
+    },
+    {
+      "id": "infeasible-required-rest",
+      "title": "S1 with 120 minutes of required rest",
+      "kind": "infeasible",
+      "matches": 28,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 1313,
+      "jobCpuMs": 1508,
+      "metrics": null,
+      "diagnostics": [
+        {
+          "code": "minimum_rest",
+          "message": "8 entries (rr:entry-1, rr:entry-2, rr:entry-3, rr:entry-4, rr:entry-5, rr:entry-6 and 2 more) may have to play up to 7 matches, but with 120 minutes of required rest only 4 fit in the venue windows (2026-11-14: 4). Reduce the required rest, make it preferred, or add playing time."
+        }
+      ]
+    },
+    {
+      "id": "infeasible-knockout-window",
+      "title": "Championship focus 8 with enough slots but too few rounds for the knockout chain",
+      "kind": "infeasible",
+      "matches": 16,
+      "slots": 24,
+      "iterations": 64,
+      "jobTimeMs": 338,
+      "jobCpuMs": 552,
+      "metrics": null,
+      "diagnostics": [
+        {
+          "code": "dependency_order",
+          "message": "Match ko:championship-r1-m1 must wait for 12 prerequisite match(es), which cannot finish before 2026-11-14 10:30, and no 30-minute slot remains after that. Add playing time after the prerequisite rounds."
+        },
+        {
+          "code": "dependency_order",
+          "message": "Match ko:championship-r1-m2 must wait for 12 prerequisite match(es), which cannot finish before 2026-11-14 10:30, and no 30-minute slot remains after that. Add playing time after the prerequisite rounds."
+        }
+      ]
+    },
+    {
+      "id": "infeasible-official-window",
+      "title": "S3 over-constrained: one official with a one-hour window on four matches",
+      "kind": "infeasible",
+      "matches": 28,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 939,
+      "jobCpuMs": 1142,
+      "metrics": null,
+      "diagnostics": [
+        {
+          "code": "official_overlap",
+          "message": "Official official-a is assigned to 4 matches but only 2 non-overlapping slots are available. Widen the official's availability or assign another official."
+        }
+      ]
+    },
+    {
+      "id": "infeasible-locked-rest",
+      "title": "S5 as captured (job input): three locks put one entry back to back while 30 minutes of rest is required",
+      "kind": "infeasible",
+      "matches": 28,
+      "slots": 36,
+      "iterations": 64,
+      "jobTimeMs": 162,
+      "jobCpuMs": 231,
+      "metrics": null,
+      "diagnostics": [
+        {
+          "code": "minimum_rest",
+          "message": "Locked matches 941e2c47-9262-4de3-a564-a1423cf25aab (2026-11-07 09:00) and 3246e0bd-d6a3-4149-aaa2-d708f8d40639 (2026-11-07 09:30) leave c8d8ea87-94b9-4078-9e31-2fc2d6711406 only 0 minutes of rest, but 30 minutes are required. Unlock or move one of them, or reduce the required rest."
+        }
+      ]
+    }
+  ],
+  "formatChecks": [
+    {
+      "id": "S1 badminton 8 entries, 2 courts, 1 day",
+      "formats": 4,
+      "totalMs": 11,
+      "statuses": "feasible, feasible, feasible, feasible"
+    },
+    {
+      "id": "S2-like canoe polo 4 x 16 entries, 4 courts, 2 days",
+      "formats": 4,
+      "totalMs": 184,
+      "statuses": "infeasible, not_checked, feasible, infeasible"
+    },
+    {
+      "id": "48 entries, 6 courts, 3 days",
+      "formats": 4,
+      "totalMs": 330,
+      "statuses": "feasible, feasible, feasible, infeasible"
+    },
+    {
+      "id": "4 x 48 entries, 8 courts, 3 days",
+      "formats": 4,
+      "totalMs": 209,
+      "statuses": "infeasible, not_checked, not_checked, infeasible"
+    }
+  ]
+}

@@ -19,7 +19,9 @@ describe("production scheduling capacity regressions", () => {
       }),
     );
 
-    expect(candidates).toHaveLength(1);
+    // The rest-aware construction and the greedy iteration may both be offered; each must be valid.
+    expect(candidates.length).toBeGreaterThanOrEqual(1);
+    expect(candidates.every((candidate) => candidate.result.quality?.valid === true)).toBe(true);
     expect(candidates[0]?.result.assignments).toHaveLength(36);
     expect(new Set(candidates[0]?.result.assignments.map((assignment) => assignment.slot_id)).size).toBe(36);
     expect(candidates[0]?.result.quality?.valid).toBe(true);

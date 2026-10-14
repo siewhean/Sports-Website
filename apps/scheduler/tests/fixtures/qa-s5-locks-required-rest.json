@@ -1,0 +1,559 @@
+{
+  "slots": [
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:1",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794015000000,
+      "start_epoch_ms": 1794013200000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:2",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794016800000,
+      "start_epoch_ms": 1794015000000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:3",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794018600000,
+      "start_epoch_ms": 1794016800000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:4",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794020400000,
+      "start_epoch_ms": 1794018600000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:5",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794022200000,
+      "start_epoch_ms": 1794020400000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:6",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794024000000,
+      "start_epoch_ms": 1794022200000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:7",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794025800000,
+      "start_epoch_ms": 1794024000000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:8",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794027600000,
+      "start_epoch_ms": 1794025800000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:9",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794029400000,
+      "start_epoch_ms": 1794027600000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:10",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794031200000,
+      "start_epoch_ms": 1794029400000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:11",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794033000000,
+      "start_epoch_ms": 1794031200000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:12",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794034800000,
+      "start_epoch_ms": 1794033000000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:13",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794036600000,
+      "start_epoch_ms": 1794034800000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:14",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794038400000,
+      "start_epoch_ms": 1794036600000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:15",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794040200000,
+      "start_epoch_ms": 1794038400000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:16",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794042000000,
+      "start_epoch_ms": 1794040200000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:17",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794043800000,
+      "start_epoch_ms": 1794042000000
+    },
+    {
+      "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+      "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:18",
+      "interval_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1",
+      "end_epoch_ms": 1794045600000,
+      "start_epoch_ms": 1794043800000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:1",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794015000000,
+      "start_epoch_ms": 1794013200000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:2",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794016800000,
+      "start_epoch_ms": 1794015000000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:3",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794018600000,
+      "start_epoch_ms": 1794016800000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:4",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794020400000,
+      "start_epoch_ms": 1794018600000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:5",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794022200000,
+      "start_epoch_ms": 1794020400000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:6",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794024000000,
+      "start_epoch_ms": 1794022200000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:7",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794025800000,
+      "start_epoch_ms": 1794024000000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:8",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794027600000,
+      "start_epoch_ms": 1794025800000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:9",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794029400000,
+      "start_epoch_ms": 1794027600000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:10",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794031200000,
+      "start_epoch_ms": 1794029400000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:11",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794033000000,
+      "start_epoch_ms": 1794031200000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:12",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794034800000,
+      "start_epoch_ms": 1794033000000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:13",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794036600000,
+      "start_epoch_ms": 1794034800000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:14",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794038400000,
+      "start_epoch_ms": 1794036600000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:15",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794040200000,
+      "start_epoch_ms": 1794038400000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:16",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794042000000,
+      "start_epoch_ms": 1794040200000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:17",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794043800000,
+      "start_epoch_ms": 1794042000000
+    },
+    {
+      "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+      "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:18",
+      "interval_id": "eafce330-266c-41ed-b737-81e3e16f0ae3",
+      "end_epoch_ms": 1794045600000,
+      "start_epoch_ms": 1794043800000
+    }
+  ],
+  "job_id": "508f5a0d-d635-4f19-9465-75d4cdc42154",
+  "matches": [
+    {
+      "match_id": "065997cb-e146-4e92-a922-fd1ce5463cf1",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["6168610e-25f6-4233-9f7d-758cd2d66c3d", "dc7916a0-f4ba-4803-902f-f79d1f874647"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "d5bfa67c-5ea5-4f0a-a09c-68254eb84c15",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["0ccf378b-d652-4274-a453-f7371bbf56dc", "984d8fa9-153e-44c6-8219-260bdab17508"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "3246e0bd-d6a3-4149-aaa2-d708f8d40639",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "fixed_assignment": {
+        "reason": "locked",
+        "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+        "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:2",
+        "end_epoch_ms": 1794016800000,
+        "start_epoch_ms": 1794015000000
+      },
+      "possible_entry_ids": ["6c1178c0-e43f-4191-996e-e37bd03a5122", "c8d8ea87-94b9-4078-9e31-2fc2d6711406"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "f2d2d93b-2316-4f7a-aca4-d7a33499f5a0",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["7c57c7d4-7dc8-4fbf-8502-38612608a4a8", "fdc8419c-e77c-4fc7-86ca-0f648c24b681"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "30b6fab2-b674-4f4b-a4a5-3f314a7c2f79",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["984d8fa9-153e-44c6-8219-260bdab17508", "dc7916a0-f4ba-4803-902f-f79d1f874647"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "d3a94b43-489e-47a9-a19a-ae8a5826058d",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["6168610e-25f6-4233-9f7d-758cd2d66c3d", "6c1178c0-e43f-4191-996e-e37bd03a5122"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "bb30b356-4e47-4826-ae82-4ddc9d056aac",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["0ccf378b-d652-4274-a453-f7371bbf56dc", "7c57c7d4-7dc8-4fbf-8502-38612608a4a8"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "d0101c24-a58d-4ffd-aa93-630577b1d0b0",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["c8d8ea87-94b9-4078-9e31-2fc2d6711406", "fdc8419c-e77c-4fc7-86ca-0f648c24b681"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "300d674e-f5a1-421d-a95f-7eeebb084382",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["6c1178c0-e43f-4191-996e-e37bd03a5122", "dc7916a0-f4ba-4803-902f-f79d1f874647"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "ec6d74d0-1fb2-4d94-ae4b-2d8aff36ec0a",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["7c57c7d4-7dc8-4fbf-8502-38612608a4a8", "984d8fa9-153e-44c6-8219-260bdab17508"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "25bcf628-69a8-4411-ac6e-6bf44dd97c4a",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["6168610e-25f6-4233-9f7d-758cd2d66c3d", "fdc8419c-e77c-4fc7-86ca-0f648c24b681"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "b69a4b75-f24d-4b6e-a4d7-ebf7ae606796",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["0ccf378b-d652-4274-a453-f7371bbf56dc", "c8d8ea87-94b9-4078-9e31-2fc2d6711406"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "44226ca7-9b88-44e1-a3c5-83b2ff1f1820",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["7c57c7d4-7dc8-4fbf-8502-38612608a4a8", "dc7916a0-f4ba-4803-902f-f79d1f874647"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "d9d5d1e1-4b9e-4481-a84d-38b6a3b1b48c",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["6c1178c0-e43f-4191-996e-e37bd03a5122", "fdc8419c-e77c-4fc7-86ca-0f648c24b681"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "f353cf07-c173-4272-abc0-8c7da6f09cd6",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["984d8fa9-153e-44c6-8219-260bdab17508", "c8d8ea87-94b9-4078-9e31-2fc2d6711406"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "06312bf6-03db-442f-add0-582cb20368e9",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["0ccf378b-d652-4274-a453-f7371bbf56dc", "6168610e-25f6-4233-9f7d-758cd2d66c3d"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "67d45d50-eee2-49ad-aec1-1d12c27230cf",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["dc7916a0-f4ba-4803-902f-f79d1f874647", "fdc8419c-e77c-4fc7-86ca-0f648c24b681"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "a8213af5-31ef-4f9b-a7fc-57821caa8553",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["7c57c7d4-7dc8-4fbf-8502-38612608a4a8", "c8d8ea87-94b9-4078-9e31-2fc2d6711406"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "c8c7afe6-389b-4904-a610-28f564ae6760",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["0ccf378b-d652-4274-a453-f7371bbf56dc", "6c1178c0-e43f-4191-996e-e37bd03a5122"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "3db2557c-378f-4f93-a84e-3e7c71e6ef6e",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["6168610e-25f6-4233-9f7d-758cd2d66c3d", "984d8fa9-153e-44c6-8219-260bdab17508"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "941e2c47-9262-4de3-a564-a1423cf25aab",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "fixed_assignment": {
+        "reason": "locked",
+        "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7",
+        "slot_id": "e93448fb-eb9f-4520-8ee2-31c124b3f7d1:1",
+        "end_epoch_ms": 1794015000000,
+        "start_epoch_ms": 1794013200000
+      },
+      "possible_entry_ids": ["c8d8ea87-94b9-4078-9e31-2fc2d6711406", "dc7916a0-f4ba-4803-902f-f79d1f874647"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "da933552-2e2a-4b1e-aefd-94b4fd79aac9",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "fixed_assignment": {
+        "reason": "locked",
+        "area_id": "58e77fc3-802f-419a-88f0-6b33c6c0683f",
+        "slot_id": "eafce330-266c-41ed-b737-81e3e16f0ae3:1",
+        "end_epoch_ms": 1794015000000,
+        "start_epoch_ms": 1794013200000
+      },
+      "possible_entry_ids": ["0ccf378b-d652-4274-a453-f7371bbf56dc", "fdc8419c-e77c-4fc7-86ca-0f648c24b681"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "f656c5be-c900-4eef-a143-830310647315",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["6168610e-25f6-4233-9f7d-758cd2d66c3d", "7c57c7d4-7dc8-4fbf-8502-38612608a4a8"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "5a07c809-be3b-474e-a2b2-c5a3e6795735",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["6c1178c0-e43f-4191-996e-e37bd03a5122", "984d8fa9-153e-44c6-8219-260bdab17508"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "7d4d5a85-8bcf-4bb2-acf9-9aa75a6d1164",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["0ccf378b-d652-4274-a453-f7371bbf56dc", "dc7916a0-f4ba-4803-902f-f79d1f874647"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "e7734a90-5054-453e-a7da-9fe846ba520e",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["6168610e-25f6-4233-9f7d-758cd2d66c3d", "c8d8ea87-94b9-4078-9e31-2fc2d6711406"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "226522de-b5ca-4a8c-a835-3f08ac31a3e9",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["984d8fa9-153e-44c6-8219-260bdab17508", "fdc8419c-e77c-4fc7-86ca-0f648c24b681"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    },
+    {
+      "match_id": "c21af1a1-af8f-4296-a929-dc4bce43cbf5",
+      "division_id": "417d2729-ae17-426a-a8d3-f6c583a2dbe7",
+      "official_ids": [],
+      "duration_minutes": 30,
+      "possible_entry_ids": ["6c1178c0-e43f-4191-996e-e37bd03a5122", "7c57c7d4-7dc8-4fbf-8502-38612608a4a8"],
+      "dependency_match_ids": [],
+      "is_championship_final": false
+    }
+  ],
+  "objective": "balanced",
+  "time_zone": "Asia/Singapore",
+  "constraints": {
+    "minimum_rest": { "mode": "required", "value": { "minutes": 30 } },
+    "entry_unavailable": { "mode": "ignored", "value": { "by_entry_id": {} } },
+    "balance_late_matches": { "mode": "preferred", "value": { "at_or_after_local_time": "16:00" }, "weight": 2 },
+    "preferred_final_time": {
+      "mode": "preferred",
+      "value": { "tolerance_minutes": 30, "target_start_epoch_ms": 1794043800000 },
+      "weight": 3
+    },
+    "balance_early_matches": { "mode": "preferred", "value": { "before_local_time": "09:00" }, "weight": 2 },
+    "featured_playing_area": {
+      "mode": "ignored",
+      "value": { "area_id": "4c508683-9b4a-47dd-8122-a39e887d01c7", "match_ids": [] }
+    },
+    "official_availability": { "mode": "ignored", "value": { "by_official_id": {} } },
+    "keep_division_together": { "mode": "preferred", "value": { "maximum_area_count": 2 }, "weight": 2 },
+    "maximum_matches_per_day": { "mode": "required", "value": { "matches": 7 } },
+    "avoid_consecutive_matches": { "mode": "preferred", "value": { "minutes": 30 }, "weight": 4 },
+    "preserve_existing_schedule": { "mode": "ignored", "value": { "by_match_id": {}, "maximum_shift_minutes": 0 } }
+  },
+  "capacity_hash": "54d153587e7baed8642f93d6ac943046769afb99170cfc880b4d635da69d3c0b",
+  "competition_id": "90a00205-14d0-4a8a-b0b0-be5c6aad0a2f",
+  "schema_version": 1,
+  "source_revision": 1,
+  "capacity_revision": 2
+}

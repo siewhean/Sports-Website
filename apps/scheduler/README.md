@@ -56,3 +56,18 @@ pnpm --filter @matchday/scheduler test:unit
 RUN_INFRA_TESTS=1 pnpm --filter @matchday/scheduler test:integration
 pnpm --filter @matchday/scheduler build
 ```
+
+## Benchmark (Track R3)
+
+`pnpm bench:scheduler` runs the fixtures in `tests/benchmark` as production jobs (64 iterations each, one solver thread, every candidate re-verified) and writes `docs/qa/r3-scheduler-benchmark.md` and `.json`. For each fixture it records job time, score, back-to-backs, minimum and average rest, rest spread, day lengths, court spread and matches moved.
+
+The same suite runs in CI with the scheduler unit tests (`test:unit`; the range fixtures run 4 iterations there) and asserts the Track R3 targets:
+
+- Every feasible fixture yields a valid schedule, so there are no false `no_solution` results. The feasible fixtures are the October QA scenarios and all five sports at 8/12/16/24/48 entries, including multi-day venues, officials and locks.
+- Job time: at most 5 s for S1 and at most 15 s for S2 (104 canoe polo matches).
+- Back-to-backs: 0 wherever the fixture stores a witness schedule with 0 (S1, S2). More than 0 where the fixture proves 0 is impossible (S4 exact fit).
+- Re-planning after a court closes moves exactly the displaced matches.
+- Every infeasible fixture returns `no_solution` with a named diagnostic whose message states the fix.
+- The format suggestion check stays within 2 s for five formats per request.
+
+The solver strategy behind these numbers is recorded in `docs/decisions/0007-scheduler-solver-strategy.md`.

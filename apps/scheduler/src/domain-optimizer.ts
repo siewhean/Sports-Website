@@ -24,11 +24,11 @@ type VerifiedSchedule = {
   quality: ReturnType<typeof evaluateScheduleQuality>;
 };
 
-type GeneratedSchedules = ReadonlyArray<
-  {
-    candidate: ReturnType<typeof generateScheduleCandidates>[number];
-  } & VerifiedSchedule
->;
+type GeneratedSchedule = {
+  candidate: ReturnType<typeof generateScheduleCandidates>[number];
+  backToBackCount: number;
+} & VerifiedSchedule;
+type GeneratedSchedules = ReadonlyArray<GeneratedSchedule>;
 
 export class DomainScheduleOptimizer implements ScheduleOptimizer {
   readonly #maxIterationsPerRun: number;
@@ -105,6 +105,63 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
         }
         bestScore = verifiedSeed.quality.score;
       }
+      const toYield = (generated: GeneratedSchedule) => ({
+        iteration: generated.candidate.iteration,
+        result: {
+          schema_version: 1 as const,
+          job_id: request.input.job_id,
+          source_revision: request.input.source_revision,
+          result_revision: 0,
+          status: "valid" as const,
+          assignments: generated.candidate.assignments.map(toTransportAssignment),
+          violations: generated.validation.violations.map(toTransportViolation),
+          quality: toTransportQuality(generated.quality),
+          assignment_hash: "0".repeat(64),
+        },
+      });
+      // The rest-aware construction goes first, so on a score tie it is the one kept. Its
+      // back-to-back count is then a ceiling: a greedy candidate with more back-to-backs is never
+      // offered, so "0 back-to-backs when a witness exists" holds whatever the score weights say.
+      let backToBackCeiling = Number.POSITIVE_INFINITY;
+      let pending: GeneratedSchedule | null = null;
+      const preserving = request.input.constraints.preserve_existing_schedule.mode !== "ignored";
+      // The search budget follows the yield deadline (about 20 nodes per millisecond leaves a wide
+      // margin on slow runners): 120 000 nodes at the 30 s production default.
+      const constructedRestAware = await session.request<GeneratedSchedule | false>(
+        {
+          operation: "rest_aware",
+          iteration: request.startIteration,
+          maxNodes: Math.max(1_000, Math.min(120_000, Math.floor(request.maxYieldIntervalMs * 20))),
+        },
+        request.signal,
+        request.maxYieldIntervalMs,
+      );
+      if (constructedRestAware === null) return;
+      let restAware: GeneratedSchedule | false = constructedRestAware;
+      if (restAware !== false) {
+        const improved = await session.request<GeneratedSchedule>(
+          { operation: "improve", iteration: request.startIteration, assignments: restAware.candidate.assignments },
+          request.signal,
+          request.maxYieldIntervalMs,
+        );
+        if (improved === null) return;
+        if (improved.validation.valid && improved.quality.valid && improved.quality.score >= restAware.quality.score)
+          restAware = improved;
+      }
+      if (restAware !== false && restAware.validation.valid && restAware.quality.valid) {
+        backToBackCeiling = restAware.backToBackCount;
+        // Held back until the first greedy candidate is scored, so the first schedule offered is
+        // already the better of the two. A best that changes moments after it appears makes an
+        // organiser's "use schedule" refer to a superseded option.
+        if (restAware.quality.score > bestScore) pending = restAware;
+      }
+      const offerPending = function* () {
+        if (pending === null) return;
+        if (pending.quality.score > bestScore) bestScore = pending.quality.score;
+        const held = pending;
+        pending = null;
+        yield toYield(held);
+      };
       const endIteration = request.startIteration + this.#maxIterationsPerRun;
       for (let iteration = request.startIteration; iteration < endIteration; iteration += 1) {
         if (request.signal.aborted) return;
@@ -117,36 +174,48 @@ export class DomainScheduleOptimizer implements ScheduleOptimizer {
         for (const constructed of generated) {
           if (request.signal.aborted) return;
           if (!constructed.validation.valid || !constructed.quality.valid) continue;
-          let { candidate, validation, quality } = constructed;
-          if (quality.score > bestScore) {
-            const improved = await session.request<GeneratedSchedules[number]>(
-              { operation: "improve", iteration: candidate.iteration, assignments: candidate.assignments },
+          let chosen = constructed;
+          if (chosen.quality.score > bestScore) {
+            const improved = await session.request<GeneratedSchedule>(
+              {
+                operation: "improve",
+                iteration: chosen.candidate.iteration,
+                assignments: chosen.candidate.assignments,
+              },
               request.signal,
               request.maxYieldIntervalMs,
             );
             if (improved === null) return;
-            if (improved.validation.valid && improved.quality.valid && improved.quality.score >= quality.score) {
-              ({ candidate, validation, quality } = improved);
+            if (improved.validation.valid && improved.quality.valid && improved.quality.score >= chosen.quality.score) {
+              chosen = improved;
             }
-            bestScore = quality.score;
           }
-          yield {
-            iteration: candidate.iteration,
-            result: {
-              schema_version: 1 as const,
-              job_id: request.input.job_id,
-              source_revision: request.input.source_revision,
-              result_revision: 0,
-              status: "valid" as const,
-              assignments: candidate.assignments.map(toTransportAssignment),
-              violations: validation.violations.map(toTransportViolation),
-              quality: toTransportQuality(quality),
-              assignment_hash: "0".repeat(64),
-            },
-          };
+          const beatsPending =
+            pending !== null &&
+            chosen.backToBackCount <= backToBackCeiling &&
+            chosen.quality.score > pending.quality.score;
+          if (pending !== null && !beatsPending) {
+            // One candidate per iteration: the processor requires strictly increasing iterations,
+            // and a greedy candidate that does not beat the rest-aware one cannot win anyway.
+            if (chosen.quality.score > bestScore) bestScore = chosen.quality.score;
+            yield* offerPending();
+            continue;
+          }
+          pending = null;
+          // Raised even when the candidate is not offered, so local search is spent once per
+          // score level rather than on every iteration that the ceiling then rejects.
+          if (chosen.quality.score > bestScore) bestScore = chosen.quality.score;
+          if (chosen.backToBackCount > backToBackCeiling) continue;
+          // Without a rest-aware construction, the first schedule offered sets the ceiling, so a
+          // later higher-scoring one cannot bring back-to-backs back. Re-planning is exempt:
+          // there, keeping matches in place outranks spacing.
+          if (backToBackCeiling === Number.POSITIVE_INFINITY && !preserving) backToBackCeiling = chosen.backToBackCount;
+          yield toYield(chosen);
         }
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
+      // No greedy candidate at all (or none valid): the rest-aware schedule is still offered.
+      yield* offerPending();
     } finally {
       if (this.#activeSessions.get(request.input) === session) this.#activeSessions.delete(request.input);
       session.close();
@@ -348,7 +417,7 @@ function setting<Input, Output>(
   return { mode: input.mode, value, ...(input.weight === undefined ? {} : { weight: input.weight }) };
 }
 
-function toDomainAssignment(assignment: TransportAssignment): ScheduleAssignment {
+export function toDomainAssignment(assignment: TransportAssignment): ScheduleAssignment {
   return {
     matchId: assignment.match_id,
     divisionId: assignment.division_id,

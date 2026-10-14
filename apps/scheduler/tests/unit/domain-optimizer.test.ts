@@ -35,11 +35,8 @@ describe("DomainScheduleOptimizer", () => {
 
     expect(first).toEqual(replay);
     expect(first.length).toBeGreaterThan(0);
-    expect(
-      (await Promise.all(first.map(({ result }) => optimizer.verifyCandidate(input, result)))).every(
-        (result) => result !== null,
-      ),
-    ).toBe(true);
+    // One at a time: each verification starts its own worker, and parallel starts contend for CPU.
+    for (const { result } of first) expect(await optimizer.verifyCandidate(input, result)).not.toBeNull();
     expect(first.map(({ iteration }) => iteration)).toEqual(
       [...first.map(({ iteration }) => iteration)].sort((a, b) => a - b),
     );

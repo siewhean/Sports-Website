@@ -43,7 +43,7 @@ export type ScheduleImprovement = {
 };
 
 /** Gap below which two matches of one participant count as back to back. */
-function backToBackBufferMinutes(problem: ScheduleProblem): number {
+export function backToBackBufferMinutes(problem: ScheduleProblem): number {
   const { avoidConsecutiveMatches } = problem.constraints;
   return avoidConsecutiveMatches.mode === "ignored" ? 1 : Math.max(1, avoidConsecutiveMatches.value.minutes);
 }
@@ -177,10 +177,26 @@ function shapeKey(problem: ScheduleProblem, assignments: readonly ScheduleAssign
   return {
     moved: preserveExistingSchedule.mode === "ignored" ? 0 : shape.movedMatchCount,
     cost:
-      restWeight * (40 * shape.backToBackCount + 1 * restShortfall + 3 * shape.restSpreadMinutes) +
+      restWeight * (BACK_TO_BACK_WEIGHT * shape.backToBackCount + 1 * restShortfall + 3 * shape.restSpreadMinutes) +
       compactWeight * (0.5 * dayLength + 1 * lateFinish) +
-      0.25 * shape.courtLoadSpreadMinutes,
+      0.25 * shape.courtLoadSpreadMinutes +
+      0.05 * courtLoadDeviation(shape.courtLoadMinutes),
   };
+}
+
+/**
+ * A back-to-back outweighs any compactness or court-balance gain (a day is at most 1 440 minutes,
+ * weighted 0.5). Moved matches are the leading key of the shape key, not a cost term, so minimal
+ * change still wins on a repair regardless of this weight.
+ */
+const BACK_TO_BACK_WEIGHT = 400;
+
+/** Total distance of each area's load from the mean; unlike max-min, every rebalancing move counts. */
+function courtLoadDeviation(loads: Readonly<Record<string, number>>): number {
+  const values = Object.values(loads);
+  if (values.length === 0) return 0;
+  const mean = values.reduce((total, value) => total + value, 0) / values.length;
+  return values.reduce((total, value) => total + Math.abs(value - mean), 0);
 }
 
 /** Matches worth trying first: moved from the previous revision, or in a back-to-back pair. */
@@ -238,7 +254,7 @@ function overlaps(
  * intrinsic hard rule and every `required` setting the constructor enforces; the final result is
  * still re-validated in full before it is returned.
  */
-function movesAllowed(
+export function scheduleMovesAllowed(
   problem: ScheduleProblem,
   matchesById: ReadonlyMap<string, SchedulingMatch>,
   dependantsById: ReadonlyMap<string, readonly string[]>,
@@ -434,7 +450,7 @@ export function improveSchedule(
       next.set(otherId, moveTo(other, slotOf(assignment)));
       moved = [matchId, otherId];
     }
-    if (!movesAllowed(problem, matchesById, dependantsById, ancestors, next, moved)) continue;
+    if (!scheduleMovesAllowed(problem, matchesById, dependantsById, ancestors, next, moved)) continue;
     const candidate = [...next.values()];
     const key = shapeKey(problem, candidate, lateMinute);
     if (!improvesOn(key, currentKey)) continue;
