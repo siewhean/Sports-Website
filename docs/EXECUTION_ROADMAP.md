@@ -311,7 +311,7 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 **Deliverables**
 
 - [x] R4.1 Immediate: hide or disable the stub AI features that charge credits (format modify, schedule preferences, repair recommendations). The deterministic v1 format recommendations stay; label them as rules-based suggestions.
-- [x] R4.2 Provider decision ADR: launch without AI models using deterministic template-based explanations (recorded in `docs/decisions/0007-launch-without-ai-template-explanations.md`), with post-launch governance for cheap models with spending caps and no-training terms.
+- [x] R4.2 Provider decision ADR: launch without AI models using deterministic template-based explanations (recorded in `docs/decisions/0010-launch-without-ai-template-explanations.md`), with post-launch governance for cheap models with spending caps and no-training terms.
 - R4.3 If a provider is chosen post-launch:
   - a provider class behind `AiProviderPort` and a new `PHASE4_AI_PROVIDER` value;
   - prompt templates for format changes, schedule preferences and repair, mapped onto the real format-graph, constraint and move schemas;
@@ -324,7 +324,7 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 **Checkpoint CP4 — AI**
 
 - [x] No production feature charges credits for stub output.
-- [x] Provider ADR recorded (`docs/decisions/0007-launch-without-ai-template-explanations.md`).
+- [x] Provider ADR recorded (`docs/decisions/0010-launch-without-ai-template-explanations.md`).
 - [ ] If AI ships: evaluation pass rate, injection tests and cost budget recorded; outputs remain proposal-only.
 - [ ] Quota display matches actual remaining units.
 

@@ -1,4 +1,4 @@
-# ADR 0007 — Track R4: Launch Without AI Models & Deterministic Template Explanations
+# ADR 0010 — Track R4: Launch Without AI Models & Deterministic Template Explanations
 
 **Status:** Accepted  
 **Date:** 14 October 2026  
