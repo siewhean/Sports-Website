@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Gauge, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import {
@@ -9,11 +10,13 @@ import {
   phase3CapacityMachine,
   removeAreaLabel,
   validateCapacityDraft,
+  type CapacityAffectedMatch,
   type CapacityAreaDraft,
   type CapacityDocument,
   type CapacitySurfaceState,
   type CapacityWindowDraft,
 } from "@/lib/phase3-capacity";
+import { formatScheduleDay, formatScheduleTime } from "@/lib/phase4-schedule";
 import styles from "./CapacityEditor.module.css";
 
 function newWindow(): CapacityWindowDraft {
@@ -44,9 +47,16 @@ function newArea(index: number): CapacityAreaDraft {
 }
 
 export function CapacityEditor({ document }: { document: CapacityDocument }) {
+  // Retained areas (removed but still referenced by scheduled matches) are not editable capacity:
+  // they are listed separately so the organiser can re-plan the matches that still use them.
+  const editableSource = document.areas.filter((area) => !area.retained);
   const [areas, setAreas] = useState<readonly CapacityAreaDraft[]>(() =>
-    document.areas.length ? document.areas : [newArea(0)],
+    editableSource.length ? editableSource : [newArea(0)],
   );
+  const [retainedAreas, setRetainedAreas] = useState<readonly CapacityAreaDraft[]>(() =>
+    document.areas.filter((area) => area.retained),
+  );
+  const [affectedMatches, setAffectedMatches] = useState<readonly CapacityAffectedMatch[]>([]);
   const [summary, setSummary] = useState(document.summary);
   const [revision, setRevision] = useState(document.revision);
   const [busy, setBusy] = useState(false);
@@ -112,7 +122,9 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
         return;
       }
       setSummary(parsed.effective);
-      setAreas(parsed.areas);
+      setAreas(parsed.areas.filter((area) => !area.retained));
+      setRetainedAreas(parsed.areas.filter((area) => area.retained));
+      setAffectedMatches(parsed.replanRequired ? (parsed.affectedMatches ?? []) : []);
       setRevision(parsed.revision);
       setDirty(false);
       setMessage(phase3CapacityCopy.saved);
@@ -265,7 +277,78 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
       </form>
 
       <CapacityRail summary={summary} />
+      {affectedMatches.length || retainedAreas.length ? (
+        <ReplanPanel
+          competitionId={document.competitionId}
+          timezone={document.timezone}
+          affectedMatches={affectedMatches}
+          retainedAreas={retainedAreas}
+          areaNames={new Map([...areas, ...retainedAreas].map((area) => [area.id, area.name]))}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function ReplanPanel({
+  competitionId,
+  timezone,
+  affectedMatches,
+  retainedAreas,
+  areaNames,
+}: {
+  competitionId: string;
+  timezone: string;
+  affectedMatches: readonly CapacityAffectedMatch[];
+  retainedAreas: readonly CapacityAreaDraft[];
+  areaNames: ReadonlyMap<string, string>;
+}) {
+  const format = (iso: string) => `${formatScheduleDay(iso, timezone)} ${formatScheduleTime(iso, timezone)}`;
+  return (
+    <section className={styles.replan} aria-labelledby="capacity-replan-title" data-testid="capacity-replan">
+      <WarningCircle aria-hidden="true" />
+      {affectedMatches.length ? (
+        <>
+          <h2 id="capacity-replan-title">{phase3CapacityCopy.affectedTitle}</h2>
+          <p role="status">{phase3CapacityCopy.affectedBody(affectedMatches.length)}</p>
+          <ul className={styles.replanList}>
+            {affectedMatches.map((match) => (
+              <li key={match.matchId}>
+                <strong>{match.matchCode}</strong>
+                <span>
+                  {format(match.startsAt)} · {areaNames.get(match.playingAreaId) ?? phase3CapacityCopy.playingAreas}
+                </span>
+                <span className={styles.replanReason}>{phase3CapacityCopy.affectedReason[match.reason]}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <h2 id="capacity-replan-title">{phase3CapacityCopy.retainedTitle}</h2>
+      )}
+      {retainedAreas.length ? (
+        <div data-testid="capacity-retained-areas">
+          {affectedMatches.length ? <h3>{phase3CapacityCopy.retainedTitle}</h3> : null}
+          <p>{phase3CapacityCopy.retainedBody}</p>
+          <ul className={styles.replanList}>
+            {retainedAreas.map((area) => (
+              <li key={area.id}>
+                <strong>{area.name}</strong>
+                <span>{phase3CapacityCopy.retainedCount(area.scheduledMatchCount ?? 0)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <div className={styles.replanActions}>
+        <Link className={styles.primaryButton} href={`/organiser/competitions/${competitionId}/schedule`}>
+          {phase3CapacityCopy.replan}
+        </Link>
+        <Link className={styles.secondaryButton} href={`/organiser/competitions/${competitionId}/repairs`}>
+          {phase3CapacityCopy.openRepairs}
+        </Link>
+      </div>
+    </section>
   );
 }
 

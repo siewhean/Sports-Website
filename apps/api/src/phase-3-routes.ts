@@ -130,6 +130,8 @@ const CapacityResponse = Type.Object(
           sort_order: Type.Integer(),
           slot_minutes: Type.Integer(),
           fixed_reserve_slots: Type.Integer(),
+          scheduled_match_count: Type.Integer({ minimum: 0 }),
+          retained: Type.Boolean(),
           availability: Type.Array(CapacityWindowResponse),
           unavailable: Type.Array(CapacityWindowResponse),
         },
@@ -138,6 +140,26 @@ const CapacityResponse = Type.Object(
     ),
     effective: CapacityEffective,
     idempotent_replay: Type.Optional(Type.Boolean()),
+    affected_matches: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            match_id: Id,
+            match_code: Type.String(),
+            playing_area_id: Id,
+            starts_at: Type.String({ format: "date-time" }),
+            ends_at: Type.String({ format: "date-time" }),
+            reason: Type.Union([
+              Type.Literal("playing_area_removed"),
+              Type.Literal("playing_area_unavailable"),
+              Type.Literal("outside_availability_windows"),
+            ]),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    replan_required: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

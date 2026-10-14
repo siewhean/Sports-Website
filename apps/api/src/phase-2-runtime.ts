@@ -29,6 +29,8 @@ import {
 import type { PostgresJsSql } from "@matchday/identity";
 import type { CompetitionPublicationNotifier } from "./competition-publication-notifier.js";
 import { standingsResultFromSnapshot } from "./standings-results.js";
+import { RepairRepository } from "./repositories/repair.repository.js";
+import { enqueueResultPublishedNotifications } from "./match-notifications.js";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import { applyLiveOverlay, liveOverlayRowsSql, liveOverlayUpdatedAt, parseLiveOverlay } from "./public-live-overlay.js";
 import {
@@ -41,7 +43,9 @@ import {
 /** Public segment/time detail derived from a reducer state or a persisted result snapshot. */
 function publicScoreDetails(
   raw: unknown,
-): Pick<PublicMatchResult, "current_segment" | "segments" | "recorded_time_seconds"> {
+  /** Only published result snapshots may carry the walkover flag; live, unfinalised state never does. */
+  published = false,
+): Pick<PublicMatchResult, "current_segment" | "segments" | "recorded_time_seconds" | "walkover"> {
   const state =
     typeof raw === "string" ? jsonValue<Record<string, unknown>>(raw) : (raw as Record<string, unknown> | null);
   if (!state || typeof state !== "object") return {};
@@ -66,6 +70,11 @@ function publicScoreDetails(
         : [],
     ),
     recorded_time_seconds: lastTimed ? (lastTimed.manualTimeSeconds as number) : null,
+    // A walkover/forfeit keeps the sport pack's forfeit scoreline in home_score/away_score;
+    // this flag lets clients present it as "W/O" instead of a played score.
+    ...(published && state.exceptionalOutcome === "walkover" && (state.winner === "home" || state.winner === "away")
+      ? { walkover: { winner: state.winner as "home" | "away" } }
+      : {}),
   };
 }
 
@@ -4855,6 +4864,9 @@ export class Phase2Runtime {
           actor.accountId,
         ],
       );
+      // The insert above creates this correction's result repair case (DB trigger); close any older
+      // unpublished case for the same match now, on the write, so reads never mutate (Track R2.3).
+      await new RepairRepository(tx).reconcileStaleCases(competitionId, tx, matchId);
       const conflicts = await tx.unsafe<{
         id: string;
         corrected_match_id: string;
@@ -5068,6 +5080,18 @@ export class Phase2Runtime {
       after: { home_score: reduced.homeScore, away_score: reduced.awayScore, result_version: resultVersion },
       eventPayload: { competition_id: match.competition_id, match_id: input.matchId, result_version: resultVersion },
     });
+    await enqueueResultPublishedNotifications(
+      tx,
+      {
+        competitionId: match.competition_id,
+        matchId: input.matchId,
+        resultVersion,
+        homeScore: reduced.homeScore,
+        awayScore: reduced.awayScore,
+        walkover: input.canonical.state.exceptionalOutcome === "walkover",
+      },
+      () => this.now(),
+    );
     return {
       match_id: input.matchId,
       home_score: reduced.homeScore,
@@ -5586,7 +5610,7 @@ export class Phase2Runtime {
       away_score: match.away_score,
       state: match.state,
       updated_at: serializedDate(match.created_at),
-      ...publicScoreDetails(match.snapshot),
+      ...publicScoreDetails(match.snapshot, true),
     }));
     const liveCutoff = liveMatchStaleCutoff(this.now(), this.liveMatchStaleAfterMs);
     const liveMatches = await tx.unsafe<{
@@ -5663,6 +5687,47 @@ export class Phase2Runtime {
           )
         : [];
     const standingsByDivision = new Map(standings.map((snapshot) => [snapshot.division_id, snapshot]));
+    const poolMembership =
+      resultVersion > 0
+        ? await tx.unsafe<{ division_id: string; pool_id: string; entry_id: string }>(
+            `SELECT DISTINCT m.division_id,COALESCE(m.graph_pool_id,m.graph_stage_id) AS pool_id,entry.entry_id
+           FROM matches m
+           CROSS JOIN LATERAL (VALUES (m.home_entry_id),(m.away_entry_id)) AS entry(entry_id)
+           WHERE m.competition_id=$1 AND m.graph_purpose='pool' AND entry.entry_id IS NOT NULL
+             AND COALESCE(m.graph_pool_id,m.graph_stage_id) IS NOT NULL
+           ORDER BY m.division_id,pool_id,entry.entry_id`,
+            [competitionId],
+          )
+        : [];
+    // Public-safety: the internal graph pool/stage ids never leave the API. Groups are published as
+    // positional letters (A, B, ...) in deterministic pool order, and entry_ids are restricted to
+    // entries already present in the division's published standings rows (which carry entryId).
+    const poolsByDivision = new Map<string, Map<string, string[]>>();
+    for (const row of poolMembership) {
+      const pools = poolsByDivision.get(row.division_id) ?? new Map<string, string[]>();
+      pools.set(row.pool_id, [...(pools.get(row.pool_id) ?? []), row.entry_id]);
+      poolsByDivision.set(row.division_id, pools);
+    }
+    const groupsByDivision = new Map<string, Array<{ id: string; entry_ids: string[] }>>();
+    for (const [divisionId, pools] of poolsByDivision) {
+      const snapshot = standingsByDivision.get(divisionId);
+      const rows = snapshot ? jsonValue<unknown>(snapshot.standings) : [];
+      const publishedEntryIds = new Set(
+        (Array.isArray(rows) ? rows : []).flatMap((row) =>
+          row && typeof row === "object" && typeof (row as { entryId?: unknown }).entryId === "string"
+            ? [(row as { entryId: string }).entryId]
+            : [],
+        ),
+      );
+      const groups = [...pools.keys()]
+        .sort()
+        .map((poolId, index) => ({
+          id: String.fromCharCode(65 + (index % 26)) + (index >= 26 ? String(Math.floor(index / 26)) : ""),
+          entry_ids: pools.get(poolId)!.filter((entryId) => publishedEntryIds.has(entryId)),
+        }))
+        .filter((group) => group.entry_ids.length > 0);
+      groupsByDivision.set(divisionId, groups);
+    }
     const bracketByDivision = new Map(bracket.map((snapshot) => [snapshot.division_id, snapshot]));
     const publicDivisions: PublicDivisionProjection[] = divisions.map((division) => {
       const publicSchedule: PublicScheduledMatch[] = schedule
@@ -5692,8 +5757,10 @@ export class Phase2Runtime {
           ...(match.current_segment !== undefined ? { current_segment: match.current_segment } : {}),
           ...(match.segments !== undefined ? { segments: match.segments } : {}),
           ...(match.recorded_time_seconds !== undefined ? { recorded_time_seconds: match.recorded_time_seconds } : {}),
+          ...(match.walkover !== undefined ? { walkover: match.walkover } : {}),
         }));
       const divisionStandings = standingsByDivision.get(division.id);
+      const divisionGroups = groupsByDivision.get(division.id) ?? [];
       const divisionBracket = bracketByDivision.get(division.id);
       return {
         division,
@@ -5703,6 +5770,8 @@ export class Phase2Runtime {
           ? {
               standings: jsonValue(divisionStandings.standings),
               explanation: jsonValue(divisionStandings.explanation),
+              // Pool membership so clients can render one table per group when a division has several.
+              ...(divisionGroups.length > 1 ? { groups: divisionGroups } : {}),
             }
           : null,
         bracket: divisionBracket
@@ -5858,13 +5927,17 @@ export class Phase2Runtime {
                 'match_id',m.id,'code',m.code,'stage',m.stage,'area_id',pa.id,'area',pa.name,
                 'starts_at',sm.starts_at,'ends_at',sm.ends_at,'state',m.state,
                 'home_score',latest_result.home_score,'away_score',latest_result.away_score,
-                'result_version',latest_result.result_version
+                'result_version',latest_result.result_version,
+                'walkover_winner',latest_result.walkover_winner
               ) ORDER BY sm.starts_at,pa.sort_order,m.ordinal) FILTER (WHERE sm.match_id IS NOT NULL),'[]'::jsonb) AS matches
        FROM schedule_revisions sr
        LEFT JOIN scheduled_matches sm ON sm.schedule_revision_id=sr.id
        LEFT JOIN matches m ON m.id=sm.match_id LEFT JOIN playing_areas pa ON pa.id=sm.playing_area_id
        LEFT JOIN LATERAL (
-         SELECT snapshot.home_score,snapshot.away_score,snapshot.result_version
+         SELECT snapshot.home_score,snapshot.away_score,snapshot.result_version,
+                CASE WHEN snapshot.snapshot->>'exceptionalOutcome'='walkover'
+                       AND snapshot.snapshot->>'winner' IN ('home','away')
+                     THEN snapshot.snapshot->>'winner' END AS walkover_winner
          FROM match_result_snapshots snapshot
          WHERE snapshot.match_id=m.id
          ORDER BY snapshot.result_version DESC

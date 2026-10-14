@@ -261,6 +261,17 @@ describe("organiser competition workspace mapping", () => {
     });
   });
 
+  it("maps a walkover winner on final results only", () => {
+    const payload = workspace();
+    const scheduled = payload.private_schedule?.matches as Array<Record<string, unknown>>;
+    scheduled[0]!.walkover_winner = "away";
+    scheduled[1]!.walkover_winner = "home";
+    expect(isOrganiserWorkspacePayload(payload)).toBe(true);
+    const view = toOrganiserCompetitionView(payload);
+    expect(view.matches.find((match) => match.id === matchId)?.walkover).toEqual({ winner: "away" });
+    expect(view.matches.find((match) => match.id === secondMatchId)?.walkover).toBeUndefined();
+  });
+
   it("accepts only exact or local-loopback-equivalent cookie hosts", () => {
     expect(cookieHostMatches("app.matchday.test:3000", "app.matchday.test")).toBe(true);
     expect(cookieHostMatches("localhost:3000", "127.0.0.1")).toBe(true);

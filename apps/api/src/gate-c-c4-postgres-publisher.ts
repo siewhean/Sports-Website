@@ -104,6 +104,9 @@ export class GateCC4PostgresPublisher implements GateCC4PublicationPort {
     }
 
     await this.competitionRepo.acquireCompetitionUpdateLock(input.competitionId, tx);
+    // Publishing a repair settles the competition's repair queue for that match: older unpublished
+    // cases superseded by a newer correction are closed in the same transaction (Track R2.3).
+    await this.repairRepo.reconcileStaleCases(input.competitionId, tx, input.repairCase.corrected_match_id);
     const allocatedRevision = await this.scheduleRepo.allocateRevision(input.competitionId, tx);
 
     const inputHash = sha256(

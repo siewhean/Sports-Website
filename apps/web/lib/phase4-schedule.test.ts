@@ -14,6 +14,8 @@ import {
   selectComparableScheduleOptions,
   scheduleConflictForMatch,
   type ScheduleDocument,
+  isScheduleDelayBody,
+  zonedLocalDateTimeToEpoch,
 } from "./phase4-schedule";
 
 const quality = {
@@ -616,5 +618,30 @@ describe("phase 4 schedule boundary parsers", () => {
         }),
       ).toBeNull();
     });
+  });
+});
+
+describe("schedule delay command (Track R2.2)", () => {
+  const area = "8e66bd53-a9cb-4cde-840a-cc94988ca461";
+  const other = "75706328-3058-44f0-a06a-8eb08980dd81";
+  const base = { idempotency_key: "schedule-delay:1", expected_revision: 4 };
+
+  it("accepts a time delay or an explicit court relocation only", () => {
+    expect(isScheduleDelayBody({ ...base, delay_minutes: 30 })).toBe(true);
+    expect(isScheduleDelayBody({ ...base, delay_minutes: 30, playing_area_id: area, from_epoch_ms: 1 })).toBe(true);
+    expect(isScheduleDelayBody({ ...base, playing_area_id: area, target_playing_area_id: other })).toBe(true);
+    expect(isScheduleDelayBody({ ...base })).toBe(false);
+    expect(isScheduleDelayBody({ ...base, delay_minutes: 0 })).toBe(false);
+    expect(isScheduleDelayBody({ ...base, delay_minutes: 721 })).toBe(false);
+    expect(isScheduleDelayBody({ ...base, target_playing_area_id: other })).toBe(false);
+    expect(isScheduleDelayBody({ ...base, playing_area_id: area, target_playing_area_id: area })).toBe(false);
+    expect(isScheduleDelayBody({ ...base, delay_minutes: 30, surprise: true })).toBe(false);
+  });
+
+  it("converts competition wall-clock time to an instant", () => {
+    expect(zonedLocalDateTimeToEpoch("2027-08-01T08:00", "Asia/Singapore")).toBe(Date.parse("2027-08-01T00:00:00Z"));
+    expect(zonedLocalDateTimeToEpoch("2027-01-15T09:30", "Europe/London")).toBe(Date.parse("2027-01-15T09:30:00Z"));
+    expect(zonedLocalDateTimeToEpoch("2027-07-15T09:30", "Europe/London")).toBe(Date.parse("2027-07-15T08:30:00Z"));
+    expect(zonedLocalDateTimeToEpoch("not a time", "Asia/Singapore")).toBeNull();
   });
 });

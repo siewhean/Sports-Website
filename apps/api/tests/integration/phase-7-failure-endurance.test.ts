@@ -766,7 +766,7 @@ describeInfrastructure(
         );
         const correctionBody = await correctionResponse.text();
         expect(correctionResponse.status, correctionBody).toBe(200);
-        const correction = JSON.parse(correctionBody) as { result_version: number };
+        const correction = JSON.parse(correctionBody) as { result_version: number; aggregate_version: number };
 
         expect(correction.result_version).toBeGreaterThan(0);
 
@@ -810,6 +810,50 @@ describeInfrastructure(
           LIMIT 1
         `;
         expect(publicProjection[0]?.result_version).toBe(correction.result_version);
+
+        // Track R2.3: a second correction supersedes the first result repair case on the write
+        // itself. Nothing reads the repair list in between, so the superseded event can only have
+        // been written by the correction transaction.
+        const secondCorrection = await fetch(
+          `${apiOrigin}/api/v1/competitions/${world.competition.id}/matches/${world.match.id}/corrections`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              cookie: organiserCookie,
+              origin: webOrigin,
+              "x-csrf-token": await csrfToken(),
+            },
+            body: JSON.stringify({
+              client_event_id: randomUUID(),
+              reason: "Second clerical adjustment",
+              expected_aggregate_version: correction.aggregate_version,
+              events: [
+                {
+                  client_event_id: randomUUID(),
+                  type: "three_point_score",
+                  team_slot: "away",
+                  participant_id: "Player 3",
+                  segment_number: 4,
+                  manual_time_seconds: 20,
+                  occurred_at: new Date().toISOString(),
+                },
+              ],
+            }),
+          },
+        );
+        expect(secondCorrection.status, await secondCorrection.clone().text()).toBe(200);
+        const cases = await client<{ source_result_version: number; superseded: boolean }[]>`
+          SELECT result_case.source_result_version,
+            EXISTS (
+              SELECT 1 FROM result_repair_case_events event
+              WHERE event.result_repair_case_id = result_case.id AND event.event_type = 'superseded'
+            ) AS superseded
+          FROM result_repair_cases result_case
+          WHERE result_case.corrected_match_id = ${world.match.id}
+          ORDER BY result_case.source_result_version`;
+        expect(cases).toHaveLength(2);
+        expect(cases.map((row) => row.superseded)).toEqual([true, false]);
       });
     });
   },

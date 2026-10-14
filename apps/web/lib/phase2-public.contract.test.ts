@@ -224,3 +224,60 @@ describe("public response classification", () => {
     expect(new PublicDataUnavailableError("x", 503).status).toBe(503);
   });
 });
+
+describe("walkover and per-group standings mapping", () => {
+  it("maps a walkover result to a W/O flag while keeping the forfeit scoreline", () => {
+    const projection = projectionWith(null, null);
+    const division = projection.divisions[0]!;
+    division.results = [{ ...division.results[0]!, home_score: 5, away_score: 0, walkover: { winner: "home" } }];
+    const view = toCompetitionView(projection);
+    const match = view.matches.find((item) => item.id === "m1");
+    expect(match).toMatchObject({ walkover: { winner: "home" }, homeScore: 5, awayScore: 0, status: "final" });
+    expect(view.matches.find((item) => item.id === "m3")?.walkover).toBeUndefined();
+  });
+
+  const row = (rank: number, entryId: string, entryName: string, tablePoints: number, scoreDifference: number) => ({
+    rank,
+    entryId,
+    entryName,
+    played: 1,
+    won: tablePoints > 0 ? 1 : 0,
+    drawn: 0,
+    lost: tablePoints > 0 ? 0 : 1,
+    tablePoints,
+    scoreDifference,
+  });
+  const rows = [
+    row(1, "e1", "Alpha", 3, 3),
+    row(2, "e3", "Charlie", 3, 1),
+    row(3, "e4", "Delta", 0, -1),
+    row(4, "e2", "Bravo", 0, -3),
+  ];
+
+  it("keeps a single merged table when the division has no or one group", () => {
+    expect(standingsView({ standings: rows }).every((item) => item.group === undefined)).toBe(true);
+    const single = standingsView({ standings: rows, groups: [{ id: "G1", entry_ids: ["e1", "e2", "e3", "e4"] }] });
+    expect(single.map((item) => [item.team, item.position, item.group])).toEqual([
+      ["Alpha", 1, undefined],
+      ["Charlie", 2, undefined],
+      ["Delta", 3, undefined],
+      ["Bravo", 4, undefined],
+    ]);
+  });
+
+  it("splits rows into one ranked table per group when several groups are present", () => {
+    const grouped = standingsView({
+      standings: rows,
+      groups: [
+        { id: "G1", entry_ids: ["e1", "e2"] },
+        { id: "G2", entry_ids: ["e3", "e4"] },
+      ],
+    });
+    expect(grouped.map((item) => [item.group?.label, item.position, item.team])).toEqual([
+      ["Group G1", 1, "Alpha"],
+      ["Group G1", 2, "Bravo"],
+      ["Group G2", 1, "Charlie"],
+      ["Group G2", 2, "Delta"],
+    ]);
+  });
+});

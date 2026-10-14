@@ -50,6 +50,7 @@ import {
 import type { ScheduleOfficialsProjection } from "@/lib/phase4-officials";
 import { MatchOfficialsSummary } from "./MatchOfficialsSummary";
 import { NoSolutionOfficialDiagnostics } from "./NoSolutionOfficialDiagnostics";
+import { ScheduleDelayPanel } from "./ScheduleDelayPanel";
 import styles from "./ScheduleWorkspace.module.css";
 
 type ErrorPayload = { error?: { code?: string } };
@@ -554,6 +555,23 @@ export function ScheduleWorkspace({
           currentRevision={document.currentRevision?.revision ?? null}
           onAccept={acceptOption}
           disabled={disabled}
+        />
+      ) : null}
+
+      {document.currentRevision && document.state === "ready" ? (
+        <ScheduleDelayPanel
+          revision={document.currentRevision}
+          areas={document.areas}
+          timeZone={document.timeZone}
+          disabled={disabled}
+          onDelayed={(revision, delayedCount) => {
+            setDocument((current) => ({
+              ...withRevision(current, revision),
+              canPublish: current.canEdit && revision.status === "ready_for_review",
+            }));
+            setMessage(phase4ScheduleCopy.delayed(delayedCount));
+            focusStatusHeading();
+          }}
         />
       ) : null}
 

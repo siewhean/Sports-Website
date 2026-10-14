@@ -183,7 +183,8 @@
 .empty button,
 .lockButton,
 .moveLink,
-.jobRail button {
+.jobRail button,
+.delayForm button {
   display: inline-flex;
   min-height: 44px;
   align-items: center;
@@ -207,7 +208,8 @@
 .headerActions button,
 .empty button,
 .useButton,
-.moveLink {
+.moveLink,
+.delayForm button {
   background: var(--schedule-signal);
   border-color: var(--schedule-signal-dark);
 }
@@ -684,6 +686,69 @@
   }
 }
 
+.delayPanel {
+  display: grid;
+  gap: 0.6rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--schedule-line);
+}
+
+.delayPanel header {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.delayPanel header svg {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
+.delayPanel h2,
+.delayPanel p {
+  margin: 0;
+}
+
+.delayPanel > p {
+  max-width: 60ch;
+  color: #484b46;
+}
+
+.delayForm {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 0.9rem;
+  align-items: end;
+}
+
+.delayForm label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.delayForm label > span {
+  font:
+    650 0.72rem/1.2 var(--font-geist-mono),
+    monospace;
+  text-transform: uppercase;
+}
+
+.delayForm input,
+.delayForm select {
+  min-height: 44px;
+  box-sizing: border-box;
+  border: 1px solid var(--schedule-line);
+  border-radius: 0.45rem;
+  padding: 0 0.6rem;
+  background: #fffef9;
+  color: var(--schedule-ink);
+  font: inherit;
+}
+
+.delayForm small {
+  color: #484b46;
+}
+
 @media (max-width: 1200px) {
   .commandBar {
     grid-template-columns: minmax(17rem, 0.8fr) minmax(25rem, 1.2fr);
@@ -713,6 +778,10 @@
 }
 
 @media (max-width: 900px) {
+  .delayForm {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .commandBar {
     grid-template-columns: 1fr;
   }
@@ -851,6 +920,10 @@
 }
 
 @media (max-width: 767px) {
+  .delayForm {
+    grid-template-columns: 1fr;
+  }
+
   .workspace {
     gap: 1.2rem;
   }
