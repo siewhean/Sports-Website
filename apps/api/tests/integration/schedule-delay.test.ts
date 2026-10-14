@@ -41,6 +41,8 @@ let courtA = "";
 let courtB = "";
 let accepted!: Accepted;
 let entriesByMatch = new Map<string, string[]>();
+let dependenciesByMatch = new Map<string, string[]>();
+let codeByMatch = new Map<string, string>();
 
 const actor = () => ({ accountId: ownerId });
 
@@ -254,11 +256,19 @@ beforeAll(async () => {
   await phase4.materialiseFormat(actor(), draft.draft_id, `materialise-${randomUUID()}`, randomUUID());
   await client`SELECT phase4_publish_format_revision(${draft.draft_id},${ownerId},${`publish-${randomUUID()}`})`;
   accepted = await solveAndAccept();
-  const entryRows = await client<{ id: string; home_entry_id: string | null; away_entry_id: string | null }[]>`
-    SELECT id,home_entry_id,away_entry_id FROM matches WHERE competition_id=${competitionId}`;
-  entriesByMatch = new Map(
-    entryRows.map((row) => [row.id, [row.home_entry_id, row.away_entry_id].filter((id): id is string => !!id)]),
-  );
+  // Entries and dependencies come from the accepted solver snapshot, which is what the delay validation
+  // checks against (knockout matches carry every entry that could reach them, not just resolved ones).
+  const [source] = await client<{ input_snapshot: unknown }[]>`
+    SELECT j.input_snapshot FROM schedule_revisions r JOIN schedule_generation_jobs j ON j.id=r.source_job_id
+    WHERE r.id=${accepted.id}`;
+  const snapshot = (
+    typeof source!.input_snapshot === "string" ? JSON.parse(source!.input_snapshot) : source!.input_snapshot
+  ) as { matches: Array<{ match_id: string; possible_entry_ids: string[]; dependency_match_ids: string[] }> };
+  entriesByMatch = new Map(snapshot.matches.map((match) => [match.match_id, match.possible_entry_ids]));
+  dependenciesByMatch = new Map(snapshot.matches.map((match) => [match.match_id, match.dependency_match_ids]));
+  const codeRows = await client<{ id: string; code: string }[]>`
+    SELECT id,code FROM matches WHERE competition_id=${competitionId}`;
+  codeByMatch = new Map(codeRows.map((row) => [row.id, row.code]));
 }, 120_000);
 
 afterAll(async () => {
@@ -302,13 +312,19 @@ describeInfrastructure("schedule delay tool validation (Track R2.2)", () => {
   });
 
   it("rejects a court-filtered delay that double-books a team across courts", async () => {
-    let scenario: { area: string; from: number; minutes: number } | null = null;
+    // Search the accepted schedule exhaustively (every court, start and on-grid delay up to close) for a
+    // delay that lands a moved match on top of another-court match sharing a possible entry, using the
+    // same solver snapshot data the server validates against. Delays that would also break a dependency
+    // are skipped so the entry overlap is the conflict reported.
+    type Scenario = { area: string; from: number; minutes: number; moved: string; other: string };
+    let scenario: Scenario | null = null;
+    const latestEnd = Math.max(...accepted.assignments.map((a) => a.end_epoch_ms));
     search: for (const area of [courtA, courtB]) {
       const starts = [
         ...new Set(accepted.assignments.filter((a) => a.area_id === area).map((a) => a.start_epoch_ms)),
       ].sort((x, y) => x - y);
       for (const from of starts) {
-        for (let minutes = 30; minutes <= 180; minutes += 30) {
+        for (let minutes = 30; from + minutes * MINUTE < latestEnd + 30 * MINUTE; minutes += 30) {
           const shifted = accepted.assignments
             .filter((a) => a.area_id === area && a.start_epoch_ms >= from)
             .map((a) => ({
@@ -317,27 +333,43 @@ describeInfrastructure("schedule delay tool validation (Track R2.2)", () => {
               end_epoch_ms: a.end_epoch_ms + minutes * MINUTE,
             }));
           if (shifted.some((a) => a.end_epoch_ms > CLOSES_AT)) continue;
-          const others = accepted.assignments.filter((a) => a.area_id !== area);
-          const doubleBooked = shifted.some((moved) =>
+          const shiftedIds = new Set(shifted.map((a) => a.match_id));
+          const others = accepted.assignments.filter((a) => !shiftedIds.has(a.match_id));
+          const breaksDependency = shifted.some((moved) =>
             others.some(
               (other) =>
-                overlaps(moved, other) &&
-                (entriesByMatch.get(moved.match_id) ?? []).some((entry) =>
-                  (entriesByMatch.get(other.match_id) ?? []).includes(entry),
-                ),
+                (dependenciesByMatch.get(other.match_id) ?? []).includes(moved.match_id) &&
+                other.start_epoch_ms < moved.end_epoch_ms,
             ),
           );
-          if (doubleBooked) {
-            scenario = { area, from, minutes };
-            break search;
+          if (breaksDependency) continue;
+          for (const moved of shifted) {
+            const other = others.find(
+              (candidate) =>
+                candidate.area_id !== area &&
+                overlaps(moved, candidate) &&
+                (entriesByMatch.get(moved.match_id) ?? []).some((entry) =>
+                  (entriesByMatch.get(candidate.match_id) ?? []).includes(entry),
+                ),
+            );
+            if (other) {
+              scenario = { area, from, minutes, moved: moved.match_id, other: other.match_id };
+              break search;
+            }
           }
         }
       }
     }
     if (!scenario) throw new Error("Fixture has no cross-court double-booking scenario");
-    await expect(
-      delay({ delay_minutes: scenario.minutes, playing_area_id: scenario.area, from_epoch_ms: scenario.from }),
-    ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/possible entry overlap/) });
+    const error = await delay({
+      delay_minutes: scenario.minutes,
+      playing_area_id: scenario.area,
+      from_epoch_ms: scenario.from,
+    }).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ statusCode: 422, message: expect.stringMatching(/possible entry overlap/) });
+    const message = (error as Error).message;
+    expect(message).toContain(codeByMatch.get(scenario.moved)!);
+    expect(message).toContain(codeByMatch.get(scenario.other)!);
   });
 
   it("rejects relocating matches onto an occupied court", async () => {
