@@ -609,6 +609,52 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     expect(await client`SELECT id FROM outbox_events WHERE aggregate_id=${ledger.id}`).toHaveLength(1);
   });
 
+  it("R4.1: stub AI features (format modify, schedule preferences) fallback to manual at 0 cost", async () => {
+    const divisionId = randomUUID();
+    await client`INSERT INTO divisions(id,competition_id,name,team_limit) VALUES(${divisionId},${competitionId},'AI Division',8)`;
+
+    const formatRes = await runtime.formatModify(
+      { accountId },
+      organisationId,
+      competitionId,
+      divisionId,
+      {
+        idempotency_key: `ai-fmt-${randomUUID()}`,
+        text: "Switch to double elimination",
+        current_document: {
+          schema_version: 1,
+          graph: { id: "g1", schemaVersion: 1, entryCount: 8, stages: [], matches: [], terminalMatchIds: [] },
+          layout: { schema_version: 1, stage_positions: [] },
+        },
+      },
+      randomUUID(),
+    );
+    expect(formatRes).toMatchObject({
+      status: "manual_fallback",
+      reason: "provider_unavailable",
+      charged_units: 0,
+      preserved_text: "Switch to double elimination",
+    });
+
+    const prefRes = await runtime.schedulePreferences(
+      { accountId },
+      organisationId,
+      competitionId,
+      divisionId,
+      {
+        idempotency_key: `ai-pref-${randomUUID()}`,
+        text: "Ensure 30 min rest",
+      },
+      randomUUID(),
+    );
+    expect(prefRes).toMatchObject({
+      status: "manual_fallback",
+      reason: "provider_unavailable",
+      charged_units: 0,
+      preserved_text: "Ensure 30 min rest",
+    });
+  });
+
   it("persists quota exhaustion distinctly and replays it without charging", async () => {
     await client`UPDATE ai_usage_allowances SET action_limit=used_units
       WHERE organisation_id=${organisationId} AND actor_account_id=${accountId} AND action='text_to_brief'`;
