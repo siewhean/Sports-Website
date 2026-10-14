@@ -145,12 +145,23 @@ export function measureScheduleShape(
 }
 
 /**
- * Single number the local search minimises. Terms: back-to-backs, shortfall against the rest
- * target, rest unfairness across participants, day length and finishes after the late threshold
- * (compactness), court load imbalance, and matches moved from the previous revision when the
- * preserve-existing setting is active. The objective scales the rest and compactness terms.
+ * What the local search minimises, compared lexicographically: first the number of matches moved
+ * from the previous revision (0 unless the preserve-existing setting is active), then the shape
+ * cost. Shape terms: back-to-backs, shortfall against the rest target, rest unfairness across
+ * participants, day length and finishes after the late threshold (compactness), and court load
+ * imbalance. The objective scales the rest and compactness terms.
+ *
+ * Moved matches are a separate key rather than a weighted term so that no amount of shape gain
+ * can buy a move away from a still-valid previous slot: a weighted term (formerly 1000 per
+ * match) loses to the rest-spread and shortfall sums on larger or more unbalanced schedules.
  */
-function shapeCost(problem: ScheduleProblem, assignments: readonly ScheduleAssignment[], lateMinute: number): number {
+type ShapeKey = { readonly moved: number; readonly cost: number };
+
+function improvesOn(candidate: ShapeKey, current: ShapeKey): boolean {
+  return candidate.moved < current.moved || (candidate.moved === current.moved && candidate.cost < current.cost);
+}
+
+function shapeKey(problem: ScheduleProblem, assignments: readonly ScheduleAssignment[], lateMinute: number): ShapeKey {
   const shape = measureScheduleShape(problem, assignments);
   const { minimumRest, preserveExistingSchedule } = problem.constraints;
   const restTarget = minimumRest.mode === "ignored" ? 0 : minimumRest.value.minutes;
@@ -163,12 +174,13 @@ function shapeCost(problem: ScheduleProblem, assignments: readonly ScheduleAssig
   const compactWeight = problem.objective === "fastest" ? 2 : 1;
   const dayLength = shape.days.reduce((total, day) => total + day.lengthMinutes, 0);
   const lateFinish = shape.days.reduce((total, day) => total + Math.max(0, day.lastEndLocalMinute - lateMinute), 0);
-  return (
-    restWeight * (40 * shape.backToBackCount + 1 * restShortfall + 3 * shape.restSpreadMinutes) +
-    compactWeight * (0.5 * dayLength + 1 * lateFinish) +
-    0.25 * shape.courtLoadSpreadMinutes +
-    (preserveExistingSchedule.mode === "ignored" ? 0 : 1_000 * shape.movedMatchCount)
-  );
+  return {
+    moved: preserveExistingSchedule.mode === "ignored" ? 0 : shape.movedMatchCount,
+    cost:
+      restWeight * (40 * shape.backToBackCount + 1 * restShortfall + 3 * shape.restSpreadMinutes) +
+      compactWeight * (0.5 * dayLength + 1 * lateFinish) +
+      0.25 * shape.courtLoadSpreadMinutes,
+  };
 }
 
 /** Matches worth trying first: moved from the previous revision, or in a back-to-back pair. */
@@ -342,8 +354,10 @@ function moveTo(assignment: ScheduleAssignment, slot: SchedulingSlot): ScheduleA
 /**
  * Deterministic improvement after construction: seeded relocate (to a free slot) and swap moves
  * between non-fixed matches, accepting a move only when it keeps every hard and required
- * constraint, lowers the shape cost, and does not lower the explainable quality score. Locked and
- * published-history matches never move. Bounded by move and re-score counts, never by wall time,
+ * constraint, never moves more matches away from the previous revision (and lowers the shape
+ * cost when it moves no fewer), and does not lower the explainable quality score. Locked and
+ * published-history matches never move; with preserve-existing active, an unlocked match whose
+ * previous slot is still valid stays put whatever the shape gain. Bounded by move and re-score counts, never by wall time,
  * so the same input and seed always return the same schedule.
  */
 export function improveSchedule(
@@ -378,7 +392,7 @@ export function improveSchedule(
   const random = mulberry32(options.seed);
 
   let current = new Map(original.map((assignment) => [assignment.matchId, assignment]));
-  let currentCost = shapeCost(problem, original, lateMinute);
+  let currentKey = shapeKey(problem, original, lateMinute);
   let currentScore = evaluateScheduleQuality(problem, original).score;
   const slotByPosition = new Map(slots.map((slot) => [`${slot.areaId}|${slot.startEpochMs}`, slot]));
   const previous = problem.constraints.preserveExistingSchedule;
@@ -422,13 +436,13 @@ export function improveSchedule(
     }
     if (!movesAllowed(problem, matchesById, dependantsById, ancestors, next, moved)) continue;
     const candidate = [...next.values()];
-    const cost = shapeCost(problem, candidate, lateMinute);
-    if (cost >= currentCost) continue;
+    const key = shapeKey(problem, candidate, lateMinute);
+    if (!improvesOn(key, currentKey)) continue;
     qualityChecks += 1;
     const quality = evaluateScheduleQuality(problem, candidate);
     if (!quality.valid || quality.score < currentScore) continue;
     current = next;
-    currentCost = cost;
+    currentKey = key;
     currentScore = quality.score;
     occupantBySlotId = new Map(candidate.map((value) => [value.slotId, value.matchId]));
     focus = focusMatchIds(problem, candidate);

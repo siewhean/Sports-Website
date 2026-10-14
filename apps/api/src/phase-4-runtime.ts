@@ -59,6 +59,7 @@ import {
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
+import { loadPreviousRevisionBaseline, withPreviousRevisionBaseline } from "./phase-4-schedule-baseline.js";
 import { assertChildInCompetition, assertDivisionInCompetition } from "./tenant-scope.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import {
@@ -189,6 +190,7 @@ function workspaceDefaultScheduleConstraints(input: {
 /** Interactive budget for checking suggested formats against the venue; later ones stay not_checked. */
 const RECOMMENDATION_SCHEDULE_CHECK_BUDGET_MS = 1_500;
 const RECOMMENDATION_SCHEDULE_CHECK_MAX_FORMATS = 5;
+const RECOMMENDATION_SCHEDULE_CHECK_MAX_SLOTS = 5000;
 /** Largest matches × slots solved in a request (~0.1-0.3 s worst case including relaxation rungs). */
 const RECOMMENDATION_SCHEDULE_CHECK_MAX_SOLVE_CELLS = 60_000;
 const RECOMMENDATION_SCHEDULE_CHECK_MAX_MATCHES = 600;
@@ -1022,11 +1024,13 @@ export class Phase4Runtime {
       [access.id],
     );
     const slots = capacityMatchSlots(windows, unavailable, durationMinutes);
-    if (slots.length === 0) return undefined;
+    if (slots.length === 0 || slots.length > RECOMMENDATION_SCHEDULE_CHECK_MAX_SLOTS) return undefined;
+    let finalTargetEpochMs = slots[0]!.startEpochMs;
+    for (const slot of slots) if (slot.startEpochMs > finalTargetEpochMs) finalTargetEpochMs = slot.startEpochMs;
     const constraints = this.domainConstraints(
       workspaceDefaultScheduleConstraints({
         dailyLimit: 4,
-        finalTargetEpochMs: Math.max(...slots.map((slot) => slot.startEpochMs)),
+        finalTargetEpochMs,
         featuredAreaId: areaRows[0]!.id,
         areaCount: areaRows.length,
       }),
@@ -3587,18 +3591,23 @@ export class Phase4Runtime {
       }
     }
 
-    const effectiveConstraints: ScheduleConstraints = {
-      ...constraints,
-      official_availability: {
-        mode: constraints.official_availability?.mode ?? "ignored",
-        value: {
-          by_official_id: officialAvailabilityWindows,
+    // Minimal-change regeneration: the latest revision is the baseline, so unlocked matches whose
+    // previous slot is still valid stay put and only displaced ones move.
+    const effectiveConstraints: ScheduleConstraints = withPreviousRevisionBaseline(
+      {
+        ...constraints,
+        official_availability: {
+          mode: constraints.official_availability?.mode ?? "ignored",
+          value: {
+            by_official_id: officialAvailabilityWindows,
+          },
+          ...(constraints.official_availability?.weight !== undefined
+            ? { weight: constraints.official_availability.weight }
+            : {}),
         },
-        ...(constraints.official_availability?.weight !== undefined
-          ? { weight: constraints.official_availability.weight }
-          : {}),
       },
-    };
+      await loadPreviousRevisionBaseline(tx, competition.id, new Set(matchesWithOfficials.map((match) => match.id))),
+    );
 
     const locks = await tx.unsafe<{
       match_id: string;
@@ -4317,7 +4326,10 @@ export class Phase4Runtime {
       )
       .map(({ match_id }) => match_id);
     const completion = (assignments: typeof left.assignments) =>
-      assignments.length ? Math.max(...assignments.map((assignment) => assignment.end_epoch_ms)) : null;
+      assignments.reduce<number | null>(
+        (max, assignment) => (max === null || assignment.end_epoch_ms > max ? assignment.end_epoch_ms : max),
+        null,
+      );
     const leftCompletion = completion(left.assignments);
     const rightCompletion = completion(right.assignments);
     const leftRest = left.quality?.minimum_rest_minutes ?? null;

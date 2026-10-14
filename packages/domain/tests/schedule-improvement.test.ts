@@ -245,3 +245,115 @@ describe("minimal change when regenerating (QA scenario 7)", () => {
     expect(hardViolations(repair, improved.assignments)).toEqual([]);
   });
 });
+
+describe("moved matches outrank every shape term (QA scenario 5 regeneration)", () => {
+  // Three matches on one court. Team A plays back to back at 09:00 and 09:30 while team B rests
+  // until 17:30, so relocating A's second match to the free 17:30 slot on court 2 removes a
+  // back-to-back, 60 minutes of rest shortfall, and all rest unfairness: a shape gain well above
+  // the former 1000-per-move weight. With the previous revision preserved and every previous slot
+  // still valid, nothing may move regardless.
+  const slots = courtSlots(2, 18);
+  const slot = (id: string) => slots.find((candidate) => candidate.id === id)!;
+  const matches: SchedulingMatch[] = (
+    [
+      ["m1", ["team-a", "team-b"]],
+      ["m2", ["team-a", "team-c"]],
+      ["m3", ["team-b", "team-d"]],
+    ] as const
+  ).map(([id, entries]) => ({
+    id,
+    divisionId: "rr",
+    durationMinutes: 30,
+    dependencyMatchIds: [],
+    possibleEntryIds: [...entries],
+    officialIds: [],
+    isChampionshipFinal: false,
+  }));
+  const previous: ScheduleAssignment[] = (
+    [
+      ["m1", "court-1:1"],
+      ["m2", "court-1:2"],
+      ["m3", "court-1:18"],
+    ] as const
+  ).map(([matchId, slotId]) => {
+    const target = slot(slotId);
+    return {
+      matchId,
+      divisionId: "rr",
+      areaId: target.areaId,
+      intervalId: target.intervalId,
+      slotId: target.id,
+      startEpochMs: target.startEpochMs,
+      endEpochMs: target.endEpochMs,
+      fixed: false,
+    };
+  });
+  const byMatchId = Object.fromEntries(
+    previous.map((assignment) => [
+      assignment.matchId,
+      { areaId: assignment.areaId, startEpochMs: assignment.startEpochMs },
+    ]),
+  );
+  const regeneration = (lockedMatchId?: string): ScheduleProblem => ({
+    timeZone: "Asia/Singapore",
+    objective: "rest_focused",
+    matches: matches.map((match) => {
+      if (match.id !== lockedMatchId) return match;
+      const locked = previous.find((assignment) => assignment.matchId === lockedMatchId)!;
+      return {
+        ...match,
+        fixedAssignment: {
+          reason: "locked",
+          areaId: locked.areaId,
+          slotId: locked.slotId,
+          startEpochMs: locked.startEpochMs,
+          endEpochMs: locked.endEpochMs,
+        },
+      };
+    }),
+    slots,
+    constraints: defaults({
+      preserveExistingSchedule: setting("preferred", { maximumShiftMinutes: 0, byMatchId }, 1),
+    }),
+  });
+  const placementsOf = (assignments: readonly ScheduleAssignment[]) =>
+    [...assignments]
+      .sort((left, right) => left.matchId.localeCompare(right.matchId))
+      .map(({ matchId, areaId, startEpochMs }) => ({ matchId, areaId, startEpochMs }));
+
+  it("has a shape improvement available that the search would otherwise take", () => {
+    const unpreserved: ScheduleProblem = {
+      ...regeneration(),
+      constraints: defaults({
+        preserveExistingSchedule: setting("ignored", { maximumShiftMinutes: 0, byMatchId: {} }),
+      }),
+    };
+    const improved = improveSchedule(unpreserved, previous, { seed: 1 });
+    expect(improved.acceptedMoves).toBeGreaterThan(0);
+    expect(measureScheduleShape(regeneration(), improved.assignments).movedMatchCount).toBeGreaterThan(0);
+  });
+
+  it("keeps every unlocked match in its still-valid previous slot", () => {
+    for (const seed of [1, 2, 3, 5, 8]) {
+      const problem = regeneration();
+      const improved = improveSchedule(problem, previous, { seed });
+      expect(measureScheduleShape(problem, improved.assignments).movedMatchCount).toBe(0);
+      expect(placementsOf(improved.assignments)).toEqual(placementsOf(previous));
+      expect(hardViolations(problem, improved.assignments)).toEqual([]);
+    }
+  });
+
+  it("keeps every unlocked match put when one match is locked in place, as scenario 5 regenerates", () => {
+    const problem = regeneration("m1");
+    const start = previous.map((assignment) => ({ ...assignment, fixed: assignment.matchId === "m1" }));
+    for (const seed of [1, 2, 3, 5, 8]) {
+      const improved = improveSchedule(problem, start, { seed });
+      expect(measureScheduleShape(problem, improved.assignments).movedMatchCount).toBe(0);
+      expect(placementsOf(improved.assignments)).toEqual(placementsOf(previous));
+    }
+    // Constructing from the same inputs keeps the previous placements too: no candidate drifts.
+    for (const candidate of generateScheduleCandidates(problem, { startIteration: 0, maxIterations: 4 })) {
+      expect(measureScheduleShape(problem, candidate.assignments).movedMatchCount).toBe(0);
+    }
+  });
+});
