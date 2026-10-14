@@ -4,6 +4,7 @@ import {
   isEntryCreateBody,
   parseCreatedDivision,
   parseCreatedEntry,
+  phase3EntriesCopy,
   totalActiveEntries,
 } from "./phase3-entries";
 
@@ -84,5 +85,17 @@ describe("division and entry commands", () => {
         },
       ]),
     ).toBe(16);
+  });
+
+  it("provides field-and-fix validation guidance for divisions and entries", () => {
+    expect(phase3EntriesCopy.divisionNameRequired).toMatch(/^(Enter|Select)\b/);
+    expect(phase3EntriesCopy.divisionNameRequired).toContain("division name");
+    expect(phase3EntriesCopy.divisionLimitInvalid).toMatch(/^(Enter|Select)\b/);
+    expect(phase3EntriesCopy.divisionLimitInvalid).toContain("limit");
+    expect(phase3EntriesCopy.entryNameRequired).toMatch(/^(Enter|Select)\b/);
+    expect(phase3EntriesCopy.entryNameRequired).toContain("name");
+    expect(phase3EntriesCopy.entrySeedInvalid).toMatch(/^(Enter|Select)\b/);
+    expect(phase3EntriesCopy.entrySeedInvalid).toContain("seed");
+    expect(phase3EntriesCopy.freeLimitReached).toContain("16");
   });
 });

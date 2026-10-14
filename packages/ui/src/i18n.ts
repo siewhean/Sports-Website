@@ -1,6 +1,23 @@
 export const defaultLocale = "en-SG";
 export const defaultTimeZone = "Asia/Singapore";
 
+export const competitionCreateFieldKeys = [
+  "organisation_id",
+  "name",
+  "slug",
+  "sport_code",
+  "venue",
+  "address",
+  "locality",
+  "country_code",
+  "starts_on",
+  "ends_on",
+  "timezone",
+  "locale",
+] as const;
+
+export type CompetitionCreateFieldKey = (typeof competitionCreateFieldKeys)[number];
+
 export const messages = {
   metadata: {
     defaultTitle: "MATCHDAY · Competition operations",
@@ -209,7 +226,7 @@ export const messages = {
       ends_on: "Select an end date on or after the start date.",
       timezone: "Select a valid IANA time zone (e.g. 'Asia/Singapore').",
       locale: "Select a valid locale code (e.g. 'en-SG').",
-    },
+    } satisfies Record<CompetitionCreateFieldKey, string>,
     validationSummary: "Check the highlighted competition detail.",
     commandFailed: "The competition could not be created. Your details remain on this page.",
   },

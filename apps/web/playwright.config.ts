@@ -89,7 +89,7 @@ export default defineConfig({
   ],
   webServer: {
     command: `${buildStep}(${webServerEnvironment} pnpm start --hostname 127.0.0.1 --port ${nextPort} & next_pid=$!; trap 'kill $next_pid 2>/dev/null || true' EXIT INT TERM; node tests/helpers/https-proxy.mjs)`,
-    url: `https://127.0.0.1:${httpsProxyPort}/setup`,
+    url: `https://127.0.0.1:${httpsProxyPort}/sign-in`,
     ignoreHTTPSErrors: true,
     reuseExistingServer: !isCI,
     timeout: isCI ? 240_000 : 120_000,

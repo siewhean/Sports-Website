@@ -210,7 +210,7 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   }
 
   function fieldErrorMessage(field: CompetitionCreateField): string {
-    return messages.organiserCreate.fieldErrors[field] ?? messages.organiserCreate.invalidField;
+    return messages.organiserCreate.fieldErrors[field];
   }
 
   function validateStep(stepIndex: number) {
@@ -230,7 +230,12 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   function continueStep() {
     if (!validateStep(activeStep)) return;
     setCommandError("");
-    setActiveStep((current) => Math.min(current + 1, createSteps.length - 1));
+    const nextStep = Math.min(activeStep + 1, createSteps.length - 1);
+    setActiveStep(nextStep);
+    const firstField = createSteps[nextStep]?.[0];
+    if (firstField) {
+      requestAnimationFrame(() => focusField(firstField));
+    }
   }
 
   function focusField(field: CompetitionCreateField) {

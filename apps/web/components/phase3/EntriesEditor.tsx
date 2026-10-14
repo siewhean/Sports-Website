@@ -75,6 +75,16 @@ export function EntriesEditor({
     const name = String(data.get(phase3EntriesMachine.divisionNameField) ?? "").trim();
     const code = String(data.get(phase3EntriesMachine.divisionCodeField) ?? "").trim();
     const entryLimit = Number(data.get(phase3EntriesMachine.divisionLimitField));
+
+    if (name.length < 2) {
+      setError(phase3EntriesCopy.divisionNameRequired);
+      return;
+    }
+    if (!Number.isInteger(entryLimit) || entryLimit < 2 || entryLimit > 128) {
+      setError(phase3EntriesCopy.divisionLimitInvalid);
+      return;
+    }
+
     const fingerprint = JSON.stringify({ name, code, entryLimit });
     const pending =
       divisionCommandRef.current?.fingerprint === fingerprint
@@ -113,6 +123,20 @@ export function EntriesEditor({
     const data = new FormData(form);
     const name = String(data.get(phase3EntriesMachine.entryNameField) ?? "").trim();
     const seed = Number(data.get(phase3EntriesMachine.entrySeedField));
+
+    if (name.length < 2) {
+      setError(phase3EntriesCopy.entryNameRequired);
+      return;
+    }
+    if (!Number.isInteger(seed) || seed < 1 || seed > 48) {
+      setError(phase3EntriesCopy.entrySeedInvalid);
+      return;
+    }
+    if (activeCount >= phase3EntriesMachine.maximumFreeEntries) {
+      setError(phase3EntriesCopy.freeLimitReached);
+      return;
+    }
+
     const fingerprint = JSON.stringify({ divisionId, name, seed });
     const existing = entryCommandRefs.current.get(divisionId);
     const pending = existing?.fingerprint === fingerprint ? existing : { fingerprint, key: crypto.randomUUID() };
