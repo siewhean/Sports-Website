@@ -610,16 +610,20 @@ async function playSportHomeWin(ctx: SimContext, sport: SportId, competitionId: 
 async function runScenario1(ctx: SimContext): Promise<void> {
   const sports: SportId[] = ["badminton", "basketball", "canoe_polo", "table_tennis", "volleyball"];
 
-  for (const sport of sports) {
-    const { comp, division } = await createStandardTournament(ctx, sport, "s1");
+  // Fast: every sport plays one template (rotated so all three graph shapes are still covered).
+  // Full: every sport plays every template (5 x 3 tournaments).
+  const allStrategies: FormatTemplateStrategy[] = ["championship_focus", "full_placement", "compact_knockout"];
 
+  for (const [sportIndex, sport] of sports.entries()) {
     const strategies: FormatTemplateStrategy[] =
-      ctx.profile === "full" ? ["championship_focus", "full_placement", "compact_knockout"] : ["championship_focus"];
+      ctx.profile === "full" ? allStrategies : [allStrategies[sportIndex % allStrategies.length]!];
 
     for (const strategy of strategies) {
       const template = createDefaultFormatTemplates(8).find((t) => t.strategy === strategy);
       if (!template) throw new Error(`Template not found for 8 ${strategy}`);
 
+      // Each template gets its own competition so one published format never shadows another.
+      const { comp, division } = await createStandardTournament(ctx, sport, `s1-${strategy}`);
       const { formatId, sched } = await materializeAndPublishFormat(ctx, comp.id, division.id, template.graph);
 
       // 1. Verify PR #97 regression check: options route returns valid non-empty options
@@ -633,87 +637,137 @@ async function runScenario1(ctx: SimContext): Promise<void> {
         throw new Error(`Schedule options empty for ${sport} ${strategy}`);
       }
 
-      // Play through groups to final on championship_focus
-      if (strategy === "championship_focus") {
-        // 2. Play all group stage matches (matches with populated entry slots)
-        const initialMatches = await ctx.sql<{ id: string }[]>`
-          SELECT id FROM matches
-          WHERE format_revision_id=${formatId} AND graph_stage_id='groups' AND home_entry_id IS NOT NULL AND away_entry_id IS NOT NULL
-          ORDER BY ordinal`;
-
-        if (initialMatches.length === 0) throw new Error(`No playable pool matches found for ${sport}`);
-
-        for (const m of initialMatches) {
-          await playSportHomeWin(ctx, sport, comp.id, m.id);
-        }
-
-        // 3. Assert standings updated
-        const standingsRes = await ctx.request({
-          method: "GET",
-          url: `/api/v1/competitions/${comp.id}/divisions/${division.id}/standings`,
-          expectedStatuses: [200],
-        });
-        const standings = standingsRes.json<{
-          standings?: unknown;
-        }>();
-        const rawGroups = (
-          standings?.standings as { groups?: Record<string, { rows?: Array<{ played?: number }> }> } | undefined
-        )?.groups;
-        const standingRows: Array<{ played?: number }> = Array.isArray(standings?.standings)
-          ? (standings.standings as Array<{ played?: number }>)
-          : Object.values(rawGroups ?? {}).flatMap((g) => g.rows ?? []);
-        if (standingRows.length < 8) {
-          throw new Error(`Standings incomplete for ${sport}`);
-        }
-        const playedAny = standingRows.some((s) => (s.played ?? 0) > 0);
-        if (!playedAny) throw new Error(`Standings do not reflect played matches for ${sport}`);
-
-        // 4. Verify knockout advancement: group winners/runners-up advanced into semifinals!
-        const semiMatches = await ctx.sql<{ id: string; home_entry_id: string | null; away_entry_id: string | null }[]>`
-          SELECT id, home_entry_id, away_entry_id FROM matches
-          WHERE format_revision_id=${formatId} AND graph_stage_id='championship' AND round_number=1
-          ORDER BY ordinal`;
-
-        if (semiMatches.length === 0) throw new Error(`No semifinal matches found for ${sport}`);
-        for (const sm of semiMatches) {
-          if (!sm.home_entry_id || !sm.away_entry_id) {
-            throw new Error(`Knockout bracket did not fill participants from pool standings for ${sport}`);
-          }
-          await playSportHomeWin(ctx, sport, comp.id, sm.id);
-        }
-
-        // 5. Verify final match participants populated from semifinal winners!
-        const finalMatches = await ctx.sql<
-          { id: string; home_entry_id: string | null; away_entry_id: string | null }[]
-        >`
-          SELECT id, home_entry_id, away_entry_id FROM matches
-          WHERE format_revision_id=${formatId} AND graph_stage_id='championship' AND round_number=2
-          ORDER BY ordinal`;
-
-        if (finalMatches.length === 0) throw new Error(`No final match found for ${sport}`);
-        const finalMatch = finalMatches[0]!;
-        if (!finalMatch.home_entry_id || !finalMatch.away_entry_id) {
-          throw new Error(`Final match did not fill participants from semifinal winners for ${sport}`);
-        }
-
-        await playSportHomeWin(ctx, sport, comp.id, finalMatch.id);
-
-        // 7. Verify public truth snapshot: champion is decided and bracket is complete
-        const publicRes = await ctx.request({
-          method: "GET",
-          url: `/api/v1/public/competitions/${comp.slug}/current`,
-          expectedStatuses: [200],
-        });
-        const pub = publicRes.json<{
-          results: Array<{ id?: string; match_id?: string; state: string }>;
-          bracket: unknown;
-        }>();
-        const finalResult = pub.results.find((r) => (r.id ?? r.match_id) === finalMatch.id);
-        if (!finalResult || finalResult.state !== "final") {
-          throw new Error(`Final match result not final in public projection for ${sport}`);
-        }
-      }
+      await playFormatToCompletion(ctx, sport, strategy, comp, division.id, formatId, template.graph);
     }
+  }
+}
+
+/**
+ * Plays every match of a published format until nothing is left to play, then asserts the
+ * public projection and bracket are fully resolved. Stage handling is derived from the graph
+ * (compact_knockout has no group stage; full_placement adds placement/consolation rounds),
+ * so no template-specific branching is needed.
+ */
+async function playFormatToCompletion(
+  ctx: SimContext,
+  sport: SportId,
+  strategy: FormatTemplateStrategy,
+  comp: { id: string; slug: string },
+  divisionId: string,
+  formatId: string,
+  graph: FormatGraph,
+): Promise<void> {
+  const label = `${sport}/${strategy}`;
+  const hasGroupStage = graph.stages.some((s) => s.kind === "group" || s.kind === "round_robin");
+
+  // Terminal matches: nothing in the graph consumes their winner or loser. These are the
+  // championship final, bronze final, and placement/consolation deciders.
+  const consumed = new Set<string>();
+  for (const m of graph.matches) {
+    for (const src of [m.home, m.away] as Array<{ type: string; matchId?: string }>) {
+      if ((src.type === "winner" || src.type === "loser") && src.matchId) consumed.add(src.matchId);
+    }
+  }
+  const terminalGraphIds = new Set(graph.matches.filter((m) => !consumed.has(m.id)).map((m) => m.id));
+
+  const played = new Set<string>();
+  let groupStageChecked = !hasGroupStage;
+  // Bounded by the match count: each pass must play at least one match or we stop.
+  for (let pass = 0; pass <= graph.matches.length; pass += 1) {
+    const ready = await ctx.sql<{ id: string; graph_stage_id: string }[]>`
+      SELECT id, graph_stage_id FROM matches
+      WHERE format_revision_id=${formatId} AND home_entry_id IS NOT NULL AND away_entry_id IS NOT NULL
+      ORDER BY ordinal`;
+    const toPlay = ready.filter((m) => !played.has(m.id));
+    if (toPlay.length === 0) break;
+
+    for (const m of toPlay) {
+      await playSportHomeWin(ctx, sport, comp.id, m.id);
+      played.add(m.id);
+    }
+
+    if (!groupStageChecked) {
+      // After the first pass (all group matches), standings must reflect play for all 8 entries.
+      const standingsRes = await ctx.request({
+        method: "GET",
+        url: `/api/v1/competitions/${comp.id}/divisions/${divisionId}/standings`,
+        expectedStatuses: [200],
+      });
+      const standings = standingsRes.json<{ standings?: unknown }>();
+      const rawGroups = (
+        standings?.standings as { groups?: Record<string, { rows?: Array<{ played?: number }> }> } | undefined
+      )?.groups;
+      const rows: Array<{ played?: number }> = Array.isArray(standings?.standings)
+        ? (standings.standings as Array<{ played?: number }>)
+        : Object.values(rawGroups ?? {}).flatMap((g) => g.rows ?? []);
+      if (rows.length < 8) throw new Error(`Standings incomplete for ${label}: ${rows.length} rows`);
+      if (!rows.every((r) => (r.played ?? 0) > 0)) {
+        throw new Error(`Standings do not reflect group play for every entry in ${label}`);
+      }
+      groupStageChecked = true;
+    }
+  }
+
+  const all = await ctx.sql<
+    { id: string; graph_match_id: string; home_entry_id: string | null; away_entry_id: string | null }[]
+  >`SELECT id, graph_match_id, home_entry_id, away_entry_id FROM matches WHERE format_revision_id=${formatId}`;
+  if (all.length !== graph.matches.length) {
+    throw new Error(`${label}: expected ${graph.matches.length} materialised matches, found ${all.length}`);
+  }
+  const unresolved = all.filter((m) => !m.home_entry_id || !m.away_entry_id);
+  if (unresolved.length > 0) {
+    throw new Error(
+      `${label}: bracket not fully resolved, ${unresolved.length} match(es) without both entries: ${unresolved
+        .map((m) => m.graph_match_id)
+        .join(", ")}`,
+    );
+  }
+  if (played.size !== graph.matches.length) {
+    throw new Error(`${label}: played ${played.size} of ${graph.matches.length} matches`);
+  }
+
+  const publicRes = await ctx.request({
+    method: "GET",
+    url: `/api/v1/public/competitions/${comp.slug}/current`,
+    expectedStatuses: [200],
+  });
+  const pub = publicRes.json<{
+    results: Array<{ id: string; state: string }>;
+    bracket: Record<string, unknown> | null;
+  }>();
+  const stateById = new Map(pub.results.map((r) => [r.id, r.state]));
+  const terminal = all.filter((m) => terminalGraphIds.has(m.graph_match_id));
+  if (terminal.length === 0) throw new Error(`${label}: no final/placement matches derived from graph`);
+  for (const m of terminal) {
+    if (stateById.get(m.id) !== "final") {
+      throw new Error(`${label}: ${m.graph_match_id} is ${stateById.get(m.id) ?? "absent"} in public /current`);
+    }
+  }
+  const notFinal = all.filter((m) => stateById.get(m.id) !== "final");
+  if (notFinal.length > 0) {
+    throw new Error(`${label}: ${notFinal.length} match(es) not final in public /current`);
+  }
+
+  // Bracket projection: a champion must be decided once the championship final is played.
+  // The projection wraps the resolver output as { bracket: { matches, championEntryId, ... } }.
+  const bracket = (pub.bracket?.bracket ?? pub.bracket) as {
+    matches?: Array<{ homeEntryId?: string | null; awayEntryId?: string | null }>;
+    championEntryId?: string | null;
+  } | null;
+  if (!bracket) throw new Error(`${label}: public bracket missing after completion`);
+  const bracketMatches = bracket.matches ?? [];
+  if (bracketMatches.length === 0) throw new Error(`${label}: public bracket has no derived matches`);
+  if (bracketMatches.some((m) => !m.homeEntryId || !m.awayEntryId)) {
+    throw new Error(`${label}: public bracket still has unresolved participants`);
+  }
+  // NOTE: the V1 graph bracket resolver (phase-2-domain-adapter) always reports
+  // championEntryId: null, so the champion is asserted from the championship match result.
+  const championshipGraphId = graph.matches.find((m) => m.purpose === "championship")?.id;
+  const championship = all.find((m) => m.graph_match_id === championshipGraphId);
+  const championshipResult = pub.results.find((r) => r.id === championship?.id) as
+    { home_score: number; away_score: number } | undefined;
+  if (!championshipResult || championshipResult.home_score === championshipResult.away_score) {
+    throw new Error(`${label}: championship match has no decided winner in public /current`);
   }
 }
 
@@ -1123,6 +1177,40 @@ async function runScenario5(ctx: SimContext): Promise<void> {
   // 2. Schedule regeneration around locks via solver job
   const regen = await generateScheduleOptionViaJob(ctx, comp.id);
 
+  // 2a. Locked match stays fixed; unlocked assignments are unchanged (minimal change), since
+  //     capacity and entries are unchanged so every prior placement is still valid.
+  const regenDetailRes = await ctx.request({
+    method: "GET",
+    url: `/api/v1/schedule-revisions/${regen.revisionId}`,
+    expectedStatuses: [200],
+  });
+  const regenAssignments = regenDetailRes.json<{ assignments: typeof draftDetail.assignments }>().assignments;
+  if (regenAssignments.length !== draftDetail.assignments.length) {
+    throw new Error(
+      `Regeneration changed assignment count: ${draftDetail.assignments.length} -> ${regenAssignments.length}`,
+    );
+  }
+  const regenByMatch = new Map(regenAssignments.map((a) => [a.match_id, a]));
+  const lockedAfter = regenByMatch.get(targetMatch.match_id);
+  if (
+    !lockedAfter ||
+    lockedAfter.area_id !== targetMatch.area_id ||
+    lockedAfter.start_epoch_ms !== targetMatch.start_epoch_ms ||
+    lockedAfter.end_epoch_ms !== targetMatch.end_epoch_ms
+  ) {
+    throw new Error(`Locked match moved during regeneration: ${JSON.stringify({ before: targetMatch, lockedAfter })}`);
+  }
+  const changedUnlocked = draftDetail.assignments.filter((before) => {
+    if (before.match_id === targetMatch.match_id) return false;
+    const after = regenByMatch.get(before.match_id);
+    return !after || after.area_id !== before.area_id || after.start_epoch_ms !== before.start_epoch_ms;
+  });
+  if (changedUnlocked.length > 0) {
+    throw new Error(
+      `Regeneration around lock was not minimal-change: ${changedUnlocked.length} unlocked assignment(s) moved`,
+    );
+  }
+
   // 3. Test manual move validation (PR #98 fix):
   // Moving the locked match MUST be rejected with fixed_match_moved violation
   const moveLockedRes = await ctx.request({
@@ -1230,36 +1318,53 @@ async function runScenario6(ctx: SimContext): Promise<void> {
   const writer2 = await scorer(ctx, comp.id, playable[1]!.id);
   await writer2.append({ type: "match_started" });
 
-  // 3. Point on Court 1 -> verify public truth live overlay and ETag
-  await writer1.append({ type: "point", team_slot: "home", segment_number: 1 });
-  const pubAfterPt1 = await ctx.request({
-    method: "GET",
-    url: `/api/v1/public/competitions/${comp.slug}/current`,
-    expectedStatuses: [200],
-  });
-  if (!pubAfterPt1.headers.etag) {
-    throw new Error("Expected ETag header on public truth response");
-  }
-
-  // 4. Point on Court 2 -> verify simultaneous court scoring and ETag progression
-  await writer2.append({ type: "point", team_slot: "home", segment_number: 1 });
-  const pubAfterPt2 = await ctx.request({
-    method: "GET",
-    url: `/api/v1/public/competitions/${comp.slug}/current`,
-    expectedStatuses: [200],
-  });
-  if (pubAfterPt2.headers.etag === pubAfterPt1.headers.etag) {
-    throw new Error("Expected ETag to change after point on Court 2");
-  }
-
-  // Verify public versions stream route (R1 check from PR #97)
-  const versionsRes = await ctx.request({
-    method: "GET",
-    url: `/api/v1/public/competitions/${comp.slug}/versions`,
-    expectedStatuses: [200],
-  });
-  if (!versionsRes.body.includes("event: version")) {
-    throw new Error("Expected SSE version event from public versions endpoint");
+  // 3-4. Interleaved points on both courts, checked by polling /current after every point
+  // instead of holding the SSE `versions` stream open (app.inject only returns once the stream
+  // closes, which cost ~28 s). Live points are an overlay: result_version is only bumped by
+  // finalisation/correction (asserted below), so per point the contract is:
+  //   - result_version never decreases,
+  //   - the ETag changes (so conditional GETs and the SSE fan-out see a new version),
+  //   - the scored match's live set-1 home points in /current advance by exactly one.
+  let lastEtag = pubRes1.headers.etag;
+  const liveScore = new Map<string, number>([
+    [playable[0]!.id, 0],
+    [playable[1]!.id, 0],
+  ]);
+  const pointsPerCourt = ctx.profile === "full" ? 3 : 2;
+  for (let i = 0; i < pointsPerCourt; i += 1) {
+    for (const [court, writer, matchId] of [
+      [1, writer1, playable[0]!.id],
+      [2, writer2, playable[1]!.id],
+    ] as const) {
+      await writer.append({ type: "point", team_slot: "home", segment_number: 1 });
+      const after = await ctx.request({
+        method: "GET",
+        url: `/api/v1/public/competitions/${comp.slug}/current`,
+        expectedStatuses: [200],
+      });
+      const etag = after.headers.etag;
+      const body = after.json<{
+        publication: { result_version: number };
+        results: Array<{ id: string; state: string; segments?: Array<{ number: number; home: number }> }>;
+      }>();
+      const where = `point ${i + 1} on court ${court}`;
+      if (!etag) throw new Error("Expected ETag header on public truth response");
+      if (body.publication.result_version < lastResultVersion) {
+        throw new Error(
+          `result_version decreased after ${where}: ${lastResultVersion} -> ${body.publication.result_version}`,
+        );
+      }
+      if (etag === lastEtag) throw new Error(`ETag unchanged after ${where}`);
+      const live = body.results.find((r) => r.id === matchId);
+      const expected = liveScore.get(matchId)! + 1;
+      const setOnePoints = live?.segments?.find((s) => s.number === 1)?.home;
+      if (!live || live.state !== "in_progress" || setOnePoints !== expected) {
+        throw new Error(`Live score not reflected after ${where}: expected ${expected}, got ${JSON.stringify(live)}`);
+      }
+      liveScore.set(matchId, expected);
+      lastResultVersion = body.publication.result_version;
+      lastEtag = etag;
+    }
   }
 
   // 5. Test scorekeeper session takeover:
@@ -1342,7 +1447,7 @@ async function runScenario6(ctx: SimContext): Promise<void> {
   );
 
   // 6. Complete and finalise Match 1 using new writer
-  for (let pt = 1; pt < 25; pt++) {
+  for (let pt = pointsPerCourt; pt < 25; pt++) {
     await writer1New.append({ type: "point", team_slot: "home", segment_number: 1 });
   }
   await writer1New.append({ type: "set_completion", team_slot: "home", segment_number: 1 });
@@ -1431,7 +1536,13 @@ async function runScenario7(ctx: SimContext): Promise<void> {
   const court1 = areas.find((a) => a.name === "Court 1")!;
   const court2 = areas.find((a) => a.name === "Court 2")!;
 
-  type SchedMatch = { id?: string; match_id?: string; area?: { id: string }; playing_area_id?: string };
+  type SchedMatch = {
+    id?: string;
+    match_id?: string;
+    area?: { id: string };
+    playing_area_id?: string;
+    starts_at?: string;
+  };
   const getMatchId = (m: SchedMatch) => (m.id ?? m.match_id)!;
   const getAreaId = (m: SchedMatch) => (m.area?.id ?? m.playing_area_id)!;
 
@@ -1490,8 +1601,23 @@ async function runScenario7(ctx: SimContext): Promise<void> {
     );
   }
 
-  // Re-plan schedule with updated capacity via canonical Phase 4 solver job flow
-  await generateAndPublishScheduleViaJob(ctx, comp.id);
+  // Re-plan schedule with updated capacity via canonical Phase 4 solver job flow.
+  // Default constraints ignore the prior schedule, and the solver then reshuffles undisplaced
+  // matches too (observed: 16 moved for 10 displaced). The organiser-facing way to request
+  // minimal change is preserve_existing_schedule, so the re-plan pins every still-valid Court 1
+  // placement as required and leaves the displaced Court 2 matches free.
+  const generation = (ws as unknown as { generation: { constraints: Record<string, unknown> } }).generation;
+  const preserveByMatch = Object.fromEntries(
+    initialCourt1Matches.map((m) => [getMatchId(m), { area_id: court1.id, start_epoch_ms: Date.parse(m.starts_at!) }]),
+  );
+  await generateAndPublishScheduleViaJob(ctx, comp.id, {
+    ...generation.constraints,
+    preserve_existing_schedule: {
+      mode: "preferred",
+      weight: 100,
+      value: { maximum_shift_minutes: 0, by_match_id: preserveByMatch },
+    },
+  });
 
   // Verify public projection no longer schedules matches on Court 2,
   // and Court 2 matches moved to Court 1
@@ -1524,6 +1650,31 @@ async function runScenario7(ctx: SimContext): Promise<void> {
       throw new Error(`Original Court 1 match ${getMatchId(m)} missing from Court 1`);
     }
   }
+
+  // Minimal disruption: "moved == displaced" is NOT guaranteed by the product. Measured over
+  // repeated runs, even with preserve_existing_schedule preferred (weight 100) the solver moves
+  // 4-7 undisplaced Court 1 matches, sometimes earlier; with it required the job returns
+  // no_solution, because Court 1 is already full before the knockout rounds. The strongest
+  // property that holds, and is asserted, is conservation: nothing is dropped or duplicated,
+  // exactly the displaced matches change court, and every undisplaced match keeps its court.
+  const before = new Map(initialPub.schedule.map((s) => [getMatchId(s), s]));
+  const ids = pub.schedule.map(getMatchId);
+  if (new Set(ids).size !== ids.length || ids.length !== before.size || ids.some((id) => !before.has(id))) {
+    throw new Error(`Re-plan changed the scheduled match set: ${before.size} before, ${ids.length} after`);
+  }
+  const courtChanged = pub.schedule.filter((s) => getAreaId(before.get(getMatchId(s))!) !== getAreaId(s));
+  if (courtChanged.length !== initialCourt2Matches.length) {
+    throw new Error(
+      `Re-plan changed court for ${courtChanged.length} match(es) but ${initialCourt2Matches.length} were displaced`,
+    );
+  }
+  const timeOnlyMoves = pub.schedule.filter((s) => {
+    const prior = before.get(getMatchId(s))!;
+    return getAreaId(prior) === getAreaId(s) && prior.starts_at !== s.starts_at;
+  }).length;
+  console.log(
+    `\n    [s7] displaced=${initialCourt2Matches.length} court-changed=${courtChanged.length} time-shifted-on-court-1=${timeOnlyMoves}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1584,31 +1735,63 @@ async function runScenario8(ctx: SimContext): Promise<void> {
   if (!standings || !standings.standings) throw new Error("Standings missing after recalculate");
 
   type StandingEntry = {
-    entry_id?: string;
     entryId?: string;
+    entry_id?: string;
     played?: number;
     won?: number;
     lost?: number;
+    drawn?: number;
     status?: string;
+    tablePoints?: number;
+    segmentsWon?: number;
+    segmentsLost?: number;
+    scoreFor?: number;
+    scoreAgainst?: number;
+    eligibleForAdvancement?: boolean;
+    rank?: number;
   };
   const rawGroups = (standings.standings as { groups?: Record<string, { rows?: StandingEntry[] }> } | undefined)
     ?.groups;
   const standingRows: StandingEntry[] = Array.isArray(standings.standings)
     ? (standings.standings as StandingEntry[])
     : Object.values(rawGroups ?? {}).flatMap((g) => g.rows ?? []);
-
   if (standingRows.length === 0) throw new Error("Standings rows missing after recalculate");
+  const rowFor = (entryId: string) => standingRows.find((s) => (s.entryId ?? s.entry_id) === entryId);
 
-  const winnerRow = standingRows.find((s) => (s.entry_id ?? s.entryId) === targetMatch.away_entry_id);
-  if (!winnerRow || winnerRow.won !== 1) {
-    throw new Error(`Expected walkover winner to have won: 1 in standings, got ${JSON.stringify(winnerRow)}`);
+  // Winner: one forfeit win, one table point, full walkover segment/score award, still eligible.
+  const winnerRow = rowFor(targetMatch.away_entry_id);
+  const loserRow = rowFor(targetMatch.home_entry_id);
+  const fail = (what: string) =>
+    new Error(`${what}: ${JSON.stringify({ winnerRow, loserRow }, (k, v) => (k === "explanations" ? undefined : v))}`);
+  if (
+    !winnerRow ||
+    winnerRow.played !== 1 ||
+    winnerRow.won !== 1 ||
+    winnerRow.lost !== 0 ||
+    winnerRow.drawn !== 0 ||
+    winnerRow.tablePoints !== 1 ||
+    winnerRow.status !== "active" ||
+    winnerRow.eligibleForAdvancement !== true ||
+    (winnerRow.segmentsWon ?? 0) < 2 ||
+    (winnerRow.scoreFor ?? 0) <= 0
+  ) {
+    throw fail("Walkover winner standings row incorrect");
   }
-
-  const loserRow = standingRows.find((s) => (s.entry_id ?? s.entryId) === targetMatch.home_entry_id);
-  if (!loserRow || (loserRow.status !== "withdrawn" && (loserRow.lost ?? 0) < 1)) {
-    throw new Error(
-      `Expected walkover loser to reflect forfeit/withdrawal in standings, got ${JSON.stringify(loserRow)}`,
-    );
+  // Withdrawn entry: one forfeit loss mirroring the winner's award, zero points, withdrawn, last.
+  if (
+    !loserRow ||
+    loserRow.played !== 1 ||
+    loserRow.won !== 0 ||
+    loserRow.lost !== 1 ||
+    loserRow.tablePoints !== 0 ||
+    loserRow.status !== "withdrawn" ||
+    loserRow.eligibleForAdvancement !== false ||
+    loserRow.segmentsLost !== winnerRow.segmentsWon ||
+    loserRow.scoreAgainst !== winnerRow.scoreFor ||
+    loserRow.scoreFor !== 0 ||
+    loserRow.rank !== standingRows.length
+  ) {
+    throw fail("Withdrawn entry forfeit row incorrect");
   }
 
   const hasAdvancedWinner = standings.advancement_slots?.some((s) => s.entry_id === targetMatch.away_entry_id);
@@ -1860,7 +2043,7 @@ async function main() {
   );
 
   const app = await buildApp({
-    config: testConfig({ DATABASE_URL: databaseUrl }),
+    config: testConfig({ DATABASE_URL: databaseUrl, LOG_LEVEL: (process.env.SIM_LOG_LEVEL ?? "silent") as "silent" }),
     probes: healthyProbes,
     phase2Runtime: phase2,
     phase3Runtime: phase3,
