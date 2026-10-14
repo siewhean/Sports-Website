@@ -46,7 +46,7 @@
   --focus: #9db2ff;
 }
 
-/* Phase 2 vertical slice */
+/* Organiser and public surfaces */
 
 .p2-organiser,
 .p2-public {
@@ -1322,7 +1322,7 @@
   width: min(45%, 360px);
 }
 
-/* Phase 2 phone scorer */
+/* Phone scorer */
 
 .p2-score-access,
 .p2-score,
@@ -2134,7 +2134,7 @@ body:has(.p2-score-receipt) {
   margin-top: 22px;
 }
 
-/* Phase 2 public competition */
+/* Public competition */
 
 .p2-public > main {
   width: min(100% - 48px, 1280px);
@@ -3090,7 +3090,7 @@ svg {
   }
 }
 
-/* Phase 1 production shells and shared primitives */
+/* Production shells and shared primitives */
 
 .foundation-brand {
   display: inline-flex;

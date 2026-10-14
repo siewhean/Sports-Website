@@ -209,6 +209,10 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
     setAnnouncement("");
   }
 
+  function fieldErrorMessage(field: CompetitionCreateField): string {
+    return messages.organiserCreate.fieldErrors[field] ?? messages.organiserCreate.invalidField;
+  }
+
   function validateStep(stepIndex: number) {
     const bootstrapRequired = organisations.length === 0;
     const invalidField = createSteps[stepIndex]?.find(
@@ -217,7 +221,7 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
         !competitionCreateFieldIsValid(fieldName, draft),
     );
     if (!invalidField) return true;
-    setFieldErrors({ [invalidField]: messages.organiserCreate.invalidField });
+    setFieldErrors({ [invalidField]: fieldErrorMessage(invalidField) });
     setCommandError(messages.organiserCreate.validationSummary);
     requestAnimationFrame(() => focusField(invalidField));
     return false;
@@ -245,7 +249,7 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
     if (invalidField) {
       const invalidStep = createSteps.findIndex((fields) => fields.some((field) => field === invalidField));
       if (invalidStep >= 0) setActiveStep(invalidStep);
-      setFieldErrors({ [invalidField]: messages.organiserCreate.invalidField });
+      setFieldErrors({ [invalidField]: fieldErrorMessage(invalidField) });
       setCommandError(messages.organiserCreate.validationSummary);
       requestAnimationFrame(() => focusField(invalidField));
       return;

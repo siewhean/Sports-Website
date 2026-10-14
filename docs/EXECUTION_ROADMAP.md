@@ -386,9 +386,9 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 **Checkpoint CP6 — UX**
 
 - [ ] A first-time organiser walkthrough (owner, recorded) completes a 16-team event setup in under 15 minutes with no help.
-- [ ] Zero WCAG A/AA axe violations on all routes.
-- [ ] No `phase`/`gate` names in user-visible text or URLs.
-- [ ] Dead code removed; bundle size and test count recorded before and after.
+- [x] Zero WCAG A/AA axe violations on all routes. Evidence: automated Playwright axe suites (`tests/*accessibility.spec.ts`) and keyboard-only journey (`tests/organiser-keyboard-journey.spec.ts`).
+- [x] No `phase`/`gate` names in user-visible text or URLs. Evidence: zero matches in `apps/web/app` and `apps/web/components`; internal references renamed to product concepts (venue capacity service).
+- [x] Dead code removed; bundle size and test count recorded before and after. Evidence: `docs/qa/track-r6.md`; static bundle dropped from 3.9 MB to 3.5 MB (-400 KB / -10.3%); 24 dead prototype files removed; 98 unit test files (912 tests) passing.
 
 ---
 

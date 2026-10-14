@@ -1056,7 +1056,7 @@ function stepIntro(step: Phase4SetupStepId) {
       basics: opaqueId(
         "Start with deterministic fields. An optional brief can populate them without becoming the source of truth.",
       ),
-      capacity: opaqueId("Authoritative playing-area availability is calculated by the Phase 3 capacity service."),
+      capacity: opaqueId("Authoritative playing-area availability is calculated by the venue capacity service."),
       settings: opaqueId("These immutable references keep every format and schedule decision reproducible."),
       entries: opaqueId("Validated imports and entry revisions are referenced without copying sensitive source rows."),
       format_preferences: opaqueId("Six explicit preference groups drive the deterministic recommendation engine."),
