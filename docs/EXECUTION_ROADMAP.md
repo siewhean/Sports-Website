@@ -235,8 +235,8 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 **Checkpoint CP1 — Correctness baseline**
 
-- [ ] PRs #97, #98, #99 merged; `main` green on all required checks.
-- [x] `pnpm simulate:tournament` completes all nine scenarios locally and in CI with zero 5xx responses. Evidence: local 14 Oct 2026 fast 2,991 req / 66 s and full 7,216 req / 87 s, 0 5xx; CI PR run https://github.com/siewhean/Sports-Website/actions/runs/38556004025 (fast), dispatch https://github.com/siewhean/Sports-Website/actions/runs/38556014556 (full).
+- [x] PRs #97, #98, #99 merged; `main` green on all required checks. Evidence: https://github.com/siewhean/Sports-Website/pull/97, https://github.com/siewhean/Sports-Website/pull/98, https://github.com/siewhean/Sports-Website/pull/99 (merged 12 Oct 2026); latest `main` CI run https://github.com/siewhean/Sports-Website/actions/runs/38268394882 succeeded (all jobs green; visual-baselines skipped by design).
+- [x] `pnpm simulate:tournament` completes all nine scenarios locally and in CI with zero 5xx responses. Evidence: local 14 Oct 2026 fast 2,991 req / 66 s and full 7,216 req / 87 s, 0 5xx; CI PR run https://github.com/siewhean/Sports-Website/actions/runs/38557380027 (fast), dispatch https://github.com/siewhean/Sports-Website/actions/runs/38556014556 (full).
 - [x] Groups → knockout → final advancement verified for championship-focus, full-placement and compact-knockout templates in all five sports (scenario 1, full profile: every match final in `/current`, bracket resolved). Evidence: dispatch run https://github.com/siewhean/Sports-Website/actions/runs/38556014556. Note: the V1 graph bracket resolver always reports `championEntryId: null`; the champion is asserted from the championship match result.
 - [ ] A fresh clone boots against a fresh database using only `.env.example` values. Partial: CI copies `.env.example` to `.env`, migrates a fresh DB and runs `parseConfig` (APP_ENV=local) on it; an actual API process boot is not yet exercised.
 
