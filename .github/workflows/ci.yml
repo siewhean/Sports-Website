@@ -5,12 +5,22 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  schedule:
+    # Nightly full-profile tournament simulation at 03:00 UTC. Only tournament-simulation runs on this trigger.
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       generate_linux_visual_baselines:
         description: Generate linux visual baselines and upload them as an artifact (does not commit anything)
         type: boolean
         default: false
+      simulation_profile:
+        description: Tournament simulation profile (fast or full)
+        type: choice
+        options:
+          - fast
+          - full
+        default: fast
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,6 +31,7 @@ permissions:
 
 jobs:
   secrets:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -32,6 +43,7 @@ jobs:
         run: bash scripts/scan-secrets.sh
 
   quality-fast:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [secrets]
@@ -50,6 +62,7 @@ jobs:
       - run: RELEASE_PHASE=A node scripts/release-suite-guard.mjs
 
   integration:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [secrets]
@@ -108,6 +121,7 @@ jobs:
 
   browser-e2e:
     name: browser-e2e (shard ${{ matrix.shard }})
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     needs: [quality-fast]
@@ -200,6 +214,7 @@ jobs:
           pnpm test:visual
 
   gate-d-real-e2e:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [secrets, quality-fast, integration]
@@ -251,6 +266,117 @@ jobs:
       - run: pnpm build
       - run: pnpm --filter @matchday/web exec playwright install --with-deps chromium
       - run: pnpm test:e2e:phase7:real
+
+  changes:
+    # Path filter for the tournament simulation. Only meaningful on pull requests; every other
+    # trigger (push to main, tags, schedule, workflow_dispatch) always runs the simulation.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      simulation: ${{ steps.filter.outputs.simulation }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            simulation:
+              - "apps/api/**"
+              - "apps/scheduler/**"
+              - "packages/domain/**"
+              - "packages/database/**"
+              - "packages/contracts/**"
+              - ".github/workflows/ci.yml"
+
+  tournament-simulation:
+    # Required status check. The job itself must always run and report a conclusion, because a
+    # job-level skip would leave the required check unsatisfied/ambiguous. Path-filtered PRs skip
+    # the expensive steps instead and the job reports success. On schedule the upstream jobs are
+    # skipped by design, so their results are only enforced for the other triggers.
+    name: tournament-simulation
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [changes, quality-fast, integration]
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_DB: matchday
+          POSTGRES_USER: matchday
+          POSTGRES_PASSWORD: matchday
+          POSTGRES_INITDB_ARGS: "--locale=C"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U matchday -d matchday"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://matchday:matchday@127.0.0.1:5432/matchday
+      REDIS_URL: redis://127.0.0.1:6379
+      LOG_LEVEL: silent
+      NO_COLOR: "1"
+      SIMULATION_PROFILE: ${{ (github.event_name == 'schedule' || inputs.simulation_profile == 'full') && 'full' || 'fast' }}
+      RUN_SIMULATION: ${{ github.event_name != 'pull_request' || needs.changes.outputs.simulation == 'true' }}
+    steps:
+      - name: Check upstream jobs
+        if: github.event_name != 'schedule'
+        env:
+          QUALITY_FAST: ${{ needs.quality-fast.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+          CHANGES: ${{ needs.changes.result }}
+        run: |
+          echo "quality-fast=$QUALITY_FAST integration=$INTEGRATION changes=$CHANGES"
+          if [ "$QUALITY_FAST" != "success" ] || [ "$INTEGRATION" != "success" ]; then
+            echo "::error::Upstream jobs did not succeed; the tournament simulation cannot pass."
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "$CHANGES" != "success" ]; then
+            echo "::error::Path filter job did not succeed."
+            exit 1
+          fi
+      - name: Skip notice
+        if: env.RUN_SIMULATION != 'true'
+        run: echo "::notice::No simulation-relevant paths changed; tournament simulation skipped (reported as success)."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_SIMULATION == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: env.RUN_SIMULATION == 'true'
+        with:
+          node-version-file: .nvmrc
+      - name: Install the pinned pnpm version
+        if: env.RUN_SIMULATION == 'true'
+        run: npm install --global pnpm@10.33.0
+      - if: env.RUN_SIMULATION == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: env.RUN_SIMULATION == 'true'
+        run: pnpm build
+      - name: Boot-config check (.env.example -> .env, fresh migrate, parseConfig)
+        if: env.RUN_SIMULATION == 'true'
+        run: |
+          cp .env.example .env
+          pnpm db:migrate
+          pnpm test:env-templates
+      - name: Run tournament simulation (${{ env.SIMULATION_PROFILE }})
+        if: env.RUN_SIMULATION == 'true'
+        run: pnpm simulate:tournament --profile="$SIMULATION_PROFILE"
 
   visual-baselines:
     # Manual only: produces linux baselines as a downloadable artifact for a human to review and commit.
