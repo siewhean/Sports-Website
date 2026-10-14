@@ -16,6 +16,7 @@ import {
   type ResultConflict,
 } from "@/lib/gate-c-results";
 import styles from "@/components/phase3/ResultsWorkspace.module.css";
+import { WalkoverBadge, walkoverDetail } from "@/components/phase2/WalkoverBadge";
 
 type PendingResultCommand = Readonly<{
   fingerprint: string;
@@ -544,6 +545,7 @@ export function OrganiserResultOperations({
       )
     : [];
   const completionLabel = document?.match.sportCode === "volleyball" ? copy.completionSet : copy.completionGame;
+  const selectedView = matches.find((match) => match.id === matchId);
   return (
     <section className={styles.operations} aria-labelledby="result-operations-title">
       <p className={styles.live} aria-live="polite" aria-atomic="true">
@@ -593,8 +595,19 @@ export function OrganiserResultOperations({
             <div>
               <span>{copy.score}</span>
               <strong>
-                {document.match.homeName} {document.match.homeScore}–{document.match.awayScore}{" "}
+                {document.match.homeName}
+                {selectedView?.walkover?.winner === "home" ? (
+                  <WalkoverBadge team={document.match.homeName} />
+                ) : null}{" "}
+                {selectedView?.walkover
+                  ? walkoverDetail({
+                      walkover: selectedView.walkover,
+                      homeScore: document.match.homeScore,
+                      awayScore: document.match.awayScore,
+                    })
+                  : `${document.match.homeScore}–${document.match.awayScore}`}{" "}
                 {document.match.awayName}
+                {selectedView?.walkover?.winner === "away" ? <WalkoverBadge team={document.match.awayName} /> : null}
               </strong>
             </div>
             <div className={styles.operationActions}>

@@ -127,4 +127,60 @@ describe("Phase 3 capacity web boundary", () => {
     duplicated.areas[0]!.unavailable[0]!.id = availableId;
     expect(parseCapacityResponse(duplicated, competitionId)).toBeNull();
   });
+
+  it("accepts the PUT response's replanning fields and per-area usage (Track R2.1)", () => {
+    const matchId = "0b6f6a2e-4a8e-4d0e-9a39-2d6c8ad7a001";
+    const retainedId = "6f1d6a5e-7c1a-4a51-9f0f-7c9e1d1e2b33";
+    const base = payload();
+    const response = {
+      ...base,
+      areas: [
+        { ...base.areas[0]!, scheduled_match_count: 0, retained: false },
+        {
+          ...base.areas[0]!,
+          id: retainedId,
+          name: "Pool B",
+          availability: [],
+          unavailable: [],
+          scheduled_match_count: 3,
+          retained: true,
+        },
+      ],
+      idempotent_replay: false,
+      affected_matches: [
+        {
+          match_id: matchId,
+          match_code: "G1-M3",
+          playing_area_id: retainedId,
+          starts_at: "2026-08-30T02:00:00.000Z",
+          ends_at: "2026-08-30T02:30:00.000Z",
+          reason: "playing_area_removed",
+        },
+      ],
+      replan_required: true,
+    };
+    const parsed = parseCapacityResponse(response, competitionId);
+    expect(parsed?.replanRequired).toBe(true);
+    expect(parsed?.affectedMatches).toEqual([
+      {
+        matchId,
+        matchCode: "G1-M3",
+        playingAreaId: retainedId,
+        startsAt: "2026-08-30T02:00:00.000Z",
+        endsAt: "2026-08-30T02:30:00.000Z",
+        reason: "playing_area_removed",
+      },
+    ]);
+    expect(parsed?.areas.find((area) => area.id === retainedId)).toMatchObject({
+      retained: true,
+      scheduledMatchCount: 3,
+    });
+    expect(
+      parseCapacityResponse(
+        { ...response, affected_matches: [{ ...response.affected_matches[0]!, reason: "unknown" }] },
+        competitionId,
+      ),
+    ).toBeNull();
+    expect(parseCapacityResponse({ ...response, replan_required: "yes" }, competitionId)).toBeNull();
+  });
 });

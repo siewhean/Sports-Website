@@ -176,7 +176,14 @@ test("smaller-screen organiser selects a match, day, available area and valid ti
   const disclosure = page.getByRole("button", { name: "Show all 18 times" });
   await expect(disclosure).toBeVisible({ visible: isPhone });
   await expect(slotChoices.locator("label:visible")).toHaveCount(isPhone ? 6 : 18);
-  if (isPhone) await disclosure.click();
+  // The disclosure is server-rendered; a click that lands before hydration is dropped (seen on phone
+  // WebKit in CI), so retry until the toggle reports itself expanded.
+  const toggle = page.locator('button[aria-controls="move-slot-options"]');
+  if (isPhone)
+    await expect(async () => {
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
   await expect(slotChoices.locator("label:visible")).toHaveCount(18);
   await expect(page.getByRole("button", { name: "Show fewer times" })).toBeVisible({ visible: isPhone });
 

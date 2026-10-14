@@ -19,6 +19,19 @@ export type CapacityAreaDraft = Readonly<{
   fixedReserveSlots: number;
   availability: readonly CapacityWindowDraft[];
   unavailable: readonly CapacityWindowDraft[];
+  /** Open matches in published or in-review schedules that use this area (read-only). */
+  scheduledMatchCount?: number;
+  /** Removed from capacity but kept because scheduled matches still use it (read-only). */
+  retained?: boolean;
+}>;
+
+export type CapacityAffectedMatch = Readonly<{
+  matchId: string;
+  matchCode: string;
+  playingAreaId: string;
+  startsAt: string;
+  endsAt: string;
+  reason: "playing_area_removed" | "playing_area_unavailable" | "outside_availability_windows";
 }>;
 
 export type CapacitySummary = Readonly<{
@@ -61,6 +74,9 @@ export type ParsedCapacityResponse = Readonly<{
   areas: readonly CapacityAreaDraft[];
   effective: CapacitySummary;
   idempotentReplay?: boolean;
+  /** Present on a capacity save: scheduled matches the new capacity no longer fits. */
+  affectedMatches?: readonly CapacityAffectedMatch[];
+  replanRequired?: boolean;
 }>;
 
 export type CapacityDocument = Readonly<{
@@ -247,13 +263,41 @@ function parseWindow(value: unknown): CapacityWindowDraft | null {
   };
 }
 
-function parseSourceArea(value: unknown): CapacityAreaDraft | null {
+const AREA_KEYS = ["id", "name", "sort_order", "slot_minutes", "fixed_reserve_slots", "availability", "unavailable"];
+const AFFECTED_REASONS = new Set(["playing_area_removed", "playing_area_unavailable", "outside_availability_windows"]);
+
+function parseAffectedMatch(value: unknown): CapacityAffectedMatch | null {
   const item = record(value);
   if (
     !item ||
-    !exactKeys(item, ["id", "name", "sort_order", "slot_minutes", "fixed_reserve_slots", "availability", "unavailable"])
+    !exactKeys(item, ["match_id", "match_code", "playing_area_id", "starts_at", "ends_at", "reason"]) ||
+    !UUID.test(String(item.match_id)) ||
+    !nonEmpty(item.match_code) ||
+    !UUID.test(String(item.playing_area_id)) ||
+    !nonEmpty(item.starts_at) ||
+    !nonEmpty(item.ends_at) ||
+    Number.isNaN(Date.parse(item.starts_at)) ||
+    Number.isNaN(Date.parse(item.ends_at)) ||
+    !AFFECTED_REASONS.has(String(item.reason))
   )
     return null;
+  return {
+    matchId: item.match_id as string,
+    matchCode: item.match_code,
+    playingAreaId: item.playing_area_id as string,
+    startsAt: item.starts_at,
+    endsAt: item.ends_at,
+    reason: item.reason as CapacityAffectedMatch["reason"],
+  };
+}
+
+function parseSourceArea(value: unknown): CapacityAreaDraft | null {
+  const item = record(value);
+  // scheduled_match_count/retained were added for Track R2.1; accept responses with or without them.
+  const hasUsage = item?.scheduled_match_count !== undefined || item?.retained !== undefined;
+  if (!item || !exactKeys(item, hasUsage ? [...AREA_KEYS, "scheduled_match_count", "retained"] : AREA_KEYS))
+    return null;
+  if (hasUsage && (!integer(item.scheduled_match_count) || typeof item.retained !== "boolean")) return null;
   const availability = Array.isArray(item.availability) ? item.availability.map(parseWindow) : [];
   const unavailable = Array.isArray(item.unavailable) ? item.unavailable.map(parseWindow) : [];
   if (
@@ -278,6 +322,9 @@ function parseSourceArea(value: unknown): CapacityAreaDraft | null {
     fixedReserveSlots: item.fixed_reserve_slots as number,
     availability: availability as CapacityWindowDraft[],
     unavailable: unavailable as CapacityWindowDraft[],
+    ...(hasUsage
+      ? { scheduledMatchCount: item.scheduled_match_count as number, retained: item.retained as boolean }
+      : {}),
   };
 }
 
@@ -285,8 +332,20 @@ export function parseCapacityResponse(payload: unknown, competitionId: string): 
   const item = record(payload);
   if (!item || item.competition_id !== competitionId) return null;
   const baseKeys = ["competition_id", "revision", "timezone", "permission", "read_only", "areas", "effective"];
-  const allowedKeys = item.idempotent_replay === undefined ? baseKeys : [...baseKeys, "idempotent_replay"];
+  const allowedKeys = [
+    ...baseKeys,
+    ...(item.idempotent_replay === undefined ? [] : ["idempotent_replay"]),
+    ...(item.affected_matches === undefined ? [] : ["affected_matches"]),
+    ...(item.replan_required === undefined ? [] : ["replan_required"]),
+  ];
   if (!exactKeys(item, allowedKeys)) return null;
+  const affectedMatches = Array.isArray(item.affected_matches) ? item.affected_matches.map(parseAffectedMatch) : [];
+  if (
+    (item.affected_matches !== undefined &&
+      (!Array.isArray(item.affected_matches) || affectedMatches.some((match) => !match))) ||
+    (item.replan_required !== undefined && typeof item.replan_required !== "boolean")
+  )
+    return null;
   const areas = Array.isArray(item.areas) ? item.areas.map(parseSourceArea) : [];
   const effective = parseSummary(item.effective);
   if (
@@ -316,6 +375,8 @@ export function parseCapacityResponse(payload: unknown, competitionId: string): 
     areas: areas as CapacityAreaDraft[],
     effective,
     ...(item.idempotent_replay === undefined ? {} : { idempotentReplay: item.idempotent_replay as boolean }),
+    ...(item.affected_matches === undefined ? {} : { affectedMatches: affectedMatches as CapacityAffectedMatch[] }),
+    ...(item.replan_required === undefined ? {} : { replanRequired: item.replan_required as boolean }),
   };
 }
 
@@ -503,6 +564,20 @@ export const phase3CapacityCopy = {
   commandFailed: "Capacity was not saved. Review the response and try again.",
   reviewFields: "Review the highlighted capacity fields before saving.",
   loading: "Loading saved capacity",
+  retainedTitle: "Removed areas still in use",
+  retainedBody:
+    "These areas were removed from capacity but scheduled matches still use them. Re-plan the schedule to move those matches.",
+  retainedCount: (count: number) => `${count} scheduled ${count === 1 ? "match" : "matches"}`,
+  affectedTitle: "Scheduled matches need re-planning",
+  affectedBody: (count: number) =>
+    `${count} scheduled ${count === 1 ? "match no longer fits" : "matches no longer fit"} the saved capacity.`,
+  affectedReason: {
+    playing_area_removed: "Area removed",
+    playing_area_unavailable: "Area unavailable",
+    outside_availability_windows: "Outside available time",
+  },
+  replan: "Re-plan schedule",
+  openRepairs: "Review repairs",
   loadingSection: "Loading competition capacity or results",
 } as const;
 

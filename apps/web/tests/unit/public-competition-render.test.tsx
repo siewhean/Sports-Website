@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
-import type { CompetitionView, PublicDivisionView } from "@/lib/phase2";
+import type { CompetitionView, PublicDivisionView, StandingView } from "@/lib/phase2";
 import { bracketModel } from "@/lib/public-competition-model";
 import { PublicBracket } from "@/components/phase2/PublicBracket";
-import { PublicCompetitionApp } from "@/components/phase2/PublicCompetitionApp";
+import { PublicCompetitionApp, TablePanel } from "@/components/phase2/PublicCompetitionApp";
+import { PublicMatchLive } from "@/components/phase2/PublicMatchLive";
 
 const open = {
   division: { id: "open", name: "Open", teamCount: 4, matchCount: 3 },
@@ -85,6 +86,30 @@ const competition = {
   audit: [],
 } as unknown as CompetitionView;
 
+function standingRows(groups: readonly [string, string] | null): StandingView[] {
+  const base = (position: number, team: string, points: number) => ({
+    position,
+    team,
+    played: 1,
+    won: points > 0 ? 1 : 0,
+    drawn: 0,
+    lost: points > 0 ? 0 : 1,
+    difference: points > 0 ? 2 : -2,
+    points,
+  });
+  if (!groups) return [base(1, "Alpha", 3), base(2, "Charlie", 3), base(3, "Bravo", 0), base(4, "Delta", 0)];
+  const [first, second] = groups.map((id) => ({ id, label: `Group ${id}` })) as [
+    { id: string; label: string },
+    { id: string; label: string },
+  ];
+  return [
+    { ...base(1, "Alpha", 3), group: first },
+    { ...base(2, "Bravo", 0), group: first },
+    { ...base(1, "Charlie", 3), group: second },
+    { ...base(2, "Delta", 0), group: second },
+  ];
+}
+
 describe("spectator page render", () => {
   it("renders tabs, every live match once, and no duplicate match lists", () => {
     const html = renderToString(
@@ -112,6 +137,64 @@ describe("spectator page render", () => {
     expect(html).not.toContain("Live now");
     expect(html).not.toContain('data-tone="live"');
     expect(html).toContain("Updated 19 Sep 09:10");
+  });
+
+  it("shows a W/O badge next to the walkover winner and the forfeit score in the match detail", () => {
+    const walkover = {
+      id: "m9",
+      label: "Match 9",
+      stage: "Group A",
+      time: "08:00",
+      area: "Court 1",
+      home: "Alpha",
+      away: "Bravo",
+      status: "final",
+      homeScore: 25,
+      awayScore: 0,
+      walkover: { winner: "away" },
+      startsAt: "2026-09-19T00:00:00Z",
+      updatedAt: "2026-09-19T00:05:00Z",
+    } as const;
+    const division = { ...open, matches: [...open.matches, walkover] } as unknown as PublicDivisionView;
+    const withWalkover = {
+      ...competition,
+      publicDivisions: [division],
+      matches: division.matches,
+    } as CompetitionView;
+    const html = renderToString(
+      <PublicCompetitionApp competition={withWalkover} liveUpdates={false} renderedAt="2026-09-19T01:30:00Z" />,
+    );
+    expect(html).toContain("data-walkover");
+    expect(html).toContain(">W/O</abbr>");
+    expect(html).toContain('title="Walkover"');
+    expect(html).toContain("Bravo won by walkover");
+    expect(html).not.toContain("Alpha won by walkover");
+
+    const detail = renderToString(
+      <PublicMatchLive competition={withWalkover} matchId="m9" liveUpdates={false} renderedAt="2026-09-19T01:30:00Z" />,
+    );
+    expect(detail).toContain("W/O (Forfeit score: 25–0)");
+    expect(detail).toContain("Bravo won by walkover");
+  });
+
+  it("renders one standings table for a single-group division", () => {
+    const division = { ...open, standings: standingRows(null) } as unknown as PublicDivisionView;
+    const html = renderToString(<TablePanel competition={competition} division={division} followed={null} />);
+    expect(html.match(/<table/g)).toHaveLength(1);
+    expect(html).not.toContain("data-standings-group");
+  });
+
+  it("renders one captioned table per group when the division has several groups", () => {
+    const division = { ...open, standings: standingRows(["G1", "G2"]) } as unknown as PublicDivisionView;
+    const html = renderToString(<TablePanel competition={competition} division={division} followed={null} />);
+    expect(html.match(/<table/g)).toHaveLength(2);
+    expect(html.match(/<caption/g)).toHaveLength(2);
+    expect(html).toContain("Open · Group G1 standings");
+    expect(html).toContain("Open · Group G2 standings");
+    expect(html).toMatch(/<h3 id="standings-group-G1">Group G1<\/h3>/);
+    expect(html).toMatch(/<h3 id="standings-group-G2">Group G2<\/h3>/);
+    expect(html.indexOf("Bravo")).toBeLessThan(html.indexOf("Group G2</h3>"));
+    expect(html.indexOf("Charlie")).toBeGreaterThan(html.indexOf("Group G2</h3>"));
   });
 
   it("renders the knockout bracket as nested lists without group rows", () => {

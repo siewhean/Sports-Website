@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { interpolate, opaqueId, spectatorMessages as copy } from "@matchday/ui";
-import type { CompetitionView, MatchView, PublicDivisionView } from "@/lib/phase2";
+import type { CompetitionView, MatchView, PublicDivisionView, StandingView } from "@/lib/phase2";
 import {
   allMatches,
   availableTabs,
@@ -37,6 +37,7 @@ import {
 import type { PublicCompetitionPhase } from "@/lib/phase2-public-phase";
 import { useUrlSearch } from "@/components/ui/useUrlSearch";
 import { PublicBracket } from "./PublicBracket";
+import { WalkoverMark } from "./WalkoverBadge";
 import { LiveStatus } from "./PublicLiveStatus";
 import { useLiveCompetition } from "./useLiveCompetition";
 import { publicUi } from "@/lib/public-ui-tokens";
@@ -366,11 +367,17 @@ function ScoreCard({
       </span>
       {showDivision ? <span className={styles.divisionTag}>{division.name}</span> : null}
       <span className={styles.side}>
-        <span>{match.home}</span>
+        <span>
+          {match.home}
+          <WalkoverMark match={match} home />
+        </span>
         <strong>{match.homeScore ?? "–"}</strong>
       </span>
       <span className={styles.side}>
-        <span>{match.away}</span>
+        <span>
+          {match.away}
+          <WalkoverMark match={match} away />
+        </span>
         <strong>{match.awayScore ?? "–"}</strong>
       </span>
       <SegmentLine match={match} segment={segmentName(competition)} />
@@ -651,9 +658,15 @@ function SchedulePanel({
                       <time dateTime={match.startsAt}>{startLabel(match, timezone)}</time>
                       <span className={styles.fixtureCourt}>{match.area}</span>
                       <span className={styles.fixtureTeams}>
-                        <span>{match.home}</span>
+                        <span>
+                          {match.home}
+                          <WalkoverMark match={match} home />
+                        </span>
                         <span className={styles.versus}>{copy.versus}</span>
-                        <span>{match.away}</span>
+                        <span>
+                          {match.away}
+                          <WalkoverMark match={match} away />
+                        </span>
                       </span>
                       <span className={styles.fixtureScore}>
                         {hasScore(match) ? `${match.homeScore}–${match.awayScore}` : ""}
@@ -681,7 +694,7 @@ function SchedulePanel({
 
 /* ------------------------------------------------------------------ table ------------------------------------------------------------------- */
 
-function TablePanel({
+export function TablePanel({
   competition,
   division,
   followed,
@@ -694,65 +707,28 @@ function TablePanel({
   const draws = standingsShowDraws(competition, division);
   const explained = rows.filter((row) => row.explanations && row.explanations.length > 0);
   const label = interpolate(copy.table.tableLabel, { division: division.division.name });
+  const groups = standingsGroups(rows);
   return (
     <>
       <h2 className={styles.sectionTitle}>{copy.table.title}</h2>
       {rows.length === 0 ? (
         <p className={styles.empty}>{copy.table.empty}</p>
+      ) : groups.length > 1 ? (
+        groups.map((group) => {
+          const groupLabel = interpolate(copy.table.groupTableLabel, {
+            division: division.division.name,
+            group: group.label,
+          });
+          const headingId = `standings-group-${opaqueId(group.id.replace(/[^A-Za-z0-9_-]/gu, "-"))}`;
+          return (
+            <section key={group.id} className={styles.day} aria-labelledby={headingId} data-standings-group={group.id}>
+              <h3 id={headingId}>{interpolate(copy.table.groupHeading, { group: group.label })}</h3>
+              <StandingsTable rows={group.rows} draws={draws} followed={followed} label={groupLabel} caption />
+            </section>
+          );
+        })
       ) : (
-        <div className={styles.tableScroll} role="region" aria-label={label} tabIndex={0}>
-          <table className={styles.table} aria-label={label}>
-            <thead>
-              <tr>
-                <th scope={publicUi.col}>
-                  <abbr title={copy.table.position}>#</abbr>
-                </th>
-                <th scope={publicUi.col} className={styles.teamCell}>
-                  {copy.table.team}
-                </th>
-                <th scope={publicUi.col}>
-                  <abbr title={copy.table.playedLong}>{copy.table.played}</abbr>
-                </th>
-                <th scope={publicUi.col}>
-                  <abbr title={copy.table.wonLong}>{copy.table.won}</abbr>
-                </th>
-                {draws ? (
-                  <th scope={publicUi.col}>
-                    <abbr title={copy.table.drawnLong}>{copy.table.drawn}</abbr>
-                  </th>
-                ) : null}
-                <th scope={publicUi.col}>
-                  <abbr title={copy.table.lostLong}>{copy.table.lost}</abbr>
-                </th>
-                <th scope={publicUi.col}>
-                  <abbr title={copy.table.differenceLong}>{copy.table.difference}</abbr>
-                </th>
-                <th scope={publicUi.col}>
-                  <abbr title={copy.table.pointsLong}>{copy.table.points}</abbr>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.team} data-followed={row.team === followed || undefined}>
-                  <td>{row.position}</td>
-                  <th scope={publicUi.row} className={styles.teamCell}>
-                    {row.team}
-                    {row.team === followed ? <span className={styles.youTag}>{copy.yourTeam}</span> : null}
-                  </th>
-                  <td>{row.played}</td>
-                  <td>{row.won}</td>
-                  {draws ? <td>{row.drawn}</td> : null}
-                  <td>{row.lost}</td>
-                  <td>{row.difference > 0 ? `+${row.difference}` : row.difference}</td>
-                  <td>
-                    <strong>{row.points}</strong>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <StandingsTable rows={rows} draws={draws} followed={followed} label={label} caption={false} />
       )}
       {explained.length > 0 ? (
         <details className={styles.tieBreaks}>
@@ -769,5 +745,93 @@ function TablePanel({
         </details>
       ) : null}
     </>
+  );
+}
+
+type StandingsGroup = { id: string; label: string; rows: StandingView[] };
+
+/** Rows split by group, in first-seen order; a division without group data yields a single unnamed group. */
+function standingsGroups(rows: readonly StandingView[]): StandingsGroup[] {
+  const groups: StandingsGroup[] = [];
+  for (const row of rows) {
+    const id = row.group?.id ?? "";
+    let group = groups.find((candidate) => candidate.id === id);
+    if (!group) {
+      group = { id, label: row.group?.label ?? copy.table.title, rows: [] };
+      groups.push(group);
+    }
+    group.rows.push(row);
+  }
+  return groups;
+}
+
+function StandingsTable({
+  rows,
+  draws,
+  followed,
+  label,
+  caption,
+}: {
+  rows: readonly StandingView[];
+  draws: boolean;
+  followed: string | null;
+  label: string;
+  caption: boolean;
+}) {
+  return (
+    <div className={styles.tableScroll} role="region" aria-label={label} tabIndex={0}>
+      <table className={styles.table} aria-label={caption ? undefined : label}>
+        {caption ? <caption className="visually-hidden">{label}</caption> : null}
+        <thead>
+          <tr>
+            <th scope={publicUi.col}>
+              <abbr title={copy.table.position}>#</abbr>
+            </th>
+            <th scope={publicUi.col} className={styles.teamCell}>
+              {copy.table.team}
+            </th>
+            <th scope={publicUi.col}>
+              <abbr title={copy.table.playedLong}>{copy.table.played}</abbr>
+            </th>
+            <th scope={publicUi.col}>
+              <abbr title={copy.table.wonLong}>{copy.table.won}</abbr>
+            </th>
+            {draws ? (
+              <th scope={publicUi.col}>
+                <abbr title={copy.table.drawnLong}>{copy.table.drawn}</abbr>
+              </th>
+            ) : null}
+            <th scope={publicUi.col}>
+              <abbr title={copy.table.lostLong}>{copy.table.lost}</abbr>
+            </th>
+            <th scope={publicUi.col}>
+              <abbr title={copy.table.differenceLong}>{copy.table.difference}</abbr>
+            </th>
+            <th scope={publicUi.col}>
+              <abbr title={copy.table.pointsLong}>{copy.table.points}</abbr>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.team} data-followed={row.team === followed || undefined}>
+              <td>{row.position}</td>
+              <th scope={publicUi.row} className={styles.teamCell}>
+                {row.team}
+                {row.team === followed ? <span className={styles.youTag}>{copy.yourTeam}</span> : null}
+              </th>
+              <td>{row.played}</td>
+              <td>{row.won}</td>
+              {draws ? <td>{row.drawn}</td> : null}
+              <td>{row.lost}</td>
+              <td>{row.difference > 0 ? `+${row.difference}` : row.difference}</td>
+              <td>
+                <strong>{row.points}</strong>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

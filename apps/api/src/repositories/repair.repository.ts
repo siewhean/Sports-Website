@@ -705,6 +705,41 @@ export class RepairRepository {
     );
   }
 
+  /**
+   * Write-side reconciliation (Track R2.3): once a newer correction exists for the same match, every
+   * older result repair case that was never published is marked `superseded`. Called inside the
+   * transaction that records a correction or publishes a repair, never from a read path; the
+   * pending-case list still filters superseded/published cases defensively.
+   */
+  async reconcileStaleCases(
+    competitionId: string,
+    executor: SqlExecutor = this.sql,
+    correctedMatchId?: string,
+  ): Promise<number> {
+    const rows = await executor.unsafe<{ id: string }>(
+      `INSERT INTO result_repair_case_events(result_repair_case_id, competition_id, event_type, actor_account_id, occurred_at, metadata)
+       SELECT older_case.id, older_case.competition_id, 'superseded', older_case.created_by_account_id, now(),
+              jsonb_build_object('superseded_by_result_version', max(newer_case.source_result_version))
+       FROM result_repair_cases older_case
+       JOIN result_repair_cases newer_case
+         ON newer_case.competition_id = older_case.competition_id
+        AND newer_case.corrected_match_id = older_case.corrected_match_id
+        AND newer_case.source_result_version > older_case.source_result_version
+       WHERE older_case.competition_id = $1
+         AND ($2::uuid IS NULL OR older_case.corrected_match_id = $2::uuid)
+         AND NOT EXISTS (
+           SELECT 1 FROM result_repair_case_events ev
+           WHERE ev.result_repair_case_id = older_case.id
+             AND ev.event_type IN ('published', 'superseded')
+         )
+       GROUP BY older_case.id, older_case.competition_id, older_case.created_by_account_id
+       ON CONFLICT DO NOTHING
+       RETURNING id`,
+      [competitionId, correctedMatchId ?? null],
+    );
+    return rows.length;
+  }
+
   async listPendingCases(
     competitionId: string,
     executor: SqlExecutor = this.sql,
@@ -725,6 +760,17 @@ export class RepairRepository {
          ON schedule_case.result_repair_case_id = result_case.id
        WHERE result_case.competition_id = $1
          AND schedule_case.id IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM result_repair_case_events ev
+           WHERE ev.result_repair_case_id = result_case.id
+             AND ev.event_type IN ('published', 'superseded')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM result_repair_cases newer_case
+           WHERE newer_case.competition_id = result_case.competition_id
+             AND newer_case.corrected_match_id = result_case.corrected_match_id
+             AND newer_case.source_result_version > result_case.source_result_version
+         )
        ORDER BY result_case.created_at, result_case.id`,
       [competitionId],
     );

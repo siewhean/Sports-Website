@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { MatchReminderSweeper, configureMatchNotificationOrigin } from "./match-notifications.js";
 import { loadConfig, safeConfigSummary } from "@matchday/config";
 import { parseAuthenticationAssurancePolicy } from "@matchday/config/authentication-assurance";
 import { systemClock, type PostgresJsSql } from "@matchday/identity";
@@ -259,6 +260,7 @@ const app = await buildApp({
   scoringFallbackHmacKeyring: config.scoringAccess.fallbackCodeHmacKeyring,
   closeIdentityResources: async () => {
     await competitionLifecycleSweeper?.stop();
+    await matchReminderSweeper.stop();
     await Promise.all([
       inlineScheduler.stop(),
       pdpaRetention.stop(),
@@ -287,6 +289,14 @@ competitionLifecycleSweeper = new CompetitionLifecycleSweeper(
   app.log as unknown as ConstructorParameters<typeof CompetitionLifecycleSweeper>[3],
 );
 competitionLifecycleSweeper.start();
+configureMatchNotificationOrigin(config.publicOrigin);
+// Track R2.7: match reminders ahead of published starts (idempotent across instances).
+const matchReminderSweeper = new MatchReminderSweeper(
+  identitySql,
+  { enabled: true, intervalMs: 60_000, leadMinutes: 30 },
+  app.log as unknown as ConstructorParameters<typeof MatchReminderSweeper>[2],
+);
+matchReminderSweeper.start();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, async () => {

@@ -145,4 +145,16 @@ export const DEFAULT_EMAIL_TEMPLATES: readonly EmailTemplate[] = [
     "Your Matchday account deletion is complete.",
     [],
   ),
+  template(
+    "match-reminder",
+    "Match reminder for {{competitionName}}",
+    "Your match {{matchCode}} is scheduled for {{startsAt}} on {{courtName}}.",
+    ["competitionName", "matchCode", "startsAt", "courtName"],
+  ),
+  template(
+    "result-published",
+    "Final result for {{matchCode}} in {{competitionName}}",
+    "Match {{matchCode}} has finished with score {{scoreSummary}}.",
+    ["competitionName", "matchCode", "scoreSummary"],
+  ),
 ];

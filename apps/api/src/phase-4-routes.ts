@@ -1052,6 +1052,37 @@ export async function registerPhase4Routes(
           ),
         ),
   );
+  const DelayBody = strict({
+    idempotency_key: IdempotencyKey,
+    expected_revision: Type.Integer({ minimum: 1 }),
+    delay_minutes: Type.Optional(Type.Integer({ minimum: 0, maximum: 720 })),
+    playing_area_id: Type.Optional(Id),
+    target_playing_area_id: Type.Optional(Id),
+    from_epoch_ms: Type.Optional(Type.Integer({ minimum: 0 })),
+  });
+  app.post<{ Params: { revisionId: string }; Body: Static<typeof DelayBody> }>(
+    "/api/v1/schedule-revisions/:revisionId/delays",
+    {
+      schema: {
+        ...mutation,
+        params: strict({ revisionId: Id }),
+        body: DelayBody,
+        response: { 201: Json, ...MutationResponses },
+        tags: ["phase4-schedules"],
+      },
+    },
+    async (request, reply) =>
+      reply
+        .code(201)
+        .send(
+          await options.runtime.delayScheduleMatches(
+            await mutationActor(request),
+            request.params.revisionId,
+            request.body,
+            request.id,
+          ),
+        ),
+  );
   const LockBody = strict({
     idempotency_key: IdempotencyKey,
     match_id: Id,

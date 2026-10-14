@@ -13,6 +13,7 @@ import {
 } from "@/lib/public-competition-model";
 import { segmentName } from "./PublicCompetitionApp";
 import { LiveStatus } from "./PublicLiveStatus";
+import { WalkoverMark, walkoverDetail } from "./WalkoverBadge";
 import { useLiveCompetition } from "./useLiveCompetition";
 import { publicUi } from "@/lib/public-ui-tokens";
 import styles from "./PublicMatch.module.css";
@@ -141,17 +142,28 @@ export function PublicMatchLive({
           }
         >
           <div className={styles.team}>
-            <span>{match.home}</span>
+            <span>
+              {match.home}
+              <WalkoverMark match={match} home />
+            </span>
             <strong>{match.homeScore ?? "–"}</strong>
           </div>
           <span className={styles.dash} aria-hidden="true">
             –
           </span>
           <div className={styles.team}>
-            <span>{match.away}</span>
+            <span>
+              {match.away}
+              <WalkoverMark match={match} away />
+            </span>
             <strong>{match.awayScore ?? "–"}</strong>
           </div>
         </div>
+        {walkoverDetail(match) ? (
+          <p className={styles.current} data-walkover-detail="">
+            {walkoverDetail(match)}
+          </p>
+        ) : null}
         {isLive && match.currentSegment ? (
           <p className={styles.current}>
             {interpolate(copy.match.current, { segment: `${segment} ${match.currentSegment}` })}

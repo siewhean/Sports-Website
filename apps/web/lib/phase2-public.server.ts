@@ -168,12 +168,60 @@ function explanationsOf(value: unknown): { explanations?: string[] } {
   return summaries.length > 0 ? { explanations: summaries } : {};
 }
 
+type StandingsGroupWire = { id: string; entryIds: ReadonlySet<string> };
+
+/** Optional `groups: [{ id, entry_ids }]` pool membership; malformed groups are ignored (single merged table). */
+function standingsGroups(value: Record<string, unknown> | null): StandingsGroupWire[] {
+  const groups = value && Array.isArray(value.groups) ? (value.groups as unknown[]) : [];
+  const parsed = groups.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const group = candidate as Record<string, unknown>;
+    if (typeof group.id !== "string" || !group.id.trim() || !Array.isArray(group.entry_ids)) return [];
+    const entryIds = group.entry_ids.filter((id): id is string => typeof id === "string");
+    return entryIds.length > 0 ? [{ id: group.id, entryIds: new Set(entryIds) }] : [];
+  });
+  return parsed.length > 1 ? parsed : [];
+}
+
+/**
+ * Splits rows into one table per group when the projection carries pool membership. Rows keep the engine's
+ * order and are re-ranked 1..n inside their group; a row matching no group stays in an ungrouped table.
+ */
+function groupedStandings(
+  rows: StandingView[],
+  entryIds: readonly (string | null)[],
+  groups: StandingsGroupWire[],
+): StandingView[] {
+  if (groups.length === 0) return rows;
+  const copy = messages.publicCompetition;
+  const grouped: StandingView[] = [];
+  for (const group of groups) {
+    const label = interpolate(copy.groupLabel, { group: group.id });
+    let position = 0;
+    rows.forEach((row, index) => {
+      const entryId = entryIds[index];
+      if (entryId && group.entryIds.has(entryId)) {
+        position += 1;
+        grouped.push({ ...row, position, group: { id: group.id, label } });
+      }
+    });
+  }
+  const assigned = new Set(groups.flatMap((group) => [...group.entryIds]));
+  rows.forEach((row, index) => {
+    const entryId = entryIds[index];
+    if (!entryId || !assigned.has(entryId)) grouped.push(row);
+  });
+  return grouped;
+}
+
 export function standingsView(value: Record<string, unknown> | null): StandingView[] {
   const rows = value && Array.isArray(value.standings) ? (value.standings as unknown[]) : [];
-  return rows.flatMap((candidate) => {
+  const entryIds: (string | null)[] = [];
+  const views = rows.flatMap((candidate) => {
     if (!candidate || typeof candidate !== "object") return [];
     const row = candidate as Record<string, unknown>;
     if (typeof row.entryName !== "string") return [];
+    entryIds.push(typeof row.entryId === "string" ? row.entryId : null);
     return [
       {
         position: requiredNumber(row, ["rank"], "standings row"),
@@ -188,6 +236,7 @@ export function standingsView(value: Record<string, unknown> | null): StandingVi
       } satisfies StandingView,
     ];
   });
+  return groupedStandings(views, entryIds, standingsGroups(value));
 }
 
 type BracketWireMatch = Pick<BracketResolution["matches"][number], "matchId" | "stage">;
@@ -245,6 +294,9 @@ function toDivisionView(
     recordedTimeSeconds: result.recorded_time_seconds,
     updatedAt: result.updated_at,
     updatedLabel: dateTime(result.updated_at, timezone),
+    ...(result.walkover && (result.walkover.winner === "home" || result.walkover.winner === "away")
+      ? { walkover: { winner: result.walkover.winner } }
+      : {}),
   });
 
   const matches: MatchView[] = [

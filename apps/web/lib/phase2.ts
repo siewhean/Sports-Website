@@ -44,6 +44,8 @@ export type MatchView = {
   recordedTimeSeconds?: number | null;
   updatedAt?: string;
   updatedLabel?: string;
+  /** Set when the result was settled by walkover/forfeit; homeScore/awayScore then hold the forfeit scoreline. */
+  walkover?: { winner: "home" | "away" };
   status: "scheduled" | "live" | "final";
 };
 
@@ -58,6 +60,8 @@ export type StandingView = {
   points: number;
   /** Plain-language tie-break notes from the standings engine, in criteria order. */
   explanations?: string[];
+  /** Group/pool this row belongs to when the division has several; position is then the rank within that group. */
+  group?: { id: string; label: string };
 };
 
 export type PublicDivisionView = {
@@ -887,8 +891,66 @@ export const phase2Competition: CompetitionView = {
   canEdit: true,
 };
 
+const groupStandingsDemo = (group: "A" | "B", teams: readonly [string, string, string, string]): StandingView[] =>
+  teams.map((team, index) => ({
+    position: index + 1,
+    team,
+    played: 3,
+    won: 3 - index,
+    drawn: 0,
+    lost: index,
+    difference: 6 - index * 4,
+    points: (3 - index) * 3,
+    group: { id: group, label: `Group ${group}` },
+  }));
+
+const groupsWalkoverMatches: MatchView[] = [
+  {
+    id: "M11",
+    label: "Match 11",
+    stage: "Group A",
+    time: "09:30",
+    area: "Court 1",
+    home: "Kallang Current",
+    away: "East Coast Oars",
+    homeScore: 5,
+    awayScore: 0,
+    walkover: { winner: "home" },
+    status: "final",
+  },
+  ...phase2Competition.matches,
+];
+const groupsWalkoverStandings: StandingView[] = [
+  ...groupStandingsDemo("A", ["Kallang Current", "Seletar North", "Punggol Wake", "East Coast Oars"]),
+  ...groupStandingsDemo("B", ["Marina Blue", "Harbour Gold", "Sentosa Tide", "Pasir Ris Rapids"]),
+];
+
+/**
+ * Unlisted demo fixture (reachable only by slug) with a walkover result and two groups, used by the walkover /
+ * per-group standings browser evidence without disturbing the main demo competition's visual baselines.
+ */
+export const phase2GroupsWalkoverCompetition: CompetitionView = {
+  ...phase2Competition,
+  id: "cmp_sgopen_groups_2026",
+  slug: "singapore-open-groups",
+  name: "Singapore Open Groups 2026",
+  matches: groupsWalkoverMatches,
+  standings: groupsWalkoverStandings,
+  publicDivisions: [
+    {
+      division: { ...phase2Competition.division, matchCount: groupsWalkoverMatches.length },
+      teams: phase2Competition.teams,
+      areas: phase2Competition.areas,
+      matches: groupsWalkoverMatches,
+      standings: groupsWalkoverStandings,
+      bracket: phase2Competition.bracket,
+    },
+  ],
+};
+
 export const demoCompetitionReadPort: CompetitionReadPort = {
   async getBySlug(slug) {
+    if (slug === phase2GroupsWalkoverCompetition.slug) return phase2GroupsWalkoverCompetition;
     return slug === phase2Competition.slug ? phase2Competition : null;
   },
   async list() {

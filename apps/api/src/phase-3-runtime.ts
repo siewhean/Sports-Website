@@ -100,6 +100,10 @@ export type Phase3CapacityResponse = {
     sort_order: number;
     slot_minutes: number;
     fixed_reserve_slots: number;
+    /** Open matches in published/ready-for-review schedules that use this area. */
+    scheduled_match_count: number;
+    /** Dropped from the last capacity save but kept because scheduled matches still use it. */
+    retained: boolean;
     availability: Array<{
       id: string;
       date: string;
@@ -120,6 +124,15 @@ export type Phase3CapacityResponse = {
     }>;
   }>;
   effective: ReturnType<Phase3DomainAdapter["capacity"]>;
+  affected_matches?: Array<{
+    match_id: string;
+    match_code: string;
+    playing_area_id: string;
+    starts_at: string;
+    ends_at: string;
+    reason: "playing_area_removed" | "playing_area_unavailable" | "outside_availability_windows";
+  }>;
+  replan_required?: boolean;
 };
 
 type DomainCompetition = competitionDomain.Competition;
@@ -2331,11 +2344,31 @@ export class Phase3Runtime {
           "All playing areas must use one competition slot duration",
         );
       }
-      const preparedAreas = input.areas.map((area, index) => ({
-        ...area,
-        id: area.id ?? randomUUID(),
-        sortOrder: area.sortOrder ?? index,
-      }));
+      const existingAreas = await tx.unsafe<{ id: string; name: string }>(
+        `SELECT id, name FROM playing_areas WHERE competition_id=$1`,
+        [competitionId],
+      );
+      // Areas are matched by the id the client echoes back from the capacity view, so a rename
+      // updates the existing court in place. The request contract keeps `id` optional for older
+      // clients; only for those id-less areas do we fall back, explicitly, to an exact
+      // (case/space-insensitive) name match against an existing area that no other submitted area
+      // claims by id. Anything else is a genuinely new court.
+      const claimedIds = new Set(input.areas.flatMap((area) => (area.id ? [area.id] : [])));
+      const unclaimedByName = new Map(
+        existingAreas
+          .filter((area) => !claimedIds.has(area.id))
+          .map((area) => [area.name.toLowerCase().trim(), area.id] as const),
+      );
+      const preparedAreas = input.areas.map((area, index) => {
+        let id = area.id;
+        if (!id) {
+          const nameKey = area.name.toLowerCase().trim();
+          id = unclaimedByName.get(nameKey) ?? randomUUID();
+          unclaimedByName.delete(nameKey);
+        }
+        return { ...area, id, sortOrder: area.sortOrder ?? index };
+      });
+
       const availability = preparedAreas.flatMap((area) =>
         area.availability.map((window) => ({
           id: window.id ?? randomUUID(),
@@ -2390,14 +2423,31 @@ export class Phase3Runtime {
       if (outsideCompetitionDates) {
         throw new ApiError(422, ErrorCode.CAPACITY_INVALID, "Capacity windows must stay within competition dates");
       }
-      await tx.unsafe(`DELETE FROM playing_areas WHERE competition_id=$1`, [competitionId]);
+      await tx.unsafe(`DELETE FROM competition_availability_windows WHERE competition_id=$1`, [competitionId]);
+      await tx.unsafe(`DELETE FROM playing_area_unavailable_intervals WHERE competition_id=$1`, [competitionId]);
+
       for (const area of preparedAreas) {
         await tx.unsafe(
           `INSERT INTO playing_areas (id,competition_id,name,sort_order,slot_minutes,fixed_reserve_slots)
-           VALUES ($1,$2,$3,$4,$5,$6)`,
+           VALUES ($1,$2,$3,$4,$5,$6)
+           ON CONFLICT (id) DO UPDATE SET
+             name=EXCLUDED.name,
+             sort_order=EXCLUDED.sort_order,
+             slot_minutes=EXCLUDED.slot_minutes,
+             fixed_reserve_slots=EXCLUDED.fixed_reserve_slots`,
           [area.id, competitionId, area.name.trim(), area.sortOrder, area.slotMinutes, area.fixedReserveSlots ?? 0],
         );
       }
+
+      const preparedIds = preparedAreas.map((a) => a.id);
+      await tx.unsafe(
+        `DELETE FROM playing_areas
+         WHERE competition_id=$1
+           AND id <> ALL($2::uuid[])
+           AND NOT EXISTS (SELECT 1 FROM scheduled_matches WHERE playing_area_id=playing_areas.id)`,
+        [competitionId, preparedIds],
+      );
+
       for (const window of resolved.availability) {
         const source = required(
           availability.filter((value) => value.id === window.id),
@@ -2442,6 +2492,92 @@ export class Phase3Runtime {
           ],
         );
       }
+
+      const scheduledInReviewOrPublished = await tx.unsafe<{
+        match_id: string;
+        match_code: string;
+        playing_area_id: string;
+        starts_at: Date | string;
+        ends_at: Date | string;
+        state: string;
+      }>(
+        `SELECT sm.match_id, m.code AS match_code, sm.playing_area_id, sm.starts_at, sm.ends_at, m.state
+         FROM scheduled_matches sm
+         JOIN schedule_revisions sr ON sr.id = sm.schedule_revision_id
+         JOIN matches m ON m.id = sm.match_id
+         WHERE sm.competition_id = $1
+           AND sr.status IN ('published', 'ready_for_review')
+           AND m.state NOT IN ('in_progress', 'final', 'corrected')`,
+        [competitionId],
+      );
+
+      const affectedMatches: Array<{
+        match_id: string;
+        match_code: string;
+        playing_area_id: string;
+        starts_at: string;
+        ends_at: string;
+        reason: "playing_area_removed" | "playing_area_unavailable" | "outside_availability_windows";
+      }> = [];
+
+      if (scheduledInReviewOrPublished.length > 0) {
+        const availableWindows = resolved.availability;
+        const unavailableWindows = resolved.unavailable;
+        const preparedIdSet = new Set(preparedIds);
+
+        for (const match of scheduledInReviewOrPublished) {
+          const matchStart = new Date(match.starts_at).getTime();
+          const matchEnd = new Date(match.ends_at).getTime();
+
+          if (!preparedIdSet.has(match.playing_area_id)) {
+            affectedMatches.push({
+              match_id: match.match_id,
+              match_code: match.match_code,
+              playing_area_id: match.playing_area_id,
+              starts_at: new Date(match.starts_at).toISOString(),
+              ends_at: new Date(match.ends_at).toISOString(),
+              reason: "playing_area_removed",
+            });
+            continue;
+          }
+
+          const hasUnavailableOverlap = unavailableWindows.some((u) => {
+            if (u.areaId !== match.playing_area_id) return false;
+            const uStart = new Date(u.startIso).getTime();
+            const uEnd = new Date(u.endIso).getTime();
+            return matchStart < uEnd && matchEnd > uStart;
+          });
+          if (hasUnavailableOverlap) {
+            affectedMatches.push({
+              match_id: match.match_id,
+              match_code: match.match_code,
+              playing_area_id: match.playing_area_id,
+              starts_at: new Date(match.starts_at).toISOString(),
+              ends_at: new Date(match.ends_at).toISOString(),
+              reason: "playing_area_unavailable",
+            });
+            continue;
+          }
+
+          const fitsAvailability = availableWindows.some((a) => {
+            if (a.areaId !== match.playing_area_id) return false;
+            const aStart = new Date(a.startIso).getTime();
+            const aEnd = new Date(a.endIso).getTime();
+            return matchStart >= aStart && matchEnd <= aEnd;
+          });
+          if (!fitsAvailability) {
+            affectedMatches.push({
+              match_id: match.match_id,
+              match_code: match.match_code,
+              playing_area_id: match.playing_area_id,
+              starts_at: new Date(match.starts_at).toISOString(),
+              ends_at: new Date(match.ends_at).toISOString(),
+              reason: "outside_availability_windows",
+            });
+          }
+        }
+      }
+
       const revision = required(
         await tx.unsafe<{ capacity_revision: number }>(
           `UPDATE competitions SET capacity_revision=capacity_revision+1,capacity_timezone=$3
@@ -2450,7 +2586,13 @@ export class Phase3Runtime {
         ),
         "Competition not found",
       ).capacity_revision;
-      const result = { ...(await this.capacity(actor, competitionId, tx)), revision, idempotent_replay: false };
+      const result = {
+        ...(await this.capacity(actor, competitionId, tx)),
+        revision,
+        idempotent_replay: false,
+        affected_matches: affectedMatches,
+        replan_required: affectedMatches.length > 0,
+      };
       await this.evidence(
         tx,
         actor,
@@ -2648,8 +2790,23 @@ export class Phase3Runtime {
       sort_order: number;
       slot_minutes: number;
       fixed_reserve_slots: number;
+      scheduled_match_count: number;
+      retained: boolean;
     }>(
-      `SELECT id,name,sort_order,COALESCE(slot_minutes,30)::int AS slot_minutes,fixed_reserve_slots FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
+      // Every area is listed. An area dropped from the last capacity save is kept (not deleted)
+      // while scheduled matches still reference it; it has no availability and is flagged
+      // `retained` with its open scheduled-match count so the organiser can re-plan those matches.
+      `SELECT pa.id,pa.name,pa.sort_order,COALESCE(pa.slot_minutes,30)::int AS slot_minutes,pa.fixed_reserve_slots,
+         (SELECT count(*)::int FROM scheduled_matches sm
+            JOIN schedule_revisions sr ON sr.id=sm.schedule_revision_id
+            JOIN matches m ON m.id=sm.match_id
+           WHERE sm.playing_area_id=pa.id AND sr.status IN ('published','ready_for_review')
+             AND m.state NOT IN ('final','corrected')) AS scheduled_match_count,
+         NOT EXISTS (SELECT 1 FROM competition_availability_windows caw WHERE caw.playing_area_id=pa.id)
+           AND EXISTS (SELECT 1 FROM scheduled_matches sm WHERE sm.playing_area_id=pa.id) AS retained
+       FROM playing_areas pa
+       WHERE pa.competition_id=$1
+       ORDER BY pa.sort_order,pa.id`,
       [competitionId],
     );
     const available = await database.unsafe<{
@@ -2731,6 +2888,8 @@ export class Phase3Runtime {
         sort_order: area.sort_order,
         slot_minutes: area.slot_minutes,
         fixed_reserve_slots: area.fixed_reserve_slots,
+        scheduled_match_count: area.scheduled_match_count,
+        retained: area.retained,
         availability: available
           .filter((window) => window.area_id === area.id)
           .map((window) => ({
