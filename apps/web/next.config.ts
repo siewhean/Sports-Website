@@ -11,8 +11,9 @@ if (requestedBuildId !== undefined && !/^[A-Za-z0-9._-]{8,128}$/u.test(requested
   throw new Error("MATCHDAY_BUILD_ID must contain 8-128 URL-safe characters");
 }
 
-// API_ORIGIN is the canonical server-only HTTPS origin of the API service.
-export function apiOrigin(value = process.env.API_ORIGIN ?? process.env.MATCHDAY_API_BASE_URL): string | null {
+// API_ORIGIN is the canonical server-only HTTPS origin of the API service. There is deliberately no fallback:
+// MATCHDAY_API_BASE_URL may be a local http origin in e2e builds and must not enable the HTTPS rewrite.
+export function apiOrigin(value = process.env.API_ORIGIN): string | null {
   const configured = value?.trim();
   if (!configured) return null;
 

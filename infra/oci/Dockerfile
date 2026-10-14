@@ -32,12 +32,15 @@ ARG MATCHDAY_PUBLIC_ORIGIN
 # Public (browser-visible) Next.js values are inlined at build time, so they must be supplied as build args.
 ARG NEXT_PUBLIC_MATCHDAY_API_BASE_URL
 ARG NEXT_PUBLIC_SENTRY_DSN
+ARG NEXT_PUBLIC_STATUS_PAGE_URL
 ENV MATCHDAY_BUILD_ID=${MATCHDAY_BUILD_ID}
 ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
 ENV MATCHDAY_PUBLIC_ORIGIN=${MATCHDAY_PUBLIC_ORIGIN}
 ENV NEXT_PUBLIC_MATCHDAY_API_BASE_URL=${NEXT_PUBLIC_MATCHDAY_API_BASE_URL}
 # Inlined into the browser bundle at build time; empty keeps Sentry off.
 ENV NEXT_PUBLIC_SENTRY_DSN=${NEXT_PUBLIC_SENTRY_DSN}
+# Footer status link; blank falls back to /maintenance.
+ENV NEXT_PUBLIC_STATUS_PAGE_URL=${NEXT_PUBLIC_STATUS_PAGE_URL}
 RUN pnpm --filter @matchday/api... build \
   && pnpm --filter @matchday/worker... build \
   && pnpm --filter @matchday/scheduler... build \

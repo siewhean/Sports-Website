@@ -111,6 +111,7 @@ services:
         MATCHDAY_BUILD_ID: ${CANDIDATE_SHA}
         BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}
         MATCHDAY_PUBLIC_ORIGIN: ${MATCHDAY_PUBLIC_ORIGIN}
+        NEXT_PUBLIC_STATUS_PAGE_URL: ${NEXT_PUBLIC_STATUS_PAGE_URL:-}
     restart: unless-stopped
     mem_limit: 1536m
     cpus: 1.0

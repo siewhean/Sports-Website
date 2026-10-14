@@ -39,21 +39,12 @@ describe("V1 preview API rewrite", () => {
     ]);
   });
 
-  it("falls back to MATCHDAY_API_BASE_URL when API_ORIGIN is unset, and prefers API_ORIGIN", async () => {
+  it("ignores MATCHDAY_API_BASE_URL (including local http e2e values) when API_ORIGIN is unset", async () => {
     delete process.env.API_ORIGIN;
-    process.env.MATCHDAY_API_BASE_URL = "https://fallback.example.test";
-    process.env.MATCHDAY_BUILD_ID = "v1-preview-base-url-fallback";
-    const fallback = (await import("../../next.config")).default;
-    await expect(fallback.rewrites?.()).resolves.toEqual([
-      { source: "/api/v1/:path*", destination: "https://fallback.example.test/api/v1/:path*" },
-    ]);
-
-    vi.resetModules();
-    process.env.API_ORIGIN = "https://api.example.test";
-    const preferred = (await import("../../next.config")).default;
-    await expect(preferred.rewrites?.()).resolves.toEqual([
-      { source: "/api/v1/:path*", destination: "https://api.example.test/api/v1/:path*" },
-    ]);
+    process.env.MATCHDAY_API_BASE_URL = "http://127.0.0.1:4000";
+    process.env.MATCHDAY_BUILD_ID = "v1-preview-base-url-ignored";
+    const config = (await import("../../next.config")).default;
+    await expect(config.rewrites?.()).resolves.toEqual([]);
   });
 
   it("redirects interactive identity routes directly to the API origin to preserve host-bound OIDC flow cookies", async () => {

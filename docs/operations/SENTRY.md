@@ -46,7 +46,7 @@ To disable: blank the variables and redeploy.
 
 ## Alert rules (email, web, and API)
 
-In Sentry: **Alerts > Create Alert**, configured for each project (`matchday-web`, `matchday-api`, `matchday-worker`):
+In Sentry: **Alerts > Create Alert**, configured in each Sentry project you created (the single shared project, or `matchday-web` and `matchday-api` if split):
 
 ### Rule 1: Production New Error (Issue Alert)
 
@@ -67,13 +67,18 @@ In Sentry: **Alerts > Create Alert**, configured for each project (`matchday-web
   - **Warning**: `> 10` events in 5 minutes
 - **Actions**: Trigger immediate alert email / notification; send resolved notification when rate drops below warning threshold.
 
-### Rule 3: Dead-Lettered Worker Job & Unhandled Rejection (Issue Alert)
+### Rule 3: Production Fatal Event (Issue Alert)
 
-- **Name**: `Critical Worker Dead-Letter & API Unhandled Rejection`
-- **When**: An issue is created or event occurs
-- **If**: `environment:production` AND (`tag[service]:matchday-worker` OR `tag[service]:matchday-api` OR `level:fatal`)
+Rule 1 fires only on the first event of a new issue. Rule 3 covers repeats of an existing issue that are fatal (process
+crash, unhandled rejection), which Rule 1 would stay silent on.
+
+- **Name**: `Production Fatal Event Alert`
+- **When**: "An event is captured" (every event, not only new issues).
+- **If**: `environment:production` AND `level:fatal`. Every service tags its events with `service` (`matchday-web`,
+  `matchday-api`, `matchday-worker`, set by `initialScope` in `packages/observability/src/sentry.ts`); in a single shared
+  project, add `tag[service]:matchday-worker` as a separate copy of this rule if worker crashes need a distinct route.
 - **Then**: Send immediate notification to owner/team.
-- **Frequency**: 1 event (immediate dispatch on any unhandled crash or job DLQ).
+- **Frequency**: at most once per 5 minutes per issue (avoids a crash loop flooding the inbox).
 
 ### Inbound Filters & Quota Protection
 
@@ -85,13 +90,8 @@ In Sentry: **Alerts > Create Alert**, configured for each project (`matchday-web
 
 ## Verifying after setup
 
-Deploy to staging with a staging DSN/`APP_ENV=staging`, then trigger a test event from a Node REPL on the VM or temporarily throw in a non-production route:
-
-```sh
-# Verify scrubbing & event capture on staging:
-curl -sS -X POST "https://staging.matchday.poladex.shop/api/monitoring" \
-  -H "content-type: application/x-sentry-envelope" \
-  --data-binary @tests/fixtures/test-sentry-envelope.bin
-```
-
-Confirm the event shows release = the deployed SHA, no cookies/headers/query strings, and no email addresses. Do not test against the production project.
+Point a non-production deployment at a non-production DSN with `APP_ENV` set to a non-production value, then trigger a
+test error (for example, temporarily throw from a non-production-only code path, or call `Sentry.captureException` from a
+Node REPL in the API container on that host). Confirm the event shows release = the deployed SHA, carries the expected
+`service` tag (`matchday-web`, `matchday-api` or `matchday-worker`), contains no cookies, headers, query strings or email
+addresses, and that the alert rules above notify. Do not test against the production project.

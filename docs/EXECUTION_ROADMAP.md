@@ -343,17 +343,17 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 - R5.5 Housekeeping:
   - remove `RENDER_API_ORIGIN` from Vercel and codebase (`docs/operations/VERCEL_PREVIEW.md`);
   - delete the unused Upstash database (`docs/operations/UPSTASH_CLEANUP.md`);
-  - closed draft PR #70 and triaged stale open PRs (#7–#19, #55, #57, #58, #67–#70, #94–#96) with individual notes;
-  - resolved untracked scripts decision (`docs/operations/LAUNCH_CHECKLIST.md`).
-- R5.6 Quarterly restore drill scheduled in `docs/operations/RESTORE_DRILL_LOG.md` (first: 10 January 2027) using `infra/oci/backup/restore-drill.sh`.
-- R5.7 Offline backup key storage guidance recorded in `docs/operations/OFFLINE_KEYS.md`.
+  - close draft PR #70 and triage stale open PRs (#7–#19, #55, #57, #58, #67–#70, #94–#96): merge, supersede or close each with a note;
+  - decide on the untracked `production-certification.spec.ts` and `issue-pass-oci.cjs` (`docs/operations/LAUNCH_CHECKLIST.md`).
+- R5.6 Quarterly restore drill with results logged in `docs/operations/RESTORE_DRILL_LOG.md` using `infra/oci/backup/restore-drill.sh` (scheduled; first drill 10 January 2027).
+- R5.7 Store `~/matchday-backup.agekey` offline in two places (guidance in `docs/operations/OFFLINE_KEYS.md`; owner confirmation pending).
 
 **Checkpoint CP5 — Operations**
 
 - [ ] A deliberate API stop triggers an alert within 5 minutes.
 - [ ] A skipped backup triggers a heartbeat alert.
 - [ ] A test error reaches Sentry and alerts.
-- [x] Open-PR list contains only active work.
+- [ ] Open-PR list contains only active work.
 - [ ] Backup key stored offline (owner confirms).
 
 ---

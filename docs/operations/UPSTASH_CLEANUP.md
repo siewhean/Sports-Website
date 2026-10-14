@@ -1,6 +1,6 @@
 # Upstash Redis Cleanup & Decommissioning
 
-**Status:** Completed in Track R5.
+**Status:** Pending owner action. The codebase holds no Upstash references; the console deletion below has not yet been confirmed (see `docs/qa/track-r5.md`).
 
 Matchday uses an internal Redis 8.10 container on the OCI VM (`infra/oci/compose.prod.yaml`) for BullMQ queue management, job dispatch, and rate limiting. The early external Upstash Redis database is completely unused and has no connections or credentials referenced in the codebase or production environment.
 

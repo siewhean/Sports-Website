@@ -47,8 +47,10 @@ export function SiteHeader({
 }
 
 export function SiteFooter({ inverse = false }: { inverse?: boolean }) {
-  const statusHref = process.env.NEXT_PUBLIC_STATUS_PAGE_URL?.trim() || "/maintenance";
-  const isExternalStatus = statusHref.startsWith("http://") || statusHref.startsWith("https://");
+  // Only an absolute https:// status page is linked externally; anything else falls back to /maintenance.
+  const configuredStatus = process.env.NEXT_PUBLIC_STATUS_PAGE_URL?.trim() ?? "";
+  const isExternalStatus = /^https:\/\/[^\s]+$/u.test(configuredStatus);
+  const statusHref = isExternalStatus ? configuredStatus : "/maintenance";
 
   return (
     <footer className={`site-footer${inverse ? " site-footer--inverse" : ""}`}>
@@ -63,6 +65,7 @@ export function SiteFooter({ inverse = false }: { inverse?: boolean }) {
         {isExternalStatus ? (
           <a href={statusHref} target="_blank" rel="noopener noreferrer">
             {messages.footer.status}
+            <span className="visually-hidden"> {messages.footer.opensInNewTab}</span>
           </a>
         ) : (
           <Link href={statusHref}>{messages.footer.status}</Link>
