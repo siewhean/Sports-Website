@@ -94,6 +94,9 @@ async function makeAttempt(ageDays: number, windowOpen = false) {
 
 describeInfrastructure("PDPA account data rights and retention", () => {
   beforeAll(async () => {
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL environment variable is required to run account-data-rights integration tests");
+    }
     await migrateDatabase({
       databaseUrl,
       schema,

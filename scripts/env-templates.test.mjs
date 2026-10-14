@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseAuthenticationAssurancePolicy } from "../packages/config/src/authentication-assurance.ts";
 import { parseEnvContent } from "./validate-production-config.mjs";
 
@@ -42,6 +42,34 @@ for (const template of templates) {
     }
   });
 }
+
+// Boot-config check: the local template must be accepted by the same parseConfig the API, worker
+// and migrate entrypoints call at boot. Imported from the built @matchday/config package (run
+// `pnpm --filter @matchday/config build` first). Empty values are kept as empty strings, exactly
+// as `cp .env.example .env` followed by an env-file load hands them to the process.
+const configModulePath = path.join(root, "packages/config/dist/index.js");
+async function loadParseConfig() {
+  assert.ok(existsSync(configModulePath), "build @matchday/config first: pnpm --filter @matchday/config build");
+  const { parseConfig } = await import(pathToFileURL(configModulePath).href);
+  return parseConfig;
+}
+
+test(".env.example: parseConfig with APP_ENV=local does not throw", async () => {
+  const parseConfig = await loadParseConfig();
+  const env = parseEnvContent(read(".env.example"));
+  assert.equal(env.APP_ENV, "local", ".env.example must stay a local-development template");
+  const config = parseConfig({ ...env, APP_ENV: "local" });
+  assert.equal(config.environment, "local");
+});
+
+test(".env (when present, e.g. CI's `cp .env.example .env`): parseConfig does not throw", async (t) => {
+  if (!existsSync(path.join(root, ".env"))) {
+    t.skip("no .env in the repository root");
+    return;
+  }
+  const parseConfig = await loadParseConfig();
+  assert.doesNotThrow(() => parseConfig(parseEnvContent(read(".env"))));
+});
 
 test("production template requires MFA assurance, never off or an unknown value", () => {
   const env = parseEnvContent(read("infra/oci/.env.prod.example"));
