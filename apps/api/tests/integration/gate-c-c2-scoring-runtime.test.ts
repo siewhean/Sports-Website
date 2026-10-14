@@ -622,6 +622,23 @@ describeInfrastructure("Gate C C2 canonical scoring runtime", () => {
         randomUUID(),
       ),
     ).rejects.toMatchObject({ statusCode: 409, code: "IDEMPOTENCY_KEY_REUSED" });
+    // Concurrent mismatched reuse is serialized by the per-match advisory lock and must be a
+    // consistent 409, while concurrent identical retries replay the stored event.
+    const originalGoal = concurrentGoalCommands[concurrentGoalIds.indexOf(goalId)]!;
+    const mismatchedReuse = await Promise.allSettled(
+      [1, 2, 3, 4].map((offset) =>
+        runtime.appendCanonicalScoreEvent(auth, { ...originalGoal, manual_time_seconds: 25 + offset }, 2, randomUUID()),
+      ),
+    );
+    for (const result of mismatchedReuse) {
+      expect(result).toMatchObject({ status: "rejected", reason: { statusCode: 409, code: "IDEMPOTENCY_KEY_REUSED" } });
+    }
+    const identicalRetries = await Promise.all(
+      [1, 2].map(() => runtime.appendCanonicalScoreEvent(auth, originalGoal, 1, randomUUID())),
+    );
+    for (const retry of identicalRetries) {
+      expect(retry).toMatchObject({ duplicate: true, event_id: goal.event_id, aggregate_version: 2 });
+    }
     await runtime.appendCanonicalScoreEvent(
       auth,
       {

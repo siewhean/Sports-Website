@@ -87,6 +87,36 @@ const readinessSchema = Type.Intersect([
   }),
 ]);
 
+// 55P03 lock_not_available, 57014 query_canceled, 40001 serialization_failure,
+// 40P01 deadlock_detected, 57P01 admin_shutdown; class 08 is connection_exception.
+const transientPostgresCodes = new Set(["55P03", "57014", "40001", "40P01", "57P01"]);
+// postgres.js raises these non-SQLSTATE codes when the socket dies mid-query; node adds the errno.
+const transientConnectionCodes = new Set([
+  "CONNECTION_CLOSED",
+  "CONNECTION_ENDED",
+  "CONNECTION_DESTROYED",
+  "CONNECT_TIMEOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+]);
+
+export function isTransientDatabaseError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current && typeof current === "object" && !seen.has(current); depth += 1) {
+    seen.add(current);
+    const code = (current as { code?: unknown }).code;
+    if (
+      typeof code === "string" &&
+      (transientPostgresCodes.has(code) || transientConnectionCodes.has(code) || /^08[0-9A-Z]{3}$/.test(code))
+    ) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 function requestId(request: FastifyRequest): string {
   return request.id;
 }
@@ -496,14 +526,10 @@ export async function buildApp(options: BuildAppOptions) {
       error.statusCode < 500
         ? error.statusCode
         : null;
-    // lock_not_available / query_canceled come from the pool's lock_timeout and statement_timeout:
-    // the database is busy, not broken, so tell clients to retry instead of reporting a 500.
-    const databaseBusy =
-      !apiError &&
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error.code === "55P03" || error.code === "57014");
+    // Transient database failures (lock/statement timeouts, serialization failures, deadlocks,
+    // admin shutdown, dropped connections) mean the database is busy, not broken, so tell
+    // clients to retry instead of reporting a 500.
+    const databaseBusy = !apiError && isTransientDatabaseError(error);
     const statusCode = databaseBusy
       ? 503
       : (apiError?.statusCode ??
