@@ -17,7 +17,7 @@ export type CurrentIdentitySession =
   | Readonly<{ status: "unauthenticated" }>;
 
 function identityApiOrigin(): URL | null {
-  const configured = (process.env.RENDER_API_ORIGIN ?? process.env.MATCHDAY_API_BASE_URL)?.trim();
+  const configured = (process.env.API_ORIGIN ?? process.env.MATCHDAY_API_BASE_URL)?.trim();
   if (!configured) return null;
   try {
     const url = new URL(configured);

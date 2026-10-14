@@ -1,22 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const originalBuildId = process.env.MATCHDAY_BUILD_ID;
-const originalLegacyApiOrigin = process.env.RENDER_API_ORIGIN;
+const originalApiBaseUrl = process.env.MATCHDAY_API_BASE_URL;
 const originalApiOrigin = process.env.API_ORIGIN;
 
 afterEach(() => {
   vi.resetModules();
   if (originalBuildId === undefined) delete process.env.MATCHDAY_BUILD_ID;
   else process.env.MATCHDAY_BUILD_ID = originalBuildId;
-  if (originalLegacyApiOrigin === undefined) delete process.env.RENDER_API_ORIGIN;
-  else process.env.RENDER_API_ORIGIN = originalLegacyApiOrigin;
+  if (originalApiBaseUrl === undefined) delete process.env.MATCHDAY_API_BASE_URL;
+  else process.env.MATCHDAY_API_BASE_URL = originalApiBaseUrl;
   if (originalApiOrigin === undefined) delete process.env.API_ORIGIN;
   else process.env.API_ORIGIN = originalApiOrigin;
 });
 
 describe("V1 preview API rewrite", () => {
   it("does not add a proxy route until an origin is configured", async () => {
-    delete process.env.RENDER_API_ORIGIN;
+    delete process.env.MATCHDAY_API_BASE_URL;
     delete process.env.API_ORIGIN;
     process.env.MATCHDAY_BUILD_ID = "v1-preview-without-api-origin";
 
@@ -39,13 +39,13 @@ describe("V1 preview API rewrite", () => {
     ]);
   });
 
-  it("falls back to the deprecated RENDER_API_ORIGIN when API_ORIGIN is unset, and prefers API_ORIGIN", async () => {
+  it("falls back to MATCHDAY_API_BASE_URL when API_ORIGIN is unset, and prefers API_ORIGIN", async () => {
     delete process.env.API_ORIGIN;
-    process.env.RENDER_API_ORIGIN = "https://legacy.example.test";
-    process.env.MATCHDAY_BUILD_ID = "v1-preview-legacy-origin-fallback";
-    const legacy = (await import("../../next.config")).default;
-    await expect(legacy.rewrites?.()).resolves.toEqual([
-      { source: "/api/v1/:path*", destination: "https://legacy.example.test/api/v1/:path*" },
+    process.env.MATCHDAY_API_BASE_URL = "https://fallback.example.test";
+    process.env.MATCHDAY_BUILD_ID = "v1-preview-base-url-fallback";
+    const fallback = (await import("../../next.config")).default;
+    await expect(fallback.rewrites?.()).resolves.toEqual([
+      { source: "/api/v1/:path*", destination: "https://fallback.example.test/api/v1/:path*" },
     ]);
 
     vi.resetModules();
@@ -100,7 +100,7 @@ describe("V1 preview API rewrite", () => {
   });
 
   it("configures workspace transpilePackages and deterministic turbopack root", async () => {
-    delete process.env.RENDER_API_ORIGIN;
+    delete process.env.MATCHDAY_API_BASE_URL;
     delete process.env.API_ORIGIN;
     process.env.MATCHDAY_BUILD_ID = "v1-preview-test-transpile-packages";
 

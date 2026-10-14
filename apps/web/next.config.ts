@@ -11,9 +11,8 @@ if (requestedBuildId !== undefined && !/^[A-Za-z0-9._-]{8,128}$/u.test(requested
   throw new Error("MATCHDAY_BUILD_ID must contain 8-128 URL-safe characters");
 }
 
-// API_ORIGIN is the canonical name. RENDER_API_ORIGIN is a deprecated alias (the API no longer runs on Render)
-// and is only read when API_ORIGIN is unset; remove it once all deployments have migrated.
-export function apiOrigin(value = process.env.API_ORIGIN ?? process.env.RENDER_API_ORIGIN): string | null {
+// API_ORIGIN is the canonical server-only HTTPS origin of the API service.
+export function apiOrigin(value = process.env.API_ORIGIN ?? process.env.MATCHDAY_API_BASE_URL): string | null {
   const configured = value?.trim();
   if (!configured) return null;
 

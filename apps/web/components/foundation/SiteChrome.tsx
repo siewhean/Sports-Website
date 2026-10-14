@@ -47,6 +47,9 @@ export function SiteHeader({
 }
 
 export function SiteFooter({ inverse = false }: { inverse?: boolean }) {
+  const statusHref = process.env.NEXT_PUBLIC_STATUS_PAGE_URL?.trim() || "/maintenance";
+  const isExternalStatus = statusHref.startsWith("http://") || statusHref.startsWith("https://");
+
   return (
     <footer className={`site-footer${inverse ? " site-footer--inverse" : ""}`}>
       <BrandLink inverse={inverse} />
@@ -57,7 +60,13 @@ export function SiteFooter({ inverse = false }: { inverse?: boolean }) {
         <Link href="/terms">{messages.footer.terms}</Link>
         <Link href="/cookies">{messages.footer.cookies}</Link>
         <Link href="/account">{messages.footer.account}</Link>
-        <Link href="/maintenance">{messages.footer.status}</Link>
+        {isExternalStatus ? (
+          <a href={statusHref} target="_blank" rel="noopener noreferrer">
+            {messages.footer.status}
+          </a>
+        ) : (
+          <Link href={statusHref}>{messages.footer.status}</Link>
+        )}
       </nav>
     </footer>
   );

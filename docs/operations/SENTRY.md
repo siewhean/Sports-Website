@@ -44,16 +44,54 @@ API and worker read `SENTRY_DSN` through `env_file`; web receives both through `
 
 To disable: blank the variables and redeploy.
 
-## Alert rules (email)
+## Alert rules (email, web, and API)
 
-In Sentry: **Alerts > Create Alert > Issues**, per project.
+In Sentry: **Alerts > Create Alert**, configured for each project (`matchday-web`, `matchday-api`, `matchday-worker`):
 
-1. **New issue**: When "A new issue is created", filter `environment:production`, action "Send a notification to Member/Team" (email).
-2. **Spike**: Issue alert, When "Issue is seen more than 20 times in 1 hour" (tune the threshold), filter `environment:production`, action email. Alternatively a Metric alert on `count()` of errors with a critical threshold.
-3. Optionally an issue alert for tag `service:matchday-api` or `service:matchday-worker` with a lower threshold, since those include dead-lettered jobs.
+### Rule 1: Production New Error (Issue Alert)
 
-Check **Settings > Account > Notifications** so your email receives issue alerts. Free plan quotas are small; enable "spike protection" and set an inbound filter for noisy browser extensions.
+- **Name**: `Production New Issue Alert`
+- **When**: An event is captured and "A new issue is created" (`first_seen_event`).
+- **If**: The event's tags match `environment:production`.
+- **Then**: "Send a notification to Member/Team" (owner email / SMS / paging integration).
+- **Frequency**: Trigger on every new issue.
+
+### Rule 2: Production Error Spike (Metric Alert)
+
+- **Name**: `Production Error Spike Alert`
+- **Metric**: `count()` of errors
+- **Filter**: `event.type:error environment:production`
+- **Time Window**: 5 minutes
+- **Thresholds**:
+  - **Critical**: `> 20` events in 5 minutes
+  - **Warning**: `> 10` events in 5 minutes
+- **Actions**: Trigger immediate alert email / notification; send resolved notification when rate drops below warning threshold.
+
+### Rule 3: Dead-Lettered Worker Job & Unhandled Rejection (Issue Alert)
+
+- **Name**: `Critical Worker Dead-Letter & API Unhandled Rejection`
+- **When**: An issue is created or event occurs
+- **If**: `environment:production` AND (`tag[service]:matchday-worker` OR `tag[service]:matchday-api` OR `level:fatal`)
+- **Then**: Send immediate notification to owner/team.
+- **Frequency**: 1 event (immediate dispatch on any unhandled crash or job DLQ).
+
+### Inbound Filters & Quota Protection
+
+- Check **Settings > Projects > (project) > Inbound Filters**:
+  - Enable "Filter out errors known to be caused by browser extensions".
+  - Enable "Filter out events coming from localhost or local IP addresses".
+  - Enable "Spike Protection" under Project Settings.
+- Check **Settings > Account > Notifications** to ensure email notifications are enabled and verified.
 
 ## Verifying after setup
 
-Deploy to staging with a staging DSN/`APP_ENV=staging`, then trigger a test event from a Node REPL on the VM or temporarily throw in a non-production route. Confirm the event shows release = the deployed SHA, no cookies/headers/query strings, and no email addresses. Do not test against the production project.
+Deploy to staging with a staging DSN/`APP_ENV=staging`, then trigger a test event from a Node REPL on the VM or temporarily throw in a non-production route:
+
+```sh
+# Verify scrubbing & event capture on staging:
+curl -sS -X POST "https://staging.matchday.poladex.shop/api/monitoring" \
+  -H "content-type: application/x-sentry-envelope" \
+  --data-binary @tests/fixtures/test-sentry-envelope.bin
+```
+
+Confirm the event shows release = the deployed SHA, no cookies/headers/query strings, and no email addresses. Do not test against the production project.

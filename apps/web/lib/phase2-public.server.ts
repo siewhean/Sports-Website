@@ -33,7 +33,7 @@ import {
 } from "@/lib/phase2";
 
 function apiBaseUrl(): string | null {
-  const configured = (process.env.MATCHDAY_API_BASE_URL ?? process.env.RENDER_API_ORIGIN)?.trim();
+  const configured = (process.env.MATCHDAY_API_BASE_URL ?? process.env.API_ORIGIN)?.trim();
   if (!configured) return null;
   try {
     const url = new URL(configured);
