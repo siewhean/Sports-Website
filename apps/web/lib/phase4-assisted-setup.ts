@@ -55,6 +55,7 @@ export const phase4SetupCopy = {
   permission: "You do not have permission to edit this setup",
   quota: "AI setup allowance is unavailable",
   plan: "This action is not included in the current plan",
+  rulesSuggestion: "Rules-based suggestion",
 } as const;
 
 const stepIds = new Set<Phase4SetupStepId>(assistedSetupSteps.map((step) => step.id));

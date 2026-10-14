@@ -480,8 +480,12 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
     >`SELECT phase6_shared_ai_credits_remaining(${topUpOrgId}) as remaining`;
     expect(initialCredits[0]!.remaining).toBe(10);
 
-    // Consume all 10 purchased credits sequentially
-    for (let i = 1; i <= 10; i++) {
+    // R4.4 (migration 0074): one org-wide quota. The free monthly base (5) is spent first,
+    // then the 10 purchased credits, so 15 calls succeed before request N+1 is exhausted.
+    expect(
+      (await client<{ remaining: number }[]>`SELECT remaining FROM phase6_org_ai_quota(${topUpOrgId})`)[0]!.remaining,
+    ).toBe(15);
+    for (let i = 1; i <= 15; i++) {
       const res = await phase4Runtime.textToBrief(
         { accountId: memberAccountId },
         topUpOrgId,
@@ -506,13 +510,13 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
     >`SELECT phase6_shared_ai_credits_remaining(${topUpOrgId}) as remaining`;
     expect(postCredits[0]!.remaining).toBe(0);
 
-    // The 11th request MUST fail with quota_exhausted
+    // The 16th request MUST fail with quota_exhausted
     const overflowRes = await phase4Runtime.textToBrief(
       { accountId: memberAccountId },
       topUpOrgId,
       {
-        idempotency_key: `ai-topup-11-${randomUUID()}`,
-        text: "Tournament draft prompt number 11 overflow attempt",
+        idempotency_key: `ai-topup-16-${randomUUID()}`,
+        text: "Tournament draft prompt number 16 overflow attempt",
       },
       randomUUID(),
     );
@@ -568,9 +572,9 @@ describeInfrastructure("Phase 6 Commercial Operations Integration", () => {
     const successCount = results.filter((r) => r.status === "success").length;
     const quotaExhaustedCount = results.filter((r) => r.status === "quota_exhausted").length;
 
-    // Exactly 5 succeeded, exactly 7 failed with quota_exhausted
-    expect(successCount).toBe(5);
-    expect(quotaExhaustedCount).toBe(7);
+    // R4.4: free base (5) + 5 purchased credits = exactly 10 succeed org-wide, 2 exhausted.
+    expect(successCount).toBe(10);
+    expect(quotaExhaustedCount).toBe(2);
 
     // Exactly 5 consumptions recorded
     const consumptions = await client<

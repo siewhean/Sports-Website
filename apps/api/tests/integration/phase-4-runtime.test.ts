@@ -25,6 +25,7 @@ import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../../src/phase-3-runtime.js";
 import { ReliableGateBPhase4Runtime } from "../../src/phase-4-reliable-runtime.js";
 import { Phase4Runtime } from "../../src/phase-4-runtime.js";
+import { EntitlementRuntime } from "../../src/entitlement-runtime.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -51,6 +52,26 @@ function required<T>(rows: readonly T[]): T {
   const value = rows[0];
   if (!value) throw new Error("Expected database row");
   return value;
+}
+
+async function orgAiQuotaRemaining(orgId: string): Promise<number> {
+  return required(await client<{ remaining: number }[]>`SELECT remaining FROM phase6_org_ai_quota(${orgId})`).remaining;
+}
+
+/** Spend org-wide AI units with distinct stub briefs until exactly `target` remain. */
+async function consumeOrgAiQuotaUntil(orgId: string, actor: string, target: number, label = "Fill"): Promise<void> {
+  for (let n = 0; (await orgAiQuotaRemaining(orgId)) > target; n += 1) {
+    const result = await runtime.textToBrief(
+      { accountId: actor },
+      orgId,
+      {
+        idempotency_key: `ai-fill-${randomUUID()}`,
+        text: `Canoe polo called ${label} ${n} ${randomUUID().slice(0, 8)} with 8 teams, 1 division, 1 court at Arena A, 30 minute slots, minimum 2 matches, 2027-08-01 to 2027-08-02`,
+      },
+      randomUUID(),
+    );
+    if (result.status !== "success" || result.charged_units !== 1) throw new Error("Expected a charged stub brief");
+  }
 }
 
 beforeAll(async () => {
@@ -655,41 +676,116 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
     });
   });
 
-  it("persists quota exhaustion distinctly and replays it without charging", async () => {
-    await client`UPDATE ai_usage_allowances SET action_limit=used_units
-      WHERE organisation_id=${organisationId} AND actor_account_id=${accountId} AND action='text_to_brief'`;
-    const text = "Preserve this brief when quota is exhausted";
-    const idempotencyKey = `ai-quota-${randomUUID()}`;
-    const request = { idempotency_key: idempotencyKey, competition_id: competitionId, text };
-
-    const first = await runtime.textToBrief({ accountId }, organisationId, request, randomUUID());
-    const replay = await runtime.textToBrief({ accountId }, organisationId, request, randomUUID());
-
-    expect(first).toMatchObject({
-      status: "quota_exhausted",
-      reason: "quota_exhausted",
-      preserved_text: text,
-      charged_units: 0,
-    });
-    expect(replay).toMatchObject({
-      status: "quota_exhausted",
-      reason: "quota_exhausted",
-      preserved_text: text,
-      charged_units: 0,
-      idempotent_replay: true,
-    });
+  it("R4.1: repair recommendations return manual_fallback with 0 charge", async () => {
+    const divisionId = randomUUID();
+    const caseId = randomUUID();
+    await client`INSERT INTO divisions(id,competition_id,name,team_limit) VALUES(${divisionId},${competitionId},'Repair Division',8)`;
+    // Fixture only: a bare result repair case row. Building a real score-correction chain is
+    // out of scope here, so drop its FKs in this throwaway test schema (owner may; no superuser).
+    await client.unsafe(`DO $$ DECLARE c record; BEGIN
+      FOR c IN SELECT conname FROM pg_constraint WHERE conrelid='result_repair_cases'::regclass AND contype='f'
+        AND conname NOT LIKE '%competition_id_fkey' LOOP
+        EXECUTE format('ALTER TABLE result_repair_cases DROP CONSTRAINT %I', c.conname);
+      END LOOP; END $$`);
+    await client`INSERT INTO result_repair_cases(id,competition_id,division_id,corrected_match_id,correction_transaction_id,source_result_version,created_by_account_id)
+      VALUES(${caseId},${competitionId},${divisionId},${randomUUID()},${randomUUID()},1,${accountId})`;
+    const remainingBefore = await orgAiQuotaRemaining(organisationId);
+    const idempotencyKey = `ai-repair-${randomUUID()}`;
+    const result = await runtime.repairRecommendations(
+      { accountId },
+      organisationId,
+      competitionId,
+      caseId,
+      {
+        idempotency_key: idempotencyKey,
+        text: "Court 2 is closed after lunch",
+      },
+      randomUUID(),
+    );
+    expect(result).toMatchObject({ status: "manual_fallback", reason: "provider_unavailable", charged_units: 0 });
     expect(
       required(
-        await client<{ outcome: string; charged_units: number; failure_code: string | null }[]>`
-          SELECT outcome,charged_units,failure_code FROM ai_action_ledger
+        await client<{ outcome: string; charged_units: number }[]>`
+          SELECT outcome,charged_units FROM ai_action_ledger
           WHERE organisation_id=${organisationId} AND idempotency_key=${idempotencyKey}`,
       ),
-    ).toMatchObject({ outcome: "manual_fallback", charged_units: 0, failure_code: "quota_exhausted" });
+    ).toEqual({ outcome: "manual_fallback", charged_units: 0 });
+    expect(await orgAiQuotaRemaining(organisationId)).toBe(remainingBefore);
+  });
+
+  it("R4.4: one org-wide quota across two actors drives pre-check, charge and display; stub brief charged once", async () => {
+    const actorB = required(
+      await client<{ id: string }[]>`INSERT INTO accounts(primary_email,display_name,email_verified_at)
+        VALUES(${`organiser-${randomUUID()}@phase4.test`},'Organiser B',now()) RETURNING id`,
+    ).id;
+    const quotaOrg = randomUUID();
+    await client.begin(async (tx) => {
+      await tx`INSERT INTO organisations(id,name,slug) VALUES(${quotaOrg},'Quota Org',${`quota-org-${quotaOrg.slice(0, 8)}`})`;
+      await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status) VALUES
+        (${quotaOrg},${accountId},'owner','active'),(${quotaOrg},${actorB},'organiser','active')`;
+    });
+    const entitlements = new EntitlementRuntime(client as unknown as PostgresJsSql);
+    expect((await entitlements.getBillingSummary(quotaOrg)).ai_quota).toMatchObject({
+      limit: 5,
+      used: 0,
+      remaining: 5,
+    });
+
+    // Stub-mode competition brief is charged exactly once; an idempotent replay does not re-charge.
+    const briefKey = `ai-once-${randomUUID()}`;
+    const briefRequest = {
+      idempotency_key: briefKey,
+      text: "Canoe polo called Charge Once with 8 teams, 1 division, 1 court at Arena A, 30 minute slots, minimum 2 matches, 2027-08-01 to 2027-08-02",
+    };
+    const charged = await runtime.textToBrief({ accountId }, quotaOrg, briefRequest, randomUUID());
+    expect(charged).toMatchObject({ status: "success", charged_units: 1 });
+    const replayed = await runtime.textToBrief({ accountId }, quotaOrg, briefRequest, randomUUID());
+    expect(replayed).toMatchObject({ status: "success", charged_units: 0, idempotent_replay: true });
+    expect(
+      await client`SELECT id FROM ai_action_ledger WHERE organisation_id=${quotaOrg} AND idempotency_key=${briefKey} AND charged_units>0`,
+    ).toHaveLength(1);
+    expect(await orgAiQuotaRemaining(quotaOrg)).toBe(4);
+
+    // Actor A spends two more, actor B spends the last two: 5 org-wide in total.
+    for (const [actor, count] of [
+      [accountId, 2],
+      [actorB, 2],
+    ] as const) {
+      const target = (await orgAiQuotaRemaining(quotaOrg)) - count;
+      await consumeOrgAiQuotaUntil(quotaOrg, actor, target, `Two actor ${count}`);
+    }
+    const summary = await entitlements.getBillingSummary(quotaOrg);
+    expect(summary.ai_quota).toMatchObject({ limit: 5, used: 5, remaining: 0 });
+    expect(await runtime.readAiUsage({ accountId: actorB }, quotaOrg)).toMatchObject({
+      limit: 5,
+      used: 5,
+      remaining: 0,
+    });
+
+    // Actor B still has per-actor allowance history, but the org quota decides: next charged call is exhausted.
+    const blocked = await runtime.textToBrief(
+      { accountId: actorB },
+      quotaOrg,
+      {
+        idempotency_key: `ai-blocked-${randomUUID()}`,
+        text: "Canoe polo called Blocked with 8 teams, 1 division, 1 court at Arena A, 30 minute slots, minimum 2 matches, 2027-08-01 to 2027-08-02",
+      },
+      randomUUID(),
+    );
+    expect(blocked).toMatchObject({ status: "quota_exhausted", reason: "quota_exhausted", charged_units: 0 });
+    expect(
+      await client<{ actor_account_id: string; used_units: number }[]>`
+        SELECT actor_account_id,sum(used_units)::int used_units FROM ai_usage_allowances
+        WHERE organisation_id=${quotaOrg} GROUP BY actor_account_id ORDER BY used_units DESC`,
+    ).toEqual([
+      { actor_account_id: accountId, used_units: 3 },
+      { actor_account_id: actorB, used_units: 2 },
+    ]);
   });
 
   it("records a quota race distinctly when concurrent valid provider results compete for one unit", async () => {
-    await client`UPDATE ai_usage_allowances SET action_limit=used_units+1
-      WHERE organisation_id=${organisationId} AND actor_account_id=${accountId} AND action='text_to_brief'`;
+    // R4.4: the race is for the last organisation-wide unit (phase6_org_ai_quota).
+    await consumeOrgAiQuotaUntil(organisationId, accountId, 1, "Race fill");
     const before = required(
       await client<{ used_units: number }[]>`SELECT used_units FROM ai_usage_allowances
         WHERE organisation_id=${organisationId} AND actor_account_id=${accountId} AND action='text_to_brief'`,
@@ -743,6 +839,37 @@ describeInfrastructure("Phase 4 PostgreSQL and provider-stub runtime", () => {
           WHERE organisation_id=${organisationId} AND actor_account_id=${accountId} AND action='text_to_brief'`,
       ).used_units,
     ).toBe(before + 1);
+  });
+
+  it("persists quota exhaustion distinctly and replays it without charging", async () => {
+    await consumeOrgAiQuotaUntil(organisationId, accountId, 0, "Exhaust fill");
+    const text = "Preserve this brief when quota is exhausted";
+    const idempotencyKey = `ai-quota-${randomUUID()}`;
+    const request = { idempotency_key: idempotencyKey, competition_id: competitionId, text };
+
+    const first = await runtime.textToBrief({ accountId }, organisationId, request, randomUUID());
+    const replay = await runtime.textToBrief({ accountId }, organisationId, request, randomUUID());
+
+    expect(first).toMatchObject({
+      status: "quota_exhausted",
+      reason: "quota_exhausted",
+      preserved_text: text,
+      charged_units: 0,
+    });
+    expect(replay).toMatchObject({
+      status: "quota_exhausted",
+      reason: "quota_exhausted",
+      preserved_text: text,
+      charged_units: 0,
+      idempotent_replay: true,
+    });
+    expect(
+      required(
+        await client<{ outcome: string; charged_units: number; failure_code: string | null }[]>`
+          SELECT outcome,charged_units,failure_code FROM ai_action_ledger
+          WHERE organisation_id=${organisationId} AND idempotency_key=${idempotencyKey}`,
+      ),
+    ).toMatchObject({ outcome: "manual_fallback", charged_units: 0, failure_code: "quota_exhausted" });
   });
 
   it("carries one setup and format lineage through the real worker, revisions, publication and stale fence", async () => {

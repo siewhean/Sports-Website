@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DeterministicPhase4AiStub } from "../../src/phase-4-ai-provider.js";
 
-describe("Phase 4 AI Workflows (AI-007, AI-008, AI-009)", () => {
+describe("R4.1 honest AI baseline: stub provider scope and provenance (AI-007..009 retired to manual_fallback)", () => {
   const stub = new DeterministicPhase4AiStub();
 
   it("R4.1: stub does not implement modifyFormat, preventing canned format changes", () => {

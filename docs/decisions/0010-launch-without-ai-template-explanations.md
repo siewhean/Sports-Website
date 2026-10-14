@@ -35,7 +35,20 @@ The three canned mock methods (`modifyFormat`, `suggestSchedulePreferences`, and
 - If an API client calls `/ai/format-modify`, `/ai/schedule-preferences`, or `/repairs/:caseId/ai-recommendations`, the runtime marks `failureCode = "provider_unavailable"`.
 - The ledger finalizes with `outcome = "manual_fallback"`, and `charged_units = 0`.
 - The API returns `status: "manual_fallback"`, `reason: "provider_unavailable"`, `charged_units: 0`, and preserves the organiser's input text in `preserved_text`.
-- **Zero credits are ever charged for stub or disabled features.**
+
+**What is true about charging after this ADR:**
+
+- **In production the AI provider is disabled** (`PHASE4_AI_PROVIDER=disabled`). With no provider, every AI action ends in `manual_fallback` and charges nothing.
+- **Disabled and unimplemented features never charge.** Only a validated `success` with a cache miss can charge a unit.
+- **The competition brief (`/ai/competition-brief`) remains a local/test stub.** In stub mode (`PHASE4_AI_PROVIDER=stub`, local development, tests and the simulation harness only) a valid brief may charge one unit, exactly once per idempotency key; replays and cache hits charge zero.
+
+### 2a. No AI Top-Ups
+
+AI top-ups are no longer sold. `POST …/billing/checkout` with `purchaseType: "ai_top_up"` (or a plan checkout with `topUpUnits > 0`) is rejected with **`409 AI_TOP_UP_UNAVAILABLE`** before Stripe is contacted. This is unconditional rather than tied to the AI mode, because even in stub mode there is nothing real to buy. Webhook fulfilment and revocation of historical `ai_top_up` sessions are kept so old Stripe events still replay idempotently.
+
+### 2b. Usage Endpoint Removed, One Org-Wide Quota
+
+The unused `GET /api/v1/organisations/:organisationId/ai/usage` endpoint is removed. AI quota is organisation-wide and computed in one place, `phase6_org_ai_quota()` (migration 0074). The same function drives the pre-check before an AI action, the finalize charge, the billing summary `ai_quota`, and the `usage` field in AI responses. Per-actor `ai_usage_allowances` rows are kept as an audit ledger only.
 
 ### 3. Transparently Label Format Suggestions as Rules-Based
 

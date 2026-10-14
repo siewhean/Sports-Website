@@ -26,10 +26,16 @@ describe("Phase 6 shared AI credit invariants", () => {
     expect(migration).not.toContain("RAISE EXCEPTION 'AI action quota exhausted'");
   });
 
-  it("includes durable shared-credit consumption in the billing summary", () => {
+  it("uses one org-wide quota function for pre-check, finalize charge and display (R4.4, 0074)", () => {
+    const quota = read("packages/database/migrations/0074_r4_org_wide_ai_quota.sql");
+    expect(quota).toContain("CREATE OR REPLACE FUNCTION phase6_org_ai_quota");
+    expect(quota).toContain("FROM phase6_org_ai_quota(ledger.organisation_id)");
+    // The per-actor allowance is audit-only: it no longer gates the charge.
+    expect(quota).not.toContain("allowance.used_units<base_limit");
     const runtime = read("apps/api/src/entitlement-runtime.ts");
-    expect(runtime).toContain("FROM ai_credit_consumptions c");
-    expect(runtime).toContain("topUpRemaining");
-    expect(runtime).toContain("baseRemaining + topUpRemaining");
+    expect(runtime).toContain("FROM phase6_org_ai_quota($1)");
+    const ai = read("apps/api/src/phase-4-runtime.ts");
+    expect(ai).toContain("FROM phase6_org_ai_quota($1)");
+    expect(ai).not.toContain("allowance.used_units < allowance.action_limit");
   });
 });

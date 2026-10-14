@@ -33,6 +33,7 @@ import {
   type ScheduleEnqueuePort,
 } from "@matchday/scheduler";
 import { buildApp } from "../src/app.js";
+import { EntitlementRuntime } from "../src/entitlement-runtime.js";
 import { DeterministicPhase4AiStub } from "../src/phase-4-ai-provider.js";
 import { phase2DomainAdapter } from "../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../src/phase-2-runtime.js";
@@ -1935,20 +1936,19 @@ async function runScenario9(ctx: SimContext): Promise<void> {
     throw new Error("Expected rules-based format recommendations in setup document");
   }
 
-  // 4. Read initial AI usage & quota boundaries via API
-  const usageBeforeRes = await ctx.request({
-    method: "GET",
-    url: `/api/v1/organisations/${ctx.organisationId}/ai/usage`,
-    expectedStatuses: [200],
-  });
-  const usageBefore = usageBeforeRes.json<{
-    organisation_id: string;
-    actions: Array<{ action: string; used_units: number; remaining_units: number }>;
-  }>();
-  if (usageBefore.organisation_id !== ctx.organisationId) {
-    throw new Error("AI usage organisation ID mismatch");
-  }
-  const initialUsed = usageBefore.actions.find((a) => a.action === "text_to_brief")?.used_units ?? 0;
+  // 4. Read initial org-wide AI quota via the billing summary (GET .../ai/usage was removed, ADR 0010)
+  type Quota = { limit: number; used: number; remaining: number };
+  const readQuota = async (): Promise<Quota> => {
+    const res = await ctx.request({
+      method: "GET",
+      url: `/api/v1/organisations/${ctx.organisationId}/billing/current`,
+      expectedStatuses: [200],
+    });
+    const summary = res.json<{ organisation_id: string; ai_quota: Quota }>();
+    if (summary.organisation_id !== ctx.organisationId) throw new Error("Billing summary organisation ID mismatch");
+    return summary.ai_quota;
+  };
+  const quotaBefore = await readQuota();
 
   // 5. Call AI competition-brief via API (exercises quota check, ledger, and fallback boundaries)
   const briefRes = await ctx.request({
@@ -1965,28 +1965,40 @@ async function runScenario9(ctx: SimContext): Promise<void> {
     status: string;
     brief?: { name?: string };
     charged_units?: number;
+    usage?: Quota;
   }>();
   if (!brief || !brief.status) throw new Error("AI competition brief returned empty response");
 
-  // 6. Verify AI usage incremented after brief
-  const usageAfterRes = await ctx.request({
-    method: "GET",
-    url: `/api/v1/organisations/${ctx.organisationId}/ai/usage`,
-    expectedStatuses: [200],
-  });
-  const usageAfter = usageAfterRes.json<{
-    actions: Array<{ action: string; used_units: number; remaining_units: number }>;
-  }>();
-  const afterUsed = usageAfter.actions.find((a) => a.action === "text_to_brief")?.used_units ?? 0;
-  if (afterUsed <= initialUsed) {
-    throw new Error(`Expected AI usage used_units to increment: was ${initialUsed}, now ${afterUsed}`);
+  // 6. Verify the org-wide quota moved by exactly the charged units, in both the
+  // AI response usage field and the billing summary (one calculation, R4.4).
+  const charged = brief.charged_units ?? 0;
+  if (charged !== 1) throw new Error(`Expected stub-mode brief to charge 1 unit, got ${charged}`);
+  const quotaAfter = await readQuota();
+  if (quotaAfter.used !== quotaBefore.used + charged || quotaAfter.remaining !== quotaBefore.remaining - charged) {
+    throw new Error(`Expected ai_quota to move by ${charged}: ${JSON.stringify({ quotaBefore, quotaAfter })}`);
+  }
+  if (!brief.usage || brief.usage.remaining !== quotaAfter.remaining || brief.usage.used !== quotaAfter.used) {
+    throw new Error(
+      `AI response usage disagrees with billing ai_quota: ${JSON.stringify({ usage: brief.usage, quotaAfter })}`,
+    );
   }
 
-  // 7. Test quota exhaustion: simulate allowance exhaustion in database, then verify API handles it gracefully
-  await ctx.sql`
-    UPDATE ai_usage_allowances
-    SET used_units = action_limit
-    WHERE organisation_id = ${ctx.organisationId} AND action = 'text_to_brief'`;
+  // 7. Quota exhaustion: drop to the free base (5/month) and spend the remainder org-wide,
+  // then verify the next call is a graceful quota_exhausted (restored to Pro afterwards).
+  await ctx.sql`UPDATE organisation_subscriptions SET tier='free' WHERE organisation_id=${ctx.organisationId}`;
+  for (let n = 0; (await readQuota()).remaining > 0; n += 1) {
+    if (n > 10) throw new Error("ai_quota did not reach 0 on the free base");
+    await ctx.request({
+      method: "POST",
+      url: `/api/v1/organisations/${ctx.organisationId}/ai/competition-brief`,
+      payload: {
+        idempotency_key: randomUUID(),
+        text: `Basketball tournament ${n} ${randomUUID().slice(0, 8)} for 8 teams over 2 days with 2 pools`,
+        competition_id: comp.id,
+      },
+      expectedStatuses: [200],
+    });
+  }
 
   const exhaustRes = await ctx.request({
     method: "POST",
@@ -1998,6 +2010,7 @@ async function runScenario9(ctx: SimContext): Promise<void> {
     },
     expectedStatuses: [200],
   });
+  await ctx.sql`UPDATE organisation_subscriptions SET tier='organiser_pro' WHERE organisation_id=${ctx.organisationId}`;
   const exhausted = exhaustRes.json<{ status: string; reason?: string }>();
   if (exhausted.status !== "quota_exhausted" && exhausted.reason !== "quota_exhausted") {
     throw new Error(`Expected quota_exhausted status or reason, got ${JSON.stringify(exhausted)}`);
@@ -2115,6 +2128,8 @@ async function main() {
     gateCC4Operations: phase4.gateCC4Operations,
     gateCC4Lifecycle: phase4.gateCC4Lifecycle,
     gateCC4PublicTruthRuntime: phase4.gateCC4PublicTruth,
+    // Billing summary is where scenario 9 reads the org-wide ai_quota (ai/usage was removed).
+    entitlementRuntime: new EntitlementRuntime(sql as unknown as PostgresJsSql),
     identityRuntime: {
       authenticate: async () => ({
         account: {

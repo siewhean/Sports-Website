@@ -21,7 +21,7 @@ import {
 import { ExportRuntime } from "../../src/export-runtime.js";
 import type { IdentityApiRuntime } from "../../src/identity-runtime.js";
 import { constantTimeEquals, requireMutationSession } from "../../src/mutation-guard.js";
-import { HttpStripeCheckoutClient, MAX_CHECKOUT_TOP_UP_UNITS } from "../../src/stripe-checkout-client.js";
+import { HttpStripeCheckoutClient } from "../../src/stripe-checkout-client.js";
 import { healthyProbes, testConfig } from "../helpers.js";
 
 const ORIGIN = "https://app.matchday.example";
@@ -174,40 +174,24 @@ describe("Checkout redirect and unit validation", () => {
     expect(() => assertCheckoutRedirectUrl(`${ORIGIN}/ok`, [])).toThrow(/not allowed/);
   });
 
-  it("caps top-up units and passes an idempotency key to Stripe", async () => {
+  it("rejects AI top-up checkout (ADR 0010) before any Stripe call, including plan bundles", async () => {
     const { sql } = recordingSql((query) => (query.includes("organisation_memberships") ? [{ ok: 1 }] : []));
-    const createTopUpSession = vi.fn(async (params: { topUpUnits: number; idempotencyKey?: string | undefined }) => ({
-      sessionId: "cs",
-      checkoutUrl: "https://checkout.stripe.com/c/pay/cs",
-      organisationId: "org-1",
-      topUpUnits: params.topUpUnits,
-      amountTotal: 500,
-      currency: "usd",
-      expiresAt: new Date().toISOString(),
-      successUrl: `${ORIGIN}/s`,
-      cancelUrl: `${ORIGIN}/c`,
-    }));
+    const createSession = vi.fn();
+    const createTopUpSession = vi.fn();
     const runtime = new EntitlementRuntime(
       sql,
-      { createSession: vi.fn(), createTopUpSession },
+      { createSession, createTopUpSession },
       { checkoutRedirectOrigins: [ORIGIN] },
     );
-    const input = { purchaseType: "ai_top_up" as const, successUrl: `${ORIGIN}/s`, cancelUrl: `${ORIGIN}/c` };
+    const urls = { successUrl: `${ORIGIN}/s`, cancelUrl: `${ORIGIN}/c` };
     await expect(
-      runtime.createCheckoutSession({ accountId: "a" }, "org-1", {
-        ...input,
-        topUpUnits: MAX_CHECKOUT_TOP_UP_UNITS + 1,
-      }),
-    ).rejects.toMatchObject({ statusCode: 422 });
+      runtime.createCheckoutSession({ accountId: "a" }, "org-1", { purchaseType: "ai_top_up", topUpUnits: 2, ...urls }),
+    ).rejects.toMatchObject({ statusCode: 409, code: "AI_TOP_UP_UNAVAILABLE" });
     await expect(
-      runtime.createCheckoutSession({ accountId: "a" }, "org-1", {
-        ...input,
-        topUpUnits: 2,
-        successUrl: "https://evil.example/s",
-      }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "REDIRECT_URI_REJECTED" });
-    await runtime.createCheckoutSession({ accountId: "a" }, "org-1", { ...input, topUpUnits: 2 });
-    expect(createTopUpSession.mock.calls[0]![0].idempotencyKey).toMatch(/^matchday-checkout-[0-9a-f]{64}$/);
+      runtime.createCheckoutSession({ accountId: "a" }, "org-1", { tier: "organiser_pro", topUpUnits: 2, ...urls }),
+    ).rejects.toMatchObject({ statusCode: 409, code: "AI_TOP_UP_UNAVAILABLE" });
+    expect(createTopUpSession).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
   });
 });
 

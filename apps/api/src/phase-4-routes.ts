@@ -737,11 +737,6 @@ export async function registerPhase4Routes(
         ),
   );
 
-  app.get<{ Params: { organisationId: string } }>(
-    "/api/v1/organisations/:organisationId/ai/usage",
-    { schema: { ...read, params: strict({ organisationId: Id }), tags: ["phase4-ai"] } },
-    async (request) => options.runtime.readAiUsage(await readActor(request), request.params.organisationId),
-  );
   const AiBriefBody = strict({
     idempotency_key: IdempotencyKey,
     text: Type.String({ minLength: 1, maxLength: 10_000 }),

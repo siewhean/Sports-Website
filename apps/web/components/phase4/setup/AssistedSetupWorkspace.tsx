@@ -802,7 +802,7 @@ function RecommendationStep({
           <article key={item.id} data-selected={selected} data-shortfall={shortfall}>
             <header>
               <span>
-                {opaqueId("Rules-based suggestion")} · {item.capacity_status.replaceAll("_", " ")}
+                {phase4SetupCopy.rulesSuggestion} · {item.capacity_status.replaceAll("_", " ")}
               </span>
               <h2>{item.name}</h2>
               <p>{item.structure}</p>
