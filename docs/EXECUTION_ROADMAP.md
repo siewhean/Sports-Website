@@ -353,7 +353,7 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 - [ ] A deliberate API stop triggers an alert within 5 minutes.
 - [ ] A skipped backup triggers a heartbeat alert.
 - [ ] A test error reaches Sentry and alerts.
-- [ ] Open-PR list contains only active work.
+- [x] Open-PR list contains only active work. (Evidence: `docs/qa/track-r5.md`.)
 - [ ] Backup key stored offline (owner confirms).
 
 ---
