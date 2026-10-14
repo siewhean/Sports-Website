@@ -1574,7 +1574,8 @@ async function runScenario7(ctx: SimContext): Promise<void> {
           slot_minutes: 60,
           availability: [
             { date: "2027-04-01", start_time: "08:00", end_time: "20:00" },
-            { date: "2027-04-02", start_time: "08:00", end_time: "20:00" },
+            // Extended on day 2 so the R2.2 delay below has room after the final.
+            { date: "2027-04-02", start_time: "08:00", end_time: "22:00" },
           ],
         },
         {
@@ -1681,8 +1682,9 @@ async function runScenario7(ctx: SimContext): Promise<void> {
     `\n    [s7] displaced=${initialCourt2Matches.length} court-changed=${courtChanged.length} time-shifted-on-court-1=${timeOnlyMoves}`,
   );
 
-  // R2.2: running late. Push the final Court 1 match back with the schedule delay tool,
-  // publish the delayed revision, and assert the public projection reflects the shift.
+  // R2.2: running late. Push the final Court 1 match back one slot with the schedule delay tool,
+  // publish the delayed revision, and assert the public projection reflects the shift. Court 1
+  // stays open until 22:00 on day 2 (set with the closure above) so a one-slot delay can fit.
   const latest = (
     await ctx.sql<{ published_schedule_revision_id: string; revision: number }[]>`
       SELECT cp.published_schedule_revision_id, sr.revision
@@ -1701,7 +1703,7 @@ async function runScenario7(ctx: SimContext): Promise<void> {
       expected_revision: latest.revision,
       playing_area_id: court1.id,
       from_epoch_ms: Date.parse(lastOnCourt1.starts_at!),
-      delay_minutes: 15,
+      delay_minutes: 60,
     },
     expectedStatuses: [201],
   });
@@ -1720,8 +1722,10 @@ async function runScenario7(ctx: SimContext): Promise<void> {
     })
   ).json<{ schedule: SchedMatch[] }>();
   const shifted = afterDelay.schedule.find((s) => getMatchId(s) === getMatchId(lastOnCourt1));
-  if (!shifted || Date.parse(shifted.starts_at!) - Date.parse(lastOnCourt1.starts_at!) !== 15 * 60_000) {
-    throw new Error(`Delayed match ${getMatchId(lastOnCourt1)} was not pushed back 15 minutes in the public schedule`);
+  if (!shifted || Date.parse(shifted.starts_at!) - Date.parse(lastOnCourt1.starts_at!) !== 60 * 60_000) {
+    throw new Error(
+      `Delayed match ${getMatchId(lastOnCourt1)} was not pushed back 60 minutes (one slot) in the public schedule`,
+    );
   }
   if (afterDelay.schedule.some((s) => getAreaId(s) === court2.id)) {
     throw new Error("Delay re-introduced matches on closed Court 2");
