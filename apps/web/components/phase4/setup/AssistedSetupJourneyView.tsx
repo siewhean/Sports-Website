@@ -787,7 +787,7 @@ function PreferencesStep({
   );
 }
 
-function RecommendationStep({
+export function RecommendationStep({
   setup,
   disabled,
   onSelect,
@@ -848,6 +848,15 @@ function RecommendationStep({
               </div>
             </dl>
             <p>{item.advantage}</p>
+            {item.match_count > item.available_match_slots ? (
+              // ADR 0008 §3: an over-capacity format is shown, never hidden, with the numbers.
+              <p data-capacity-badge="requires-more-slots" role="note">
+                {t("prototype.59faad5f0b7f", {
+                  required: item.match_count,
+                  available: item.available_match_slots,
+                })}
+              </p>
+            ) : null}
             {item.warning_codes.length ? (
               <ul>
                 {item.warning_codes.map((warning) => (

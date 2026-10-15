@@ -22,7 +22,7 @@ However, the V1 production audit (`docs/V1_RECOVERY_AUDIT.md`) revealed that dis
 ### 2. Printable Fallback Contingency
 
 - For venues with complete network loss, the officially supported and certified contingency is the **printable paper fallback workflow**:
-  1. Organisers print authoritative blank score-sheets and master schedule sheets directly from Matchday prior to tournament start (`/export/scoresheet`, `/export/schedule`).
+  1. Organisers print authoritative blank score-sheets and master schedule sheets directly from Matchday prior to tournament start (`GET /api/v1/competitions/:competitionId/exports/matches/:matchId/score-sheet` per match, `GET /api/v1/competitions/:competitionId/exports/schedule` for the master schedule; both in `apps/api/src/gate-c-c4-routes.ts`).
   2. Table officials record points, fouls, and match completion on physical paper sheets.
   3. Organisers record verified final match results and scores via the organiser workspace once connectivity is restored.
   4. The platform atomically finalises matches, advances brackets, recalculates standings, and pushes public projections.

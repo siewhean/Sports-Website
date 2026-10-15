@@ -414,8 +414,68 @@ async function generateAndPublishScheduleViaJob(
     },
     expectedStatuses: [200],
   });
+  await assertPublishedScheduleHasNoOverlaps(ctx, competitionId, `Published revision ${result.revision}`);
 
   return result;
+}
+
+/** Published schedules checked for overlaps in this run (reported in the summary). */
+const overlapAudit = { publications: 0, matches: 0 };
+
+/**
+ * CP3 hard-validity audit of the competition's currently published schedule, read from the
+ * database rather than the solver's own report: no playing area, team (resolved home/away entry)
+ * or assigned official is in two matches at once.
+ */
+async function assertPublishedScheduleHasNoOverlaps(ctx: SimContext, competitionId: string, where: string) {
+  const rows = await ctx.sql<
+    {
+      match_id: string;
+      playing_area_id: string;
+      starts_at: Date;
+      ends_at: Date;
+      home_entry_id: string | null;
+      away_entry_id: string | null;
+      official_ids: string[];
+    }[]
+  >`
+    SELECT sm.match_id, sm.playing_area_id, sm.starts_at, sm.ends_at, m.home_entry_id, m.away_entry_id,
+           COALESCE(array_agg(moa.official_id::text) FILTER (WHERE moa.official_id IS NOT NULL), '{}') AS official_ids
+    FROM competition_publications cp
+    JOIN scheduled_matches sm ON sm.schedule_revision_id = cp.published_schedule_revision_id
+    JOIN matches m ON m.id = sm.match_id
+    LEFT JOIN match_official_assignments moa ON moa.match_id = sm.match_id
+    WHERE cp.competition_id = ${competitionId}
+    GROUP BY sm.match_id, sm.playing_area_id, sm.starts_at, sm.ends_at, m.home_entry_id, m.away_entry_id`;
+  if (rows.length === 0) throw new Error(`${where}: no published schedule to audit`);
+  const resources = new Map<string, Array<{ start: number; end: number; matchId: string }>>();
+  const add = (key: string, row: (typeof rows)[number]) => {
+    const list = resources.get(key) ?? [];
+    list.push({
+      start: new Date(row.starts_at).getTime(),
+      end: new Date(row.ends_at).getTime(),
+      matchId: row.match_id,
+    });
+    resources.set(key, list);
+  };
+  for (const row of rows) {
+    add(`court ${row.playing_area_id}`, row);
+    for (const team of new Set([row.home_entry_id, row.away_entry_id].filter((id): id is string => id !== null)))
+      add(`team ${team}`, row);
+    for (const official of new Set(row.official_ids)) add(`official ${official}`, row);
+  }
+  for (const [resource, list] of resources) {
+    list.sort((a, b) => a.start - b.start);
+    for (let i = 1; i < list.length; i++) {
+      if (list[i]!.start < list[i - 1]!.end) {
+        throw new Error(
+          `${where}: ${resource} is in overlapping matches ${list[i - 1]!.matchId} and ${list[i]!.matchId}`,
+        );
+      }
+    }
+  }
+  overlapAudit.publications += 1;
+  overlapAudit.matches += rows.length;
 }
 
 /** Pure API helper to create format revision, publish format, and generate/publish schedule */
@@ -957,18 +1017,21 @@ async function runScenario3(ctx: SimContext): Promise<void> {
   });
 
   const matches = await ctx.sql<{ id: string }[]>`
-    SELECT id FROM matches WHERE format_revision_id=${formatId} ORDER BY ordinal LIMIT 2`;
-  if (matches.length < 2) throw new Error("Expected at least 2 matches for Scenario 3");
+    SELECT id FROM matches WHERE format_revision_id=${formatId} ORDER BY ordinal LIMIT 3`;
+  if (matches.length < 3) throw new Error("Expected at least 3 matches for Scenario 3");
 
-  // 3. Assign Alex to match 1
-  await ctx.request({
-    method: "PUT",
-    url: `/api/v1/competitions/${comp.id}/matches/${matches[0]!.id}/officials`,
-    payload: {
-      assignments: [{ official_id: alex.id, assigned_role: "referee" }],
-    },
-    expectedStatuses: [200],
-  });
+  // 3. Assign Alex to matches 1 and 3, so the published schedule must keep them apart (the
+  // official-overlap audit after publication would otherwise fail).
+  for (const match of [matches[0]!, matches[2]!]) {
+    await ctx.request({
+      method: "PUT",
+      url: `/api/v1/competitions/${comp.id}/matches/${match.id}/officials`,
+      payload: {
+        assignments: [{ official_id: alex.id, assigned_role: "referee" }],
+      },
+      expectedStatuses: [200],
+    });
+  }
 
   // 4. Query official workspace via API
   const wsRes = await ctx.request({
@@ -1287,6 +1350,7 @@ async function runScenario5(ctx: SimContext): Promise<void> {
     payload: { idempotency_key: randomUUID(), expected_revision: moved.revision },
     expectedStatuses: [200],
   });
+  await assertPublishedScheduleHasNoOverlaps(ctx, comp.id, "Scenario 5 manual move publication");
 }
 
 // ---------------------------------------------------------------------------
@@ -1608,23 +1672,11 @@ async function runScenario7(ctx: SimContext): Promise<void> {
     );
   }
 
-  // Re-plan schedule with updated capacity via canonical Phase 4 solver job flow.
-  // Default constraints ignore the prior schedule, and the solver then reshuffles undisplaced
-  // matches too (observed: 16 moved for 10 displaced). The organiser-facing way to request
-  // minimal change is preserve_existing_schedule, so the re-plan pins every still-valid Court 1
-  // placement as required and leaves the displaced Court 2 matches free.
+  // Re-plan with the workspace's own constraints, exactly as an organiser regenerates. The server
+  // loads the latest revision as the preserve-existing baseline (PR #100), so the client sends no
+  // per-match pins: minimal change has to come from the product, not from this harness.
   const generation = (ws as unknown as { generation: { constraints: Record<string, unknown> } }).generation;
-  const preserveByMatch = Object.fromEntries(
-    initialCourt1Matches.map((m) => [getMatchId(m), { area_id: court1.id, start_epoch_ms: Date.parse(m.starts_at!) }]),
-  );
-  await generateAndPublishScheduleViaJob(ctx, comp.id, {
-    ...generation.constraints,
-    preserve_existing_schedule: {
-      mode: "preferred",
-      weight: 100,
-      value: { maximum_shift_minutes: 0, by_match_id: preserveByMatch },
-    },
-  });
+  await generateAndPublishScheduleViaJob(ctx, comp.id, generation.constraints);
 
   // Verify public projection no longer schedules matches on Court 2,
   // and Court 2 matches moved to Court 1
@@ -1658,12 +1710,11 @@ async function runScenario7(ctx: SimContext): Promise<void> {
     }
   }
 
-  // Minimal disruption: "moved == displaced" is NOT guaranteed by the product. Measured over
-  // repeated runs, even with preserve_existing_schedule preferred (weight 100) the solver moves
-  // 4-7 undisplaced Court 1 matches, sometimes earlier; with it required the job returns
-  // no_solution, because Court 1 is already full before the knockout rounds. The strongest
-  // property that holds, and is asserted, is conservation: nothing is dropped or duplicated,
-  // exactly the displaced matches change court, and every undisplaced match keeps its court.
+  // Minimal disruption. Nothing is dropped or duplicated, exactly the displaced (Court 2) matches
+  // change court, and every other match keeps its court AND start time unless keeping it is
+  // impossible: a knockout match whose prerequisite group matches were displaced to later than its
+  // old start cannot stay (precedence is a hard rule). Measured over repeated runs, that forced
+  // dependant shift is the only movement left; every unforced match stays exactly in place.
   const before = new Map(initialPub.schedule.map((s) => [getMatchId(s), s]));
   const ids = pub.schedule.map(getMatchId);
   if (new Set(ids).size !== ids.length || ids.length !== before.size || ids.some((id) => !before.has(id))) {
@@ -1675,12 +1726,33 @@ async function runScenario7(ctx: SimContext): Promise<void> {
       `Re-plan changed court for ${courtChanged.length} match(es) but ${initialCourt2Matches.length} were displaced`,
     );
   }
-  const timeOnlyMoves = pub.schedule.filter((s) => {
-    const prior = before.get(getMatchId(s))!;
-    return getAreaId(prior) === getAreaId(s) && prior.starts_at !== s.starts_at;
-  }).length;
+  const replanInput = (
+    await ctx.sql<{ input_snapshot: { matches: Array<{ match_id: string; dependency_match_ids: string[] }> } }[]>`
+      SELECT input_snapshot FROM schedule_generation_jobs
+      WHERE competition_id=${comp.id} ORDER BY created_at DESC, id DESC LIMIT 1`
+  )[0]!.input_snapshot;
+  const dependenciesOf = new Map(replanInput.matches.map((m) => [m.match_id, m.dependency_match_ids]));
+  const after = new Map(pub.schedule.map((s) => [getMatchId(s), s]));
+  const slotMs = 60 * 60_000;
+  let forcedShifts = 0;
+  for (const s of pub.schedule) {
+    const id = getMatchId(s);
+    const prior = before.get(id)!;
+    if (getAreaId(prior) !== court1.id || prior.starts_at === s.starts_at) continue;
+    // A still-open Court 1 slot was left: allowed only when a prerequisite now ends after it.
+    const latestPrerequisiteEnd = Math.max(
+      Number.NEGATIVE_INFINITY,
+      ...(dependenciesOf.get(id) ?? []).map((dep) => Date.parse(after.get(dep)!.starts_at!) + slotMs),
+    );
+    if (latestPrerequisiteEnd <= Date.parse(prior.starts_at!)) {
+      throw new Error(
+        `Unaffected match ${id} moved from ${prior.starts_at} to ${s.starts_at} although its Court 1 slot was still valid`,
+      );
+    }
+    forcedShifts += 1;
+  }
   console.log(
-    `\n    [s7] displaced=${initialCourt2Matches.length} court-changed=${courtChanged.length} time-shifted-on-court-1=${timeOnlyMoves}`,
+    `\n    [s7] displaced=${initialCourt2Matches.length} court-changed=${courtChanged.length} forced-dependant-shifts=${forcedShifts} unaffected-kept=${before.size - initialCourt2Matches.length - forcedShifts}`,
   );
 
   // R2.2: running late. Push the final Court 1 match back one slot with the schedule delay tool,
@@ -1715,13 +1787,23 @@ async function runScenario7(ctx: SimContext): Promise<void> {
     payload: { idempotency_key: `s7-delay-pub-${randomUUID()}`, expected_revision: delayed.revision },
     expectedStatuses: [200],
   });
-  const afterDelay = (
-    await ctx.request({
-      method: "GET",
-      url: `/api/v1/public/competitions/${comp.slug}/current`,
-      expectedStatuses: [200],
-    })
-  ).json<{ schedule: SchedMatch[] }>();
+  const afterDelayRes = await ctx.request({
+    method: "GET",
+    url: `/api/v1/public/competitions/${comp.slug}/current`,
+    expectedStatuses: [200],
+  });
+  const afterDelay = afterDelayRes.json<{ schedule: SchedMatch[]; publication: { schedule_version: number } }>();
+  // The public version token moves with the delayed publication: schedule_version strictly
+  // increases and the ETag changes, so conditional GETs and the live stream see the new version.
+  const versionBeforeDelay = pubRes.json<{ publication: { schedule_version: number } }>().publication.schedule_version;
+  if (!(afterDelay.publication.schedule_version > versionBeforeDelay)) {
+    throw new Error(
+      `Public schedule_version did not increase after the delay was published: ${versionBeforeDelay} -> ${afterDelay.publication.schedule_version}`,
+    );
+  }
+  if (!afterDelayRes.headers.etag || afterDelayRes.headers.etag === pubRes.headers.etag) {
+    throw new Error(`Public ETag did not change after the delay was published (${String(afterDelayRes.headers.etag)})`);
+  }
   const shifted = afterDelay.schedule.find((s) => getMatchId(s) === getMatchId(lastOnCourt1));
   if (!shifted || Date.parse(shifted.starts_at!) - Date.parse(lastOnCourt1.starts_at!) !== 60 * 60_000) {
     throw new Error(
@@ -1731,6 +1813,7 @@ async function runScenario7(ctx: SimContext): Promise<void> {
   if (afterDelay.schedule.some((s) => getAreaId(s) === court2.id)) {
     throw new Error("Delay re-introduced matches on closed Court 2");
   }
+  await assertPublishedScheduleHasNoOverlaps(ctx, comp.id, "Scenario 7 delayed publication");
 }
 
 // ---------------------------------------------------------------------------
@@ -2244,6 +2327,9 @@ async function main() {
   }
 
   console.log(`\nTotal HTTP requests: ${requestStats.total}`);
+  console.log(
+    `Published schedules audited for court/team/official overlaps: ${overlapAudit.publications} (${overlapAudit.matches} scheduled matches, 0 overlaps)`,
+  );
   console.log(`Status distribution: ${JSON.stringify(requestStats.byStatus)}`);
 
   // 5xx Budget Check

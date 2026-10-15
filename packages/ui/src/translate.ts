@@ -774,6 +774,8 @@ export const prototypeMessages = {
   "prototype.069d05955c89": "slots available",
   "prototype.c2c8f03c0e21": "Applying format…",
   "prototype.f83bcedd3aa7": "Use this format",
+  "prototype.59faad5f0b7f":
+    "Requires more courts or extended hours ({required} slots required vs {available} slots available)",
 } as const;
 
 export type PrototypeMessageId = keyof typeof prototypeMessages;

@@ -29,7 +29,7 @@ Previously, these behaviors had conflicting product interpretations:
 ### 3. Format Recommendation Capacity Disclosures
 
 - **Presentation Rule:** When an organiser browses format templates, templates whose required match slots exceed available venue capacity must **not** be silently hidden or trigger unexpected 5xx/422 schedule errors.
-- **UI Disclosure:** Recommended formats that exceed venue limits are presented with a clear diagnostic badge: _"Requires more courts or extended hours (N slots required vs M slots available)"_, guiding the organiser to either increase court availability or choose a more compact format.
+- **UI Disclosure:** Recommended formats that exceed venue limits are presented with a clear diagnostic badge: _"Requires more courts or extended hours (N slots required vs M slots available)"_, guiding the organiser to either increase court availability or choose a more compact format. Implemented in the assisted-setup format step (`RecommendationStep` in `apps/web/components/phase4/setup/AssistedSetupJourneyView.tsx`, message `prototype.59faad5f0b7f`): N is the format's match count and M the recommendation's `available_match_slots`, the same one-match-per-slot arithmetic as the scheduler's `insufficient_capacity` diagnostic.
 
 ## Consequences
 
