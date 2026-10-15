@@ -515,7 +515,7 @@ Engineering can continue without these, but the dependent checkpoint cannot pass
 | AI provider decision (or launch without AI)                      | CP4        | Decided — launch without AI (ADR 0010, PR #111 merged)                                                                                             |
 | Walkover display, per-group standings, offline scoring decisions | CP2        | Decided — ADRs 0008/0009 (PR #103 merged)                                                                                                          |
 | A real local event for the rehearsal                             | CP8        | Awaiting live execution (runbook documented in `docs/operations/LIVE_REHEARSAL_RUNBOOK.md`)                                                        |
-| Expected peak load (competitions, scoring devices, spectators)   | CP8        | Automated peak benchmark active (p95 score <= 500ms, public <= 2500ms; `scripts/run-r8-load-tests.mjs`)                                            |
+| Expected peak load (competitions, scoring devices, spectators)   | CP8        | Pending owner decision on expected peak numbers (load-test scripts ready in repo)                                                                  |
 | Formal legal/privacy approval                                    | First sale | Deferred per ADR 0005, no approval obtained (see `docs/operations/LEGAL_APPROVAL.md`)                                                              |
 
 ## 10. Risk register

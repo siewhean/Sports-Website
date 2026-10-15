@@ -11,6 +11,7 @@ import { runGateFCachePurgeAudit } from "./run-gate-f-cache-purge.mjs";
 import { runGateFOpsAudit } from "./run-gate-f-ops-audit.mjs";
 import { runGateFRecertifications } from "./run-gate-f-recertifications.mjs";
 import { runGateFProductionSimulation } from "./run-gate-f-production-simulation.mjs";
+import { runGateFDrills } from "./run-gate-f-drills.mjs";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
@@ -31,12 +32,13 @@ test("certifyGateFMigrations verifies expand-contract compliance", async () => {
   });
 });
 
-test("runGateFRollbackDrill verifies automated rollback steps but stays PENDING without external evidence", async () => {
+test("runGateFRollbackDrill stays PENDING without external evidence and does not report fake execution", async () => {
   await withArtifacts(async (artifactsDir) => {
     const res = await runGateFRollbackDrill(SHA, { artifactsDir });
     assert.equal(res.verdict, "PENDING");
-    assert.equal(res.simulation_result, "SIMULATION_PASS");
-    assert.equal(res.scoring_availability, "PRESERVED");
+    assert.equal(res.drill_executed, false);
+    assert.equal(res.simulation_result, "NOT_EXECUTED_PENDING_PRODUCTION_DRILL");
+    assert.equal(res.scoring_availability, "UNTESTED_PENDING_PRODUCTION_RUN");
   });
 });
 
@@ -397,4 +399,24 @@ test("evidence validator rejects synthetic markers, wrong SHA, wrong env, and st
     const staleResult = await runGateFCachePurgeAudit(SHA, { artifactsDir, evidenceFile: staleFile });
     assert.equal(staleResult.verdict, "PENDING");
   });
+});
+
+test("runGateFDrills derives dynamic verdict and preserves audit integrity without external evidence", async () => {
+  const result = await runGateFDrills(SHA);
+  assert.equal(result.verdict, "CONFIG_AND_CONTRACT_AUDIT_PASS_PRODUCTION_DRILLS_PENDING");
+  assert.equal(result.drills.zero_downtime_rollback.drill_executed, false);
+  assert.equal(result.drills.zero_downtime_rollback.verdict, "PENDING");
+  assert.equal(result.drills.backup_restore.verdict, "PENDING");
+  assert.equal(result.drills.edge_cache_purge.verdict, "PENDING");
+  assert.equal(result.status_summary.zero_downtime_rollback, "NOT_EXECUTED_PENDING_PRODUCTION_RUN");
+  assert.equal(result.status_summary.edge_cache_purge, "CONFIG_AUDIT_ONLY_PURGE_NOT_EXECUTED");
+  assert.equal(typeof result.content_fingerprint_sha256, "string");
+  assert.equal(result.content_fingerprint_sha256.length, 64);
+});
+
+test("runGateFDrills rejects malformed candidate SHA", async () => {
+  await assert.rejects(
+    async () => runGateFDrills("invalid-sha"),
+    /Gate F drills require an exact 40-character candidate SHA/,
+  );
 });

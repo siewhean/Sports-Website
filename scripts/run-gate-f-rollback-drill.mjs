@@ -39,23 +39,23 @@ export async function runGateFRollbackDrill(candidateSha, options = {}) {
 
   const isPass = hasSpecificProof;
 
-  // Simulation steps for component testing/tracing
-  const drillSteps = [
-    { step: "baseline_health_check", status: "HEALTHY", version: sha },
-    { step: "canary_failure_injection", injected_error: "HEALTH_CHECK_TIMEOUT_SIMULATION", status: "DETECTED" },
-    { step: "automated_rollback_trigger", action: "RESTORE_PREVIOUS_REVISION", duration_ms: 420 },
-    { step: "post_rollback_health_check", status: "HEALTHY", active_version: sha },
-  ];
-
+  // Production rollback requires live external execution; do not invent simulation steps
   const receipt = {
     qa_item: "OPS-002",
     candidate_sha: sha,
-    drill_type: "automated_zero_downtime_rollback_simulation",
-    scoring_availability: "PRESERVED",
-    simulation_steps: drillSteps,
-    simulation_result: "SIMULATION_PASS",
+    drill_type: "automated_zero_downtime_rollback_procedure",
+    drill_executed: isPass,
+    scoring_availability: isPass
+      ? (validation.evidence?.scoring_availability ?? "PRESERVED")
+      : "UNTESTED_PENDING_PRODUCTION_RUN",
+    simulation_steps: isPass ? (validation.evidence?.steps ?? []) : [],
+    simulation_result: isPass ? "OBSERVED_PASS" : "NOT_EXECUTED_PENDING_PRODUCTION_DRILL",
     verdict: isPass ? "PASS" : "PENDING",
-    pending_reasons: isPass ? [] : validation.errors,
+    pending_reasons: isPass
+      ? []
+      : validation.errors.length > 0
+        ? validation.errors
+        : ["external_production_rollback_evidence_missing"],
     ...(validation.evidenceSha256
       ? { input_evidence_sha256: validation.evidenceSha256, evidence_reference: evidenceFile }
       : {}),

@@ -11,7 +11,7 @@
  *   node scripts/run-r8-load-tests.mjs [--mode=component|socket-component|staging] [--candidate-sha=<sha>] [--target-url=<url>]
  */
 
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -19,6 +19,28 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifactsDir = path.join(root, "artifacts");
+
+export function resolveCandidateSha(inputSha) {
+  const candidate = (inputSha ?? "").trim().toLowerCase();
+  if (/^[0-9a-f]{40}$/i.test(candidate)) {
+    return candidate;
+  }
+  const envSha = (process.env.CANDIDATE_SHA ?? "").trim().toLowerCase();
+  if (/^[0-9a-f]{40}$/i.test(envSha)) {
+    return envSha;
+  }
+  try {
+    const gitSha = execSync("git rev-parse HEAD", { cwd: root, encoding: "utf8" }).trim().toLowerCase();
+    if (/^[0-9a-f]{40}$/i.test(gitSha)) {
+      return gitSha;
+    }
+  } catch {
+    // ignore
+  }
+  throw new Error(
+    "A valid 40-character Git SHA is required (no dummy fallback allowed). Provide via --candidate-sha=<sha> or CANDIDATE_SHA env.",
+  );
+}
 
 function parseArg(flag, defaultValue) {
   const prefix = `${flag}=`;
@@ -28,21 +50,18 @@ function parseArg(flag, defaultValue) {
 }
 
 const mode = parseArg("--mode", "component");
-const candidateSha = parseArg(
-  "--candidate-sha",
-  process.env.CANDIDATE_SHA ?? "0123456789abcdef0123456789abcdef01234567",
-);
+const candidateShaArg = parseArg("--candidate-sha", null);
 const targetUrl = parseArg("--target-url", process.env.TARGET_URL ?? "http://127.0.0.1:4101");
 
-async function runChildScript(scriptRelativePath, args) {
+async function runChildScript(scriptRelativePath, args, currentMode, sha) {
   return new Promise((resolve, reject) => {
     const fullPath = path.join(root, scriptRelativePath);
     const env = {
       ...process.env,
-      LOAD_MODE: mode,
-      CANDIDATE_SHA: candidateSha,
+      LOAD_MODE: currentMode,
+      CANDIDATE_SHA: sha,
     };
-    if (mode === "staging") {
+    if (currentMode === "staging") {
       env.TARGET_URL = targetUrl;
     } else {
       delete env.TARGET_URL;
@@ -64,8 +83,10 @@ async function runChildScript(scriptRelativePath, args) {
 
 export async function runR8LoadTests(options = {}) {
   const currentMode = options.mode ?? mode;
-  const sha = options.candidateSha ?? candidateSha;
+  const sha = resolveCandidateSha(options.candidateSha ?? candidateShaArg);
   await mkdir(artifactsDir, { recursive: true });
+
+  const isComponentMode = currentMode === "component" || currentMode === "socket-component";
 
   console.log("════════════════════════════════════════════════════════════");
   console.log(" Track R8: Peak Load Test Suite (Scoring & Public Spectators)");
@@ -83,11 +104,11 @@ export async function runR8LoadTests(options = {}) {
 
   // 1. Run Public Spectator Load Benchmark (QA-010)
   console.log("[R8.3] 1/2 Executing Public Spectator Workload Benchmark...");
-  await runChildScript("apps/api/scripts/run-load-public.ts", commonArgs);
+  await runChildScript("apps/api/scripts/run-load-public.ts", commonArgs, currentMode, sha);
 
   // 2. Run Scoring Devices Load Benchmark (QA-011)
   console.log("\n[R8.3] 2/2 Executing Scoring Devices Workload Benchmark...");
-  await runChildScript("apps/api/scripts/run-load-scoring.ts", commonArgs);
+  await runChildScript("apps/api/scripts/run-load-scoring.ts", commonArgs, currentMode, sha);
 
   // 3. Collect Generated Summaries and Validate Budgets
   const publicSummaryFile = path.join(artifactsDir, "qa-010-load-public-summary.json");
@@ -123,10 +144,19 @@ export async function runR8LoadTests(options = {}) {
 
   const isPass = publicPassed && scoringPassed;
 
+  const evidenceClass = isComponentMode ? "developer_component_diagnostic_only" : "staging_load_benchmark_evidence";
+  const productionRelevance = isComponentMode
+    ? "NONE (in-process diagnostic with synthetic data; does not certify production performance)"
+    : "STAGING_ENVIRONMENT_ACTIVE_PROBE";
+
+  const overallVerdict = isPass ? (isComponentMode ? "COMPONENT_DIAGNOSTIC_ONLY" : "PASS") : "FAIL";
+
   const receipt = {
     qa_item: "R8.3",
     candidate_sha: sha,
     mode: currentMode,
+    evidence_class: evidenceClass,
+    production_relevance: productionRelevance,
     slo_budgets: {
       scoring_p95_max_ms: SCORING_P95_BUDGET_MS,
       public_p95_max_ms: PUBLIC_P95_BUDGET_MS,
@@ -139,7 +169,7 @@ export async function runR8LoadTests(options = {}) {
         p50_ms: scoringP50,
         samples: scoringSamples,
         error_rate: scoringErrorRate,
-        verdict: scoringPassed ? "PASS" : "FAIL",
+        verdict: scoringPassed ? (isComponentMode ? "COMPONENT_DIAGNOSTIC_PASS" : "PASS") : "FAIL",
       },
       public_spectators: {
         tier: publicPeakTier?.tier ?? "2x Peak",
@@ -147,17 +177,19 @@ export async function runR8LoadTests(options = {}) {
         p50_ms: publicP50,
         samples: publicSamples,
         error_rate: publicErrorRate,
-        verdict: publicPassed ? "PASS" : "FAIL",
+        verdict: publicPassed ? (isComponentMode ? "COMPONENT_DIAGNOSTIC_PASS" : "PASS") : "FAIL",
       },
     },
-    verdict: isPass ? "PASS" : "FAIL",
+    verdict: overallVerdict,
     generated_at: new Date().toISOString(),
   };
 
-  const { receipt_sha256, ...payload } = receipt;
-  receipt.receipt_sha256 = createHash("sha256")
+  const { content_fingerprint_sha256, receipt_sha256, ...payload } = receipt;
+  const checksum = createHash("sha256")
     .update(JSON.stringify(payload, null, 2))
     .digest("hex");
+  receipt.content_fingerprint_sha256 = checksum;
+  receipt.receipt_sha256 = checksum;
 
   const receiptFile = path.join(artifactsDir, "r8-load-test-summary.json");
   await writeFile(receiptFile, JSON.stringify(receipt, null, 2));
@@ -166,13 +198,15 @@ export async function runR8LoadTests(options = {}) {
   console.log(" Track R8: Load Test Benchmark Results Summary");
   console.log("════════════════════════════════════════════════════════════");
   console.log(
-    ` Scoring Devices Peak p95:   ${scoringP95.toFixed(2)} ms (budget <= ${SCORING_P95_BUDGET_MS} ms) -> ${scoringPassed ? "PASS" : "FAIL"}`,
+    ` Scoring Devices Peak p95:   ${scoringP95.toFixed(2)} ms (budget <= ${SCORING_P95_BUDGET_MS} ms) -> ${scoringPassed ? (isComponentMode ? "COMPONENT_DIAGNOSTIC_PASS" : "PASS") : "FAIL"}`,
   );
   console.log(
-    ` Public Spectator Peak p95: ${publicP95.toFixed(2)} ms (budget <= ${PUBLIC_P95_BUDGET_MS} ms) -> ${publicPassed ? "PASS" : "FAIL"}`,
+    ` Public Spectator Peak p95: ${publicP95.toFixed(2)} ms (budget <= ${PUBLIC_P95_BUDGET_MS} ms) -> ${publicPassed ? (isComponentMode ? "COMPONENT_DIAGNOSTIC_PASS" : "PASS") : "FAIL"}`,
   );
   console.log(` Overall Verdict:           ${receipt.verdict}`);
-  console.log(` Receipt Saved:             ${receiptFile}`);
+  console.log(` Evidence Class:            ${receipt.evidence_class}`);
+  console.log(` Content Fingerprint:       ${receipt.content_fingerprint_sha256}`);
+  console.log(` Artifact Saved:            ${receiptFile}`);
   console.log("════════════════════════════════════════════════════════════\n");
 
   if (!isPass) {

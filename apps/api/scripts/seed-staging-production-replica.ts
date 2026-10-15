@@ -16,9 +16,67 @@ import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { SPORT_PACKS, createDefaultFormatTemplates, type SportId, type FormatGraph } from "@matchday/domain";
 import { phase3DomainAdapter } from "../src/phase-3-domain-adapter.js";
+import { Phase3Runtime, type Phase3Actor } from "../src/phase-3-runtime.js";
+import type { PostgresJsSql } from "@matchday/identity";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
+
+export function assertSafeNonProductionDatabase(rawUrl: string, allowStagingFlag = false): void {
+  if (process.env.APP_ENV === "production" || process.env.NODE_ENV === "production") {
+    throw new Error(
+      "Safety guard triggered: Seed script cannot run in production environment (APP_ENV or NODE_ENV is 'production').",
+    );
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`Invalid database URL format: "${rawUrl}"`);
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  const dbName = parsed.pathname.replace(/^\//, "").toLowerCase();
+
+  const blockedHostPatterns = [
+    "poladex.shop",
+    "onrender.com",
+    "neon.tech",
+    "aws",
+    "rds",
+    "supabase",
+    "prod",
+    "production",
+  ];
+
+  for (const pattern of blockedHostPatterns) {
+    if (hostname.includes(pattern)) {
+      throw new Error(
+        `Safety guard triggered: Database host "${hostname}" matches protected production pattern "${pattern}". Seeding aborted.`,
+      );
+    }
+  }
+
+  if (dbName.includes("prod") || dbName.includes("production")) {
+    throw new Error(
+      `Safety guard triggered: Database name "${dbName}" matches protected production keyword. Seeding aborted.`,
+    );
+  }
+
+  const isLoopback =
+    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "0.0.0.0";
+
+  const allowStaging =
+    allowStagingFlag || process.env.ALLOW_STAGING_SEED === "1" || process.argv.includes("--allow-staging-seed");
+
+  if (!isLoopback && !allowStaging) {
+    throw new Error(
+      `Safety guard triggered: Database host "${hostname}" is a non-loopback host. ` +
+        `Seeding a remote/staging database requires explicit confirmation via '--allow-staging-seed' CLI flag or 'ALLOW_STAGING_SEED=1' env.`,
+    );
+  }
+}
 
 function fourEntryEliminationDefinition(
   formatRevisionId: string,
@@ -75,8 +133,11 @@ function fourEntryEliminationDefinition(
   };
 }
 
-export async function seedStagingProductionReplica(options: { databaseUrl?: string; verbose?: boolean } = {}) {
+export async function seedStagingProductionReplica(
+  options: { databaseUrl?: string; verbose?: boolean; allowStaging?: boolean } = {},
+) {
   const url = options.databaseUrl ?? databaseUrl;
+  assertSafeNonProductionDatabase(url, options.allowStaging);
   const verbose = options.verbose ?? true;
   const sql = postgres(url, { max: 4, onnotice: () => undefined });
 
@@ -144,7 +205,10 @@ export async function seedStagingProductionReplica(options: { databaseUrl?: stri
       `;
     });
 
-    // 3. Helper to create competition with divisions, entries, and materialised format
+    const actor: Phase3Actor = { accountId: organiserAccountId };
+    const phase3 = new Phase3Runtime(sql as unknown as PostgresJsSql, phase3DomainAdapter);
+
+    // 3. Helper to create competition with divisions, entries, and materialised format through app checks
     const createCompetitionGraph = async (params: {
       organisationId: string;
       sportCode: SportId;
@@ -154,36 +218,39 @@ export async function seedStagingProductionReplica(options: { databaseUrl?: stri
       archived?: boolean;
       archivedFromStatus?: string;
     }) => {
-      const compId = randomUUID();
-      const divId = randomUUID();
-      const formatRevId = randomUUID();
+      // Create competition via Phase3Runtime
+      const comp = await phase3.createCompetition(
+        actor,
+        {
+          organisationId: params.organisationId,
+          name: params.name,
+          slug: params.slug,
+          sportCode: params.sportCode,
+          venue: "Singapore Sports Hub",
+          address: "1 Stadium Drive",
+          countryCode: "SG",
+          startsOn: "2026-09-01",
+          endsOn: "2026-09-05",
+          timezone: "Asia/Singapore",
+          locale: "en-SG",
+        },
+        randomUUID(),
+        `staging-seed-comp-${randomUUID()}`,
+      );
+      const compId = String(comp.id);
+      let revision = Number(comp.revision);
 
-      await sql`
-        INSERT INTO competitions (
-          id, organisation_id, created_by, name, slug, sport_code,
-          timezone, starts_on, ends_on, venue, address, country_code, locale, plan_tier, status
-        ) VALUES (
-          ${compId}, ${params.organisationId}, ${organiserAccountId}, ${params.name}, ${params.slug},
-          ${params.sportCode}, 'Asia/Singapore', '2026-09-01', '2026-09-05',
-          'Singapore Sports Hub', '1 Stadium Drive', 'SG', 'en-SG', 'organiser_pro', 'draft'
-        );
-      `;
+      await sql`UPDATE competitions SET plan_tier = 'organiser_pro' WHERE id = ${compId};`;
 
-      const pack = SPORT_PACKS[params.sportCode];
-      await sql`
-        INSERT INTO competition_sport_settings (
-          competition_id, updated_by, sport_code, pack_version, pack_schema_version,
-          recommended_snapshot, settings_override
-        ) VALUES (
-          ${compId}, ${organiserAccountId}, ${params.sportCode}, ${pack.version}, ${pack.schemaVersion},
-          '{}'::jsonb, '{}'::jsonb
-        );
-      `;
-
-      await sql`
-        INSERT INTO divisions (id, competition_id, name, team_limit)
-        VALUES (${divId}, ${compId}, 'Open Championship', 8);
-      `;
+      // Create division via Phase3Runtime
+      const div = await phase3.createDivision(
+        actor,
+        compId,
+        { name: "Open Championship", code: "OPEN", entryLimit: 8 },
+        randomUUID(),
+        `staging-seed-div-${randomUUID()}`,
+      );
+      const divId = String((div as Record<string, unknown>).id);
 
       // 4 Entries
       for (let i = 0; i < 4; i++) {
@@ -195,6 +262,7 @@ export async function seedStagingProductionReplica(options: { databaseUrl?: stri
       }
 
       // 4-entry Single Elimination Graph
+      const formatRevId = randomUUID();
       const semi1 = randomUUID();
       const semi2 = randomUUID();
       const finalMatch = randomUUID();
@@ -212,28 +280,38 @@ export async function seedStagingProductionReplica(options: { databaseUrl?: stri
       // Materialize matches inside postgres
       await sql`SELECT phase4_materialize_format_revision(${formatRevId});`;
 
-      // Transition competition lifecycle to target status
+      // Transition competition lifecycle to target status through domain runtime
       if (params.status === "published" || params.status === "active" || params.status === "completed") {
-        await sql`UPDATE competitions SET status = 'ready' WHERE id = ${compId};`;
-        await sql`UPDATE competitions SET status = 'published' WHERE id = ${compId};`;
+        const readyRes = await phase3.transitionCompetition(actor, compId, { revision, status: "ready" }, randomUUID());
+        revision = Number((readyRes as Record<string, unknown>).revision);
+
+        const pubRes = await phase3.transitionCompetition(
+          actor,
+          compId,
+          { revision, status: "published" },
+          randomUUID(),
+        );
+        revision = Number((pubRes as Record<string, unknown>).revision);
+
         if (params.status === "active" || params.status === "completed") {
-          await sql`UPDATE competitions SET status = 'live' WHERE id = ${compId};`;
+          const liveRes = await phase3.transitionCompetition(actor, compId, { revision, status: "live" }, randomUUID());
+          revision = Number((liveRes as Record<string, unknown>).revision);
+
           if (params.status === "completed") {
-            await sql`UPDATE competitions SET status = 'completed' WHERE id = ${compId};`;
+            const compRes = await phase3.transitionCompetition(
+              actor,
+              compId,
+              { revision, status: "completed" },
+              randomUUID(),
+            );
+            revision = Number((compRes as Record<string, unknown>).revision);
           }
         }
       }
 
-      // If requested, archive the competition
+      // If requested, archive the competition via domain runtime checks
       if (params.archived) {
-        const priorStatus = params.archivedFromStatus ?? params.status;
-        await sql`
-          UPDATE competitions
-          SET status = 'archived',
-              archived_from_status = ${priorStatus},
-              archived_at = now()
-          WHERE id = ${compId};
-        `;
+        await phase3.mutateCompetition(actor, compId, { revision, action: "archive" }, randomUUID());
       }
 
       return { competitionId: compId, divisionId: divId, formatRevisionId: formatRevId };

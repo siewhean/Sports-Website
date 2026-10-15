@@ -20,6 +20,7 @@
  *   node scripts/run-gate-f-drills.mjs [<candidate-sha>]
  */
 
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -35,16 +36,36 @@ import { runGateFRecertifications } from "./run-gate-f-recertifications.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifactsDir = path.join(root, "artifacts");
 
-function requireSha(value) {
-  const sha = (value ?? process.env.CANDIDATE_SHA ?? "0123456789abcdef0123456789abcdef01234567").trim().toLowerCase();
-  if (!/^[0-9a-f]{40}$/i.test(sha)) {
-    throw new Error(`Gate F drills require an exact 40-character candidate SHA; got "${sha}"`);
+export function resolveCandidateSha(inputSha) {
+  if (typeof inputSha === "string" && inputSha.trim().length > 0) {
+    const candidate = inputSha.trim().toLowerCase();
+    if (!/^[0-9a-f]{40}$/i.test(candidate)) {
+      throw new Error(`Gate F drills require an exact 40-character candidate SHA; got "${inputSha}"`);
+    }
+    return candidate;
   }
-  return sha;
+  const envSha = (process.env.CANDIDATE_SHA ?? "").trim().toLowerCase();
+  if (envSha.length > 0) {
+    if (!/^[0-9a-f]{40}$/i.test(envSha)) {
+      throw new Error(`Gate F drills require an exact 40-character candidate SHA; got "${envSha}" from CANDIDATE_SHA`);
+    }
+    return envSha;
+  }
+  try {
+    const gitSha = execSync("git rev-parse HEAD", { cwd: root, encoding: "utf8" }).trim().toLowerCase();
+    if (/^[0-9a-f]{40}$/i.test(gitSha)) {
+      return gitSha;
+    }
+  } catch {
+    // ignore
+  }
+  throw new Error(
+    "Gate F drills require an exact 40-character candidate SHA. Provide via argument, CANDIDATE_SHA env, or ensure running in a Git repository.",
+  );
 }
 
 export async function runGateFDrills(candidateSha, options = {}) {
-  const sha = requireSha(candidateSha);
+  const sha = resolveCandidateSha(candidateSha);
   await mkdir(artifactsDir, { recursive: true });
 
   console.log("════════════════════════════════════════════════════════════");
@@ -106,7 +127,18 @@ export async function runGateFDrills(candidateSha, options = {}) {
   console.log(`  ✓ Security Audit:  ${recertsResult.security.verdict}`);
   console.log(`  ✓ Legal Technical: ${recertsResult.legal.verdict}\n`);
 
-  // Aggregate Drill Receipt
+  // Determine dynamic overall verdict from actual execution results
+  const allLiveDrillsPassed =
+    migrationResult.verdict === "PASS" &&
+    rollbackResult.verdict === "PASS" &&
+    backupResult.verdict === "PASS" &&
+    cacheResult.verdict === "PASS" &&
+    opsResult.alertRouting.verdict === "PASS" &&
+    opsResult.sloBaseline.verdict === "PASS";
+
+  const overallVerdict = allLiveDrillsPassed ? "PASS" : "CONFIG_AND_CONTRACT_AUDIT_PASS_PRODUCTION_DRILLS_PENDING";
+
+  // Aggregate Drill Artifact
   const receipt = {
     qa_item: "R8.5",
     candidate_sha: sha,
@@ -118,6 +150,7 @@ export async function runGateFDrills(candidateSha, options = {}) {
         expand_contract_compliant: migrationResult.expand_contract_compliant,
       },
       zero_downtime_rollback: {
+        drill_executed: rollbackResult.drill_executed ?? false,
         simulation_result: rollbackResult.simulation_result,
         scoring_availability: rollbackResult.scoring_availability,
         verdict: rollbackResult.verdict,
@@ -133,6 +166,8 @@ export async function runGateFDrills(candidateSha, options = {}) {
       operations_alerting: {
         alert_routes_verified: opsResult.alertRouting.protocol_verification,
         slo_baseline_verified: opsResult.sloBaseline.protocol_verification,
+        alert_routing_verdict: opsResult.alertRouting.verdict,
+        slo_baseline_verdict: opsResult.sloBaseline.verdict,
       },
       security_recertification: {
         dependency_audit: recertsResult.security.dependency_audit,
@@ -154,14 +189,25 @@ export async function runGateFDrills(candidateSha, options = {}) {
     },
     legal_approval: "DEFERRED_TO_FIRST_COMMERCIAL_RELEASE",
     simulation_environment: "staging_rehearsal_suite",
-    verdict: "AUTOMATED_DRILLS_PASS",
+    verdict: overallVerdict,
+    status_summary: {
+      migration_safety: migrationResult.verdict === "PASS" ? "STATIC_CONTRACT_AUDIT_PASS" : "FAIL",
+      zero_downtime_rollback: rollbackResult.drill_executed ? "PASS" : "NOT_EXECUTED_PENDING_PRODUCTION_RUN",
+      backup_isolated_restore: backupResult.verdict === "PASS" ? "PASS" : "NOT_EXECUTED_PENDING_PRODUCTION_BACKUP",
+      edge_cache_purge: cacheResult.verdict === "PASS" ? "PASS" : "CONFIG_AUDIT_ONLY_PURGE_NOT_EXECUTED",
+      alert_routing: opsResult.alertRouting.verdict === "PASS" ? "PASS" : "CONFIG_AUDIT_ONLY_ALERTS_NOT_FIRED",
+      security_recertification: recertsResult.security.verdict,
+      legal_technical_compliance: recertsResult.legal.verdict,
+    },
     generated_at: new Date().toISOString(),
   };
 
-  const { receipt_sha256, ...payload } = receipt;
-  receipt.receipt_sha256 = createHash("sha256")
+  const { content_fingerprint_sha256, receipt_sha256, ...payload } = receipt;
+  const checksum = createHash("sha256")
     .update(JSON.stringify(payload, null, 2))
     .digest("hex");
+  receipt.content_fingerprint_sha256 = checksum;
+  receipt.receipt_sha256 = checksum;
 
   const receiptFile = path.join(artifactsDir, "gate-f-drills-receipt.json");
   await writeFile(receiptFile, JSON.stringify(receipt, null, 2));
@@ -169,16 +215,20 @@ export async function runGateFDrills(candidateSha, options = {}) {
   console.log("════════════════════════════════════════════════════════════");
   console.log(" Gate F Recertification Drills Summary");
   console.log("════════════════════════════════════════════════════════════");
-  console.log(` Migration Safety:      ${receipt.drills.migration_expand_contract.verdict}`);
+  console.log(` Migration Safety:      ${receipt.drills.migration_expand_contract.verdict} (Static Contract Audit)`);
   console.log(
-    ` Rollback Simulation:   ${receipt.drills.zero_downtime_rollback.simulation_result} (${receipt.drills.zero_downtime_rollback.scoring_availability})`,
+    ` Rollback Drill:        ${receipt.drills.zero_downtime_rollback.simulation_result} (${receipt.drills.zero_downtime_rollback.scoring_availability})`,
   );
-  console.log(` Cache Invalidation:    ${receipt.drills.edge_cache_purge.protocol_verification}`);
-  console.log(` Alert Routing:         ${receipt.drills.operations_alerting.alert_routes_verified}`);
+  console.log(` Backup/Restore Drill:  ${receipt.drills.backup_restore.verdict}`);
+  console.log(` Cache Purge Drill:     ${receipt.drills.edge_cache_purge.verdict} (Config Audit Only)`);
+  console.log(
+    ` Alert Routing Drill:   ${receipt.drills.operations_alerting.alert_routing_verdict ?? "PENDING"} (Config Audit Only)`,
+  );
   console.log(` Security Audit:        ${receipt.drills.security_recertification.verdict}`);
   console.log(` Legal Compliance:      ${receipt.drills.legal_compliance.verdict}`);
-  console.log(` Overall Automated:     ${receipt.verdict}`);
-  console.log(` Receipt Saved:         ${receiptFile}`);
+  console.log(` Overall Verdict:       ${receipt.verdict}`);
+  console.log(` Content Fingerprint:   ${receipt.content_fingerprint_sha256}`);
+  console.log(` Artifact Saved:        ${receiptFile}`);
   console.log("════════════════════════════════════════════════════════════\n");
 
   return receipt;
