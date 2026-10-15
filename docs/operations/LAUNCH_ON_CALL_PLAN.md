@@ -38,7 +38,7 @@ A deployment during an active freeze requires an **Emergency Hotfix** justificat
 
 1. P1 outage affecting active scoring or data corruption.
 2. Changes must be tested against the staging replica first.
-3. Rollback drill script [`scripts/run-gate-f-rollback-drill.mjs](../../scripts/run-gate-f-rollback-drill.mjs) must be ready if health fails.
+3. Rollback drill script [`scripts/run-gate-f-rollback-drill.mjs`](../../scripts/run-gate-f-rollback-drill.mjs) must be ready if health fails.
 
 ---
 

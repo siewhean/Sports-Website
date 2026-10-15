@@ -51,9 +51,32 @@ function parseArg(flag, defaultValue) {
 
 const mode = parseArg("--mode", "component");
 const candidateShaArg = parseArg("--candidate-sha", null);
-const targetUrl = parseArg("--target-url", process.env.TARGET_URL ?? "http://127.0.0.1:4101");
+const targetUrlArg = parseArg("--target-url", process.env.TARGET_URL ?? null);
 
-async function runChildScript(scriptRelativePath, args, currentMode, sha) {
+export const VALID_LOAD_MODES = Object.freeze(["component", "socket-component", "staging"]);
+
+/**
+ * Rejects unknown modes. Only an explicit `staging` mode with an explicit TARGET_URL / --target-url
+ * can produce staging evidence; there is no default target URL for staging.
+ */
+export function validateLoadTestOptions(currentMode, currentTargetUrl) {
+  if (!VALID_LOAD_MODES.includes(currentMode)) {
+    throw new Error(`Unknown --mode "${currentMode}". Valid modes: ${VALID_LOAD_MODES.join(", ")}.`);
+  }
+  if (currentMode === "staging") {
+    if (typeof currentTargetUrl !== "string" || currentTargetUrl.trim().length === 0) {
+      throw new Error("--mode=staging requires an explicit TARGET_URL or --target-url=<url>.");
+    }
+    try {
+      new URL(currentTargetUrl);
+    } catch {
+      throw new Error(`--mode=staging received an invalid target URL "${currentTargetUrl}".`);
+    }
+  }
+  return { mode: currentMode, targetUrl: currentMode === "staging" ? currentTargetUrl.trim() : null };
+}
+
+async function runChildScript(scriptRelativePath, args, currentMode, sha, currentTargetUrl) {
   return new Promise((resolve, reject) => {
     const fullPath = path.join(root, scriptRelativePath);
     const env = {
@@ -62,7 +85,7 @@ async function runChildScript(scriptRelativePath, args, currentMode, sha) {
       CANDIDATE_SHA: sha,
     };
     if (currentMode === "staging") {
-      env.TARGET_URL = targetUrl;
+      env.TARGET_URL = currentTargetUrl;
     } else {
       delete env.TARGET_URL;
     }
@@ -82,33 +105,37 @@ async function runChildScript(scriptRelativePath, args, currentMode, sha) {
 }
 
 export async function runR8LoadTests(options = {}) {
-  const currentMode = options.mode ?? mode;
+  const { mode: currentMode, targetUrl: currentTargetUrl } = validateLoadTestOptions(
+    options.mode ?? mode,
+    options.targetUrl ?? targetUrlArg,
+  );
   const sha = resolveCandidateSha(options.candidateSha ?? candidateShaArg);
   await mkdir(artifactsDir, { recursive: true });
 
-  const isComponentMode = currentMode === "component" || currentMode === "socket-component";
+  const isStagingMode = currentMode === "staging";
+  const isComponentMode = !isStagingMode;
 
   console.log("════════════════════════════════════════════════════════════");
   console.log(" Track R8: Peak Load Test Suite (Scoring & Public Spectators)");
   console.log(` Mode:          ${currentMode}`);
   console.log(` Candidate SHA: ${sha}`);
   if (currentMode === "staging") {
-    console.log(` Target URL:    ${options.targetUrl ?? targetUrl}`);
+    console.log(` Target URL:    ${currentTargetUrl}`);
   }
   console.log("════════════════════════════════════════════════════════════\n");
 
   const commonArgs = [`--mode=${currentMode}`, `--candidate-sha=${sha}`];
   if (currentMode === "staging") {
-    commonArgs.push(`--target-url=${options.targetUrl ?? targetUrl}`);
+    commonArgs.push(`--target-url=${currentTargetUrl}`);
   }
 
   // 1. Run Public Spectator Load Benchmark (QA-010)
   console.log("[R8.3] 1/2 Executing Public Spectator Workload Benchmark...");
-  await runChildScript("apps/api/scripts/run-load-public.ts", commonArgs, currentMode, sha);
+  await runChildScript("apps/api/scripts/run-load-public.ts", commonArgs, currentMode, sha, currentTargetUrl);
 
   // 2. Run Scoring Devices Load Benchmark (QA-011)
   console.log("\n[R8.3] 2/2 Executing Scoring Devices Workload Benchmark...");
-  await runChildScript("apps/api/scripts/run-load-scoring.ts", commonArgs, currentMode, sha);
+  await runChildScript("apps/api/scripts/run-load-scoring.ts", commonArgs, currentMode, sha, currentTargetUrl);
 
   // 3. Collect Generated Summaries and Validate Budgets
   const publicSummaryFile = path.join(artifactsDir, "qa-010-load-public-summary.json");
@@ -175,7 +202,7 @@ export async function runR8LoadTests(options = {}) {
 
   const isPass = publicPassed && scoringPassed;
 
-  const evidenceClass = isComponentMode ? "developer_component_diagnostic_only" : "staging_load_benchmark_evidence";
+  const evidenceClass = isStagingMode ? "staging_load_benchmark_evidence" : "developer_component_diagnostic_only";
   const productionRelevance = isComponentMode
     ? "NONE (in-process diagnostic with synthetic data; does not certify production performance)"
     : "STAGING_ENVIRONMENT_ACTIVE_PROBE";

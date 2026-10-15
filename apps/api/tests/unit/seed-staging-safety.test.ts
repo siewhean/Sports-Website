@@ -1,10 +1,29 @@
-import os from "node:os";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import {
   assertSafeNonProductionDatabase,
+  assertDatabaseServerIdentity,
   assertDatabaseStagingMarker,
   BLOCKED_PRODUCTION_IP,
 } from "../../scripts/seed-staging-production-replica.js";
+import { parseStagingSystemIdentifierAllowlist } from "../../scripts/staging-db-guards.js";
+import { markStagingDatabase } from "../../scripts/staging-mark-database.js";
+
+type FakeSql = Parameters<typeof assertDatabaseStagingMarker>[0];
+
+function fakeSql(respond: (query: string) => unknown, executed: string[] = []): FakeSql {
+  return vi.fn().mockImplementation((strings: TemplateStringsArray) => {
+    const q = strings.join(" ");
+    executed.push(q);
+    try {
+      return Promise.resolve(respond(q));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }) as unknown as FakeSql;
+}
+
+const STAGING_ID = "7300000000000000001";
+const OTHER_ID = "7300000000000000999";
 
 describe("assertSafeNonProductionDatabase", () => {
   const originalAppEnv = process.env.APP_ENV;
@@ -72,36 +91,12 @@ describe("assertSafeNonProductionDatabase", () => {
     ).toThrow(/matches blocked production IP 129.146.6.204/);
   });
 
-  it("strictly blocks execution if local network interfaces match production IP 129.146.6.204", () => {
-    vi.spyOn(os, "networkInterfaces").mockReturnValue({
-      eth0: [
-        {
-          address: "129.146.6.204",
-          netmask: "255.255.255.0",
-          family: "IPv4",
-          mac: "00:00:00:00:00:00",
-          internal: false,
-          cidr: "129.146.6.204/24",
-        },
-      ],
-    });
-
-    expect(() =>
-      assertSafeNonProductionDatabase("postgres://matchday:matchday@127.0.0.1:5432/matchday_staging"),
-    ).toThrow(/Host network interface "eth0" has production IP 129.146.6.204/);
-  });
-
-  it("strictly blocks execution if SSH session involves production IP 129.146.6.204", () => {
+  it("does not rely on client-side SSH env vars (tunnels are covered by the server identity check)", () => {
     process.env.SSH_CONNECTION = "129.146.6.204 54321 10.0.0.1 22";
+    // The URL guard cannot see through a tunnel; assertDatabaseServerIdentity is the protection.
     expect(() =>
       assertSafeNonProductionDatabase("postgres://matchday:matchday@127.0.0.1:5432/matchday_staging"),
-    ).toThrow(/Active SSH session contains production IP 129.146.6.204/);
-
-    delete process.env.SSH_CONNECTION;
-    process.env.SSH_CLIENT = "10.0.0.1 54321 129.146.6.204";
-    expect(() =>
-      assertSafeNonProductionDatabase("postgres://matchday:matchday@127.0.0.1:5432/matchday_staging"),
-    ).toThrow(/Active SSH session contains production IP 129.146.6.204/);
+    ).not.toThrow();
   });
 
   it("strictly blocks production host patterns", () => {
@@ -161,63 +156,145 @@ describe("assertSafeNonProductionDatabase", () => {
   });
 });
 
-describe("assertDatabaseStagingMarker", () => {
-  it("rejects database without staging marker when allowMarkerInit is false", async () => {
-    const fakeSql = vi.fn().mockImplementation((strings: TemplateStringsArray) => {
-      const q = strings.join(" ");
-      if (q.includes("information_schema.tables")) {
-        return Promise.resolve([{ exists: false }]);
-      }
-      if (q.includes("current_setting")) {
-        return Promise.resolve([{ env: null }]);
-      }
-      if (q.includes("current_database")) {
-        return Promise.resolve([{ current_database: "test_db" }]);
-      }
-      return Promise.resolve([]);
-    });
+describe("assertDatabaseServerIdentity", () => {
+  const identityRow =
+    (system_identifier: string | null, server_addr: string | null = "10.0.0.5") =>
+    () => [{ system_identifier, server_addr, database: "matchday_staging" }];
 
+  it("accepts a server whose system_identifier is allowlisted", async () => {
     await expect(
-      assertDatabaseStagingMarker(fakeSql as unknown as Parameters<typeof assertDatabaseStagingMarker>[0], false),
-    ).rejects.toThrow(/lacks a verified 'this is staging' marker in table 'staging_environment_markers'/);
+      assertDatabaseServerIdentity(fakeSql(identityRow(STAGING_ID)), new Set([STAGING_ID])),
+    ).resolves.toMatchObject({ systemIdentifier: STAGING_ID });
   });
 
-  it("accepts database when staging marker table exists and has is_staging = true", async () => {
-    const fakeSql = vi.fn().mockImplementation((strings: TemplateStringsArray) => {
-      const q = strings.join(" ");
-      if (q.includes("information_schema.tables")) {
-        return Promise.resolve([{ exists: true }]);
-      }
-      if (q.includes("staging_environment_markers")) {
-        return Promise.resolve([{ is_staging: true, environment: "staging" }]);
-      }
-      return Promise.resolve([]);
-    });
-
+  it("refuses a tunnelled/other cluster whose system_identifier is not allowlisted", async () => {
     await expect(
-      assertDatabaseStagingMarker(fakeSql as unknown as Parameters<typeof assertDatabaseStagingMarker>[0], false),
-    ).resolves.toBeUndefined();
+      assertDatabaseServerIdentity(fakeSql(identityRow(OTHER_ID, "127.0.0.1")), new Set([STAGING_ID])),
+    ).rejects.toThrow(/not in STAGING_DB_SYSTEM_IDENTIFIERS/);
   });
 
-  it("initializes staging marker table when allowMarkerInit is true", async () => {
-    const executedQueries: string[] = [];
-    const fakeSql = vi.fn().mockImplementation((strings: TemplateStringsArray) => {
-      const q = strings.join(" ");
-      executedQueries.push(q);
-      if (q.includes("information_schema.tables")) {
-        return Promise.resolve([{ exists: false }]);
-      }
-      if (q.includes("current_setting")) {
-        return Promise.resolve([{ env: null }]);
-      }
-      return Promise.resolve([]);
-    });
-
-    await expect(
-      assertDatabaseStagingMarker(fakeSql as unknown as Parameters<typeof assertDatabaseStagingMarker>[0], true),
-    ).resolves.toBeUndefined();
-    expect(executedQueries.some((q) => q.includes("CREATE TABLE IF NOT EXISTS staging_environment_markers"))).toBe(
-      true,
+  it("fails closed when the allowlist is empty", async () => {
+    await expect(assertDatabaseServerIdentity(fakeSql(identityRow(STAGING_ID)), new Set())).rejects.toThrow(
+      /STAGING_DB_SYSTEM_IDENTIFIERS is empty/,
     );
+  });
+
+  it("refuses when the server reports the production address", async () => {
+    await expect(
+      assertDatabaseServerIdentity(fakeSql(identityRow(STAGING_ID, BLOCKED_PRODUCTION_IP)), new Set([STAGING_ID])),
+    ).rejects.toThrow(/reports address 129.146.6.204/);
+  });
+
+  it("fails closed when the identity query errors or returns no identifier", async () => {
+    const erroring = fakeSql(() => {
+      throw new Error("permission denied for function pg_control_system");
+    });
+    await expect(assertDatabaseServerIdentity(erroring, new Set([STAGING_ID]))).rejects.toThrow(
+      /Unable to read database server identity/,
+    );
+    await expect(assertDatabaseServerIdentity(fakeSql(identityRow(null)), new Set([STAGING_ID]))).rejects.toThrow(
+      /did not report a system_identifier/,
+    );
+  });
+
+  it("parses the allowlist from env, ignoring non-numeric entries", () => {
+    expect([...parseStagingSystemIdentifierAllowlist(` ${STAGING_ID}, ,abc,${OTHER_ID}`)]).toEqual([
+      STAGING_ID,
+      OTHER_ID,
+    ]);
+    expect(parseStagingSystemIdentifierAllowlist(undefined).size).toBe(0);
+  });
+});
+
+describe("assertDatabaseStagingMarker", () => {
+  it("rejects a database without a marker and never creates one", async () => {
+    const executed: string[] = [];
+    const sql = fakeSql((q) => {
+      if (q.includes("information_schema.tables")) return [{ exists: false }];
+      if (q.includes("current_database")) return [{ current_database: "test_db" }];
+      return [];
+    }, executed);
+
+    await expect(assertDatabaseStagingMarker(sql, STAGING_ID)).rejects.toThrow(
+      /lacks a verified 'this is staging' marker in table 'staging_environment_markers'.*never creates/,
+    );
+    expect(executed.some((q) => /CREATE TABLE|INSERT INTO/i.test(q))).toBe(false);
+  });
+
+  it("ignores INIT_STAGING_MARKER / --init-staging-marker (removed path)", async () => {
+    process.env.INIT_STAGING_MARKER = "1";
+    process.argv.push("--init-staging-marker");
+    const executed: string[] = [];
+    try {
+      const sql = fakeSql((q) => {
+        if (q.includes("information_schema.tables")) return [{ exists: false }];
+        if (q.includes("current_database")) return [{ current_database: "test_db" }];
+        return [];
+      }, executed);
+      await expect(assertDatabaseStagingMarker(sql, STAGING_ID)).rejects.toThrow(/lacks a verified/);
+      expect(executed.some((q) => /CREATE TABLE|INSERT INTO/i.test(q))).toBe(false);
+    } finally {
+      delete process.env.INIT_STAGING_MARKER;
+      process.argv.splice(process.argv.indexOf("--init-staging-marker"), 1);
+    }
+  });
+
+  it("accepts a marker bound to the connected server's system_identifier", async () => {
+    const sql = fakeSql((q) => {
+      if (q.includes("information_schema.tables")) return [{ exists: true }];
+      if (q.includes("staging_environment_markers"))
+        return [{ is_staging: true, environment: "staging", system_identifier: STAGING_ID }];
+      return [];
+    });
+    await expect(assertDatabaseStagingMarker(sql, STAGING_ID)).resolves.toBeUndefined();
+  });
+
+  it("rejects a marker bound to a different cluster (e.g. restored dump)", async () => {
+    const sql = fakeSql((q) => {
+      if (q.includes("information_schema.tables")) return [{ exists: true }];
+      if (q.includes("staging_environment_markers"))
+        return [{ is_staging: true, environment: "staging", system_identifier: OTHER_ID }];
+      return [];
+    });
+    await expect(assertDatabaseStagingMarker(sql, STAGING_ID)).rejects.toThrow(/bound to system_identifier/);
+  });
+
+  it("rejects a marker row that is not marked as staging", async () => {
+    const sql = fakeSql((q) => {
+      if (q.includes("information_schema.tables")) return [{ exists: true }];
+      if (q.includes("staging_environment_markers"))
+        return [{ is_staging: false, environment: "production", system_identifier: STAGING_ID }];
+      return [];
+    });
+    await expect(assertDatabaseStagingMarker(sql, STAGING_ID)).rejects.toThrow(/not marked as staging/);
+  });
+});
+
+describe("markStagingDatabase (operator step)", () => {
+  it("refuses production URLs before connecting", async () => {
+    const confirm = vi.fn();
+    await expect(
+      markStagingDatabase({
+        databaseUrl: `postgres://u:p@${BLOCKED_PRODUCTION_IP}:5432/matchday`,
+        confirm,
+        log: () => undefined,
+      }),
+    ).rejects.toThrow(/blocked production IP/);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("refuses when APP_ENV is production", async () => {
+    process.env.APP_ENV = "production";
+    try {
+      await expect(
+        markStagingDatabase({
+          databaseUrl: "postgres://u:p@127.0.0.1:5432/matchday_staging",
+          confirm: vi.fn(),
+          log: () => undefined,
+        }),
+      ).rejects.toThrow(/production environment/);
+    } finally {
+      delete process.env.APP_ENV;
+    }
   });
 });

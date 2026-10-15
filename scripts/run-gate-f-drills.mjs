@@ -34,7 +34,7 @@ import { runGateFOpsAudit } from "./run-gate-f-ops-audit.mjs";
 import { runGateFRecertifications } from "./run-gate-f-recertifications.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const artifactsDir = path.join(root, "artifacts");
+const defaultArtifactsDir = path.join(root, "artifacts");
 
 export function resolveCandidateSha(inputSha) {
   if (typeof inputSha === "string" && inputSha.trim().length > 0) {
@@ -64,104 +64,124 @@ export function resolveCandidateSha(inputSha) {
   );
 }
 
+export const PENDING_VERDICT = "PENDING_PRODUCTION_DRILLS";
+
+const defaultRunners = {
+  certifyGateFMigrations,
+  runGateFRollbackDrill,
+  runGateFBackupRestoreAudit,
+  runGateFCachePurgeAudit,
+  runGateFOpsAudit,
+  runGateFRecertifications,
+};
+
+/**
+ * Overall verdict is PASS only when every check executed and reported exactly "PASS".
+ * Any FAIL -> FAIL. Anything else (PENDING, NOT_EXECUTED, PASS_WITH_DEFERMENT, ...) -> PENDING_PRODUCTION_DRILLS.
+ * The pending verdict intentionally contains no "PASS" substring.
+ */
+export function deriveOverallVerdict(checks) {
+  const entries = Object.entries(checks);
+  if (entries.some(([, verdict]) => verdict === "FAIL")) return "FAIL";
+  if (entries.length > 0 && entries.every(([, verdict]) => verdict === "PASS")) return "PASS";
+  return PENDING_VERDICT;
+}
+
 export async function runGateFDrills(candidateSha, options = {}) {
   const sha = resolveCandidateSha(candidateSha);
+  const artifactsDir = options.artifactsDir ?? defaultArtifactsDir;
+  const log = options.log ?? console.log;
+  const runners = { ...defaultRunners, ...(options.runners ?? {}) };
+  const {
+    certifyGateFMigrations: certifyMigrations,
+    runGateFRollbackDrill: runRollback,
+    runGateFBackupRestoreAudit: runBackup,
+    runGateFCachePurgeAudit: runCache,
+    runGateFOpsAudit: runOps,
+    runGateFRecertifications: runRecerts,
+  } = runners;
   await mkdir(artifactsDir, { recursive: true });
 
-  console.log("════════════════════════════════════════════════════════════");
-  console.log(" Track R8: Gate F Recertification Drills Suite");
-  console.log(` Candidate SHA:     ${sha}`);
-  console.log(" Assurance Profile: automated-only-owner-waived-v2 (ADR 0005)");
-  console.log("════════════════════════════════════════════════════════════\n");
+  log("════════════════════════════════════════════════════════════");
+  log(" Track R8: Gate F Recertification Drills Suite");
+  log(` Candidate SHA:     ${sha}`);
+  log(" Assurance Profile: automated-only-owner-waived-v2 (ADR 0005)");
+  log("════════════════════════════════════════════════════════════\n");
 
   // 1. Migration Expand-Contract Certification (OPS-003, OPS-010)
-  console.log("[Drill 1/6] Running Database Migration Expand-Contract Certification...");
-  const migrationResult = await certifyGateFMigrations(sha, { artifactsDir });
-  console.log(`  ✓ Migrations Verified: ${migrationResult.migration_count} files (${migrationResult.verdict})\n`);
+  log("[Drill 1/6] Running Database Migration Expand-Contract Certification...");
+  const migrationResult = await certifyMigrations(sha, { artifactsDir });
+  log(`  Migrations: ${migrationResult.migration_count} files (${migrationResult.verdict})\n`);
 
   // 2. Automated Rollback Drill (OPS-002)
-  console.log("[Drill 2/6] Running Automated Zero-Downtime Rollback Drill...");
-  const rollbackResult = await runGateFRollbackDrill(sha, {
+  log("[Drill 2/6] Running Automated Zero-Downtime Rollback Drill...");
+  const rollbackResult = await runRollback(sha, {
     artifactsDir,
     evidenceFile: options.rollbackEvidenceFile,
   });
-  console.log(
-    `  ✓ Rollback Simulation: ${rollbackResult.simulation_result} (Scoring Availability: ${rollbackResult.scoring_availability})\n`,
+  log(
+    `  Rollback: ${rollbackResult.simulation_result} (Scoring Availability: ${rollbackResult.scoring_availability})\n`,
   );
 
   // 3. Backup & Isolated Restore Drill (OPS-001)
-  console.log("[Drill 3/6] Running Database Backup and Isolated Restore Drill...");
-  const backupResult = await runGateFBackupRestoreAudit(sha, {
+  log("[Drill 3/6] Running Database Backup and Isolated Restore Drill...");
+  const backupResult = await runBackup(sha, {
     artifactsDir,
     evidenceFile: options.backupEvidenceFile,
   });
-  console.log(`  ✓ Backup/Restore Audit Status: ${backupResult.verdict}\n`);
+  log(`  Backup/Restore Audit Status: ${backupResult.verdict}\n`);
 
   // 4. CDN / Edge Cache Purge Drill (OPS-009)
-  console.log("[Drill 4/6] Running Edge Cache / CDN Purge Invalidation Drill...");
-  const cacheResult = await runGateFCachePurgeAudit(sha, {
+  log("[Drill 4/6] Running Edge Cache / CDN Purge Invalidation Drill...");
+  const cacheResult = await runCache(sha, {
     artifactsDir,
     evidenceFile: options.cacheEvidenceFile,
   });
-  console.log(`  ✓ Cache Invalidation Protocol: ${cacheResult.protocol_verification}\n`);
+  log(`  Cache Invalidation Protocol: ${cacheResult.protocol_verification}\n`);
 
-  // 5. Operations & Alert Routing Drill (OPS-004, OPS-005, OPS-007, OPS-008)
-  console.log("[Drill 5/6] Running Operations Baseline & Alert Routing Drill...");
-  const opsResult = await runGateFOpsAudit(sha, {
+  // 5. Operations & Alert Routing Drill (OPS-004, OPS-005, OPS-007, OPS-008, OPS-018)
+  log("[Drill 5/6] Running Operations Baseline & Alert Routing Drill...");
+  const opsResult = await runOps(sha, {
     artifactsDir,
     sloEvidenceFile: options.sloEvidenceFile,
     alertEvidenceFile: options.alertEvidenceFile,
     costEvidenceFile: options.costEvidenceFile,
   });
-  console.log(`  ✓ Alert Routing Protocol: ${opsResult.alertRouting.protocol_verification}`);
-  console.log(`  ✓ SLO Protocol Baseline:  ${opsResult.sloBaseline.protocol_verification}\n`);
+  log(`  Alert Routing Protocol: ${opsResult.alertRouting.protocol_verification}`);
+  log(`  SLO Protocol Baseline:  ${opsResult.sloBaseline.protocol_verification}\n`);
 
   // 6. Recertifications (DNS/TLS, Security, SEO, Email, A11y, Legal)
-  console.log("[Drill 6/6] Running Gate F Recertifications Suite...");
-  const recertsResult = await runGateFRecertifications(sha, {
+  log("[Drill 6/6] Running Gate F Recertifications Suite...");
+  const recertsResult = await runRecerts(sha, {
     artifactsDir,
     dnsTlsEvidenceFile: options.dnsTlsEvidenceFile,
     seoEvidenceFile: options.seoEvidenceFile,
     emailEvidenceFile: options.emailEvidenceFile,
   });
-  console.log(`  ✓ Security Audit:  ${recertsResult.security.verdict}`);
-  console.log(`  ✓ Legal Technical: ${recertsResult.legal.verdict}\n`);
+  log(`  Security Audit:  ${recertsResult.security.verdict}`);
+  log(`  Legal Technical: ${recertsResult.legal.verdict}\n`);
 
-  // Check for any FAIL results
-  const anyFailed =
-    migrationResult.verdict === "FAIL" ||
-    rollbackResult.verdict === "FAIL" ||
-    backupResult.verdict === "FAIL" ||
-    cacheResult.verdict === "FAIL" ||
-    opsResult.alertRouting.verdict === "FAIL" ||
-    opsResult.sloBaseline.verdict === "FAIL" ||
-    opsResult.costControls.verdict === "FAIL" ||
-    recertsResult.dnsTls.verdict === "FAIL" ||
-    recertsResult.security.verdict === "FAIL" ||
-    recertsResult.seo.verdict === "FAIL" ||
-    recertsResult.email.verdict === "FAIL" ||
-    recertsResult.a11y.verdict === "FAIL" ||
-    recertsResult.legal.verdict === "FAIL";
-
-  // Determine dynamic overall verdict from actual execution results
-  const allLiveDrillsPassed =
-    !anyFailed &&
-    migrationResult.verdict === "PASS" &&
-    rollbackResult.verdict === "PASS" &&
-    backupResult.verdict === "PASS" &&
-    cacheResult.verdict === "PASS" &&
-    opsResult.alertRouting.verdict === "PASS" &&
-    opsResult.sloBaseline.verdict === "PASS" &&
-    opsResult.costControls.verdict === "PASS" &&
-    recertsResult.dnsTls.verdict === "PASS" &&
-    recertsResult.seo.verdict === "PASS" &&
-    recertsResult.email.verdict === "PASS";
-
-  const overallVerdict = anyFailed
-    ? "FAIL"
-    : allLiveDrillsPassed
-      ? "PASS"
-      : "CONFIG_AND_CONTRACT_AUDIT_PASS_PRODUCTION_DRILLS_PENDING";
+  // Every check counts toward the overall verdict; none are silently excluded.
+  const checks = {
+    migration_expand_contract: migrationResult.verdict,
+    zero_downtime_rollback: rollbackResult.verdict,
+    backup_restore: backupResult.verdict,
+    edge_cache_purge: cacheResult.verdict,
+    alert_routing: opsResult.alertRouting.verdict,
+    slo_baseline: opsResult.sloBaseline.verdict,
+    cost_controls: opsResult.costControls.verdict,
+    feature_flags: opsResult.featureFlags?.verdict ?? "NOT_EXECUTED",
+    dns_tls: recertsResult.dnsTls.verdict,
+    security: recertsResult.security.verdict,
+    seo: recertsResult.seo.verdict,
+    email: recertsResult.email.verdict,
+    accessibility: recertsResult.a11y.verdict,
+    legal: recertsResult.legal.verdict,
+  };
+  const overallVerdict = deriveOverallVerdict(checks);
+  const nonPassingChecks = Object.entries(checks)
+    .filter(([, verdict]) => verdict !== "PASS")
+    .map(([name, verdict]) => ({ check: name, verdict }));
 
   // Aggregate Drill Artifact
   const receipt = {
@@ -193,6 +213,8 @@ export async function runGateFDrills(candidateSha, options = {}) {
         slo_baseline_verified: opsResult.sloBaseline.protocol_verification,
         alert_routing_verdict: opsResult.alertRouting.verdict,
         slo_baseline_verdict: opsResult.sloBaseline.verdict,
+        cost_controls_verdict: opsResult.costControls.verdict,
+        feature_flags_verdict: checks.feature_flags,
       },
       security_recertification: {
         dependency_audit: recertsResult.security.dependency_audit,
@@ -203,6 +225,9 @@ export async function runGateFDrills(candidateSha, options = {}) {
       legal_compliance: {
         disposition: recertsResult.legal.disposition,
         verdict: recertsResult.legal.verdict,
+      },
+      accessibility: {
+        verdict: recertsResult.a11y.verdict,
       },
     },
     human_waivers: {
@@ -215,6 +240,8 @@ export async function runGateFDrills(candidateSha, options = {}) {
     legal_approval: "DEFERRED_TO_FIRST_COMMERCIAL_RELEASE",
     simulation_environment: "staging_rehearsal_suite",
     verdict: overallVerdict,
+    checks,
+    non_passing_checks: nonPassingChecks,
     status_summary: {
       migration_safety: migrationResult.verdict === "PASS" ? "STATIC_CONTRACT_AUDIT_PASS" : migrationResult.verdict,
       zero_downtime_rollback: rollbackResult.drill_executed
@@ -257,24 +284,29 @@ export async function runGateFDrills(candidateSha, options = {}) {
   const receiptFile = path.join(artifactsDir, "gate-f-drills-receipt.json");
   await writeFile(receiptFile, JSON.stringify(receipt, null, 2));
 
-  console.log("════════════════════════════════════════════════════════════");
-  console.log(" Gate F Recertification Drills Summary");
-  console.log("════════════════════════════════════════════════════════════");
-  console.log(` Migration Safety:      ${receipt.drills.migration_expand_contract.verdict} (Static Contract Audit)`);
-  console.log(
+  log("════════════════════════════════════════════════════════════");
+  log(" Gate F Recertification Drills Summary");
+  log("════════════════════════════════════════════════════════════");
+  log(` Migration Safety:      ${receipt.drills.migration_expand_contract.verdict} (Static Contract Audit)`);
+  log(
     ` Rollback Drill:        ${receipt.drills.zero_downtime_rollback.simulation_result} (${receipt.drills.zero_downtime_rollback.scoring_availability})`,
   );
-  console.log(` Backup/Restore Drill:  ${receipt.drills.backup_restore.verdict}`);
-  console.log(` Cache Purge Drill:     ${receipt.drills.edge_cache_purge.verdict} (Config Audit Only)`);
-  console.log(
+  log(` Backup/Restore Drill:  ${receipt.drills.backup_restore.verdict}`);
+  log(` Cache Purge Drill:     ${receipt.drills.edge_cache_purge.verdict} (Config Audit Only)`);
+  log(
     ` Alert Routing Drill:   ${receipt.drills.operations_alerting.alert_routing_verdict ?? "PENDING"} (Config Audit Only)`,
   );
-  console.log(` Security Audit:        ${receipt.drills.security_recertification.verdict}`);
-  console.log(` Legal Compliance:      ${receipt.drills.legal_compliance.verdict}`);
-  console.log(` Overall Verdict:       ${receipt.verdict}`);
-  console.log(` Content Fingerprint:   ${receipt.content_fingerprint_sha256}`);
-  console.log(` Artifact Saved:        ${receiptFile}`);
-  console.log("════════════════════════════════════════════════════════════\n");
+  log(` Security Audit:        ${receipt.drills.security_recertification.verdict}`);
+  log(` Legal Compliance:      ${receipt.drills.legal_compliance.verdict}`);
+  log(` Accessibility:         ${receipt.drills.accessibility.verdict}`);
+  log(` Feature Flags:         ${receipt.drills.operations_alerting.feature_flags_verdict}`);
+  log(` Overall Verdict:       ${receipt.verdict}`);
+  if (nonPassingChecks.length > 0) {
+    log(` Not passing:           ${nonPassingChecks.map((c) => `${c.check}=${c.verdict}`).join(", ")}`);
+  }
+  log(` Content Fingerprint:   ${receipt.content_fingerprint_sha256}`);
+  log(` Artifact Saved:        ${receiptFile}`);
+  log("════════════════════════════════════════════════════════════\n");
 
   return receipt;
 }
@@ -286,6 +318,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       if (receipt.verdict === "FAIL") {
         console.error(`\n[FAILURE] Gate F drills overall verdict is FAIL.`);
         process.exit(1);
+      }
+      if (receipt.verdict !== "PASS") {
+        console.warn(
+          `\n[NOT CERTIFIED] Overall verdict is ${receipt.verdict}: ${receipt.non_passing_checks.length} check(s) did not execute or did not pass. ` +
+            "This run is NOT Gate F certification evidence. Exiting 0 because no check FAILED.",
+        );
       }
       process.exit(0);
     })

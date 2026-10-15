@@ -10,7 +10,6 @@
  * changes hit production.
  */
 
-import os from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,182 +22,19 @@ import type { PostgresJsSql } from "@matchday/identity";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
 
-export const BLOCKED_PRODUCTION_IP = "129.146.6.204";
+import {
+  assertDatabaseServerIdentity,
+  assertDatabaseStagingMarker,
+  assertSafeNonProductionDatabase,
+} from "./staging-db-guards.js";
 
-export const DEFAULT_ALLOWED_STAGING_SERVERS = [
-  "localhost",
-  "127.0.0.1",
-  "::1",
-  "0.0.0.0",
-  "staging.matchday.internal",
-  "staging-db.matchday.internal",
-  "matchday-staging",
-  "staging.internal",
-  "staging-db.internal",
-];
-
-function checkLocalNetworkInterfaces(): void {
-  const interfaces = os.networkInterfaces();
-  for (const [name, addrs] of Object.entries(interfaces)) {
-    if (!addrs) continue;
-    for (const addr of addrs) {
-      if (addr.address === BLOCKED_PRODUCTION_IP) {
-        throw new Error(
-          `Safety guard triggered: Host network interface "${name}" has production IP ${BLOCKED_PRODUCTION_IP}. Seeding is strictly forbidden on the production host.`,
-        );
-      }
-    }
-  }
-}
-
-function checkSshSession(): void {
-  const sshVars = [process.env.SSH_CLIENT, process.env.SSH_CONNECTION, process.env.SSH_TTY];
-  for (const val of sshVars) {
-    if (val && val.includes(BLOCKED_PRODUCTION_IP)) {
-      throw new Error(
-        `Safety guard triggered: Active SSH session contains production IP ${BLOCKED_PRODUCTION_IP}. Seeding is strictly forbidden across SSH tunnels or sessions to production.`,
-      );
-    }
-  }
-}
-
-export function assertSafeNonProductionDatabase(rawUrl: string, allowStagingFlag = false): void {
-  if (process.env.APP_ENV === "production" || process.env.NODE_ENV === "production") {
-    throw new Error(
-      "Safety guard triggered: Seed script cannot run in production environment (APP_ENV or NODE_ENV is 'production').",
-    );
-  }
-
-  checkLocalNetworkInterfaces();
-  checkSshSession();
-
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error(`Invalid database URL format: "${rawUrl}"`);
-  }
-
-  const hostname = parsed.hostname.toLowerCase();
-  const dbName = parsed.pathname.replace(/^\//, "").toLowerCase();
-
-  if (hostname === BLOCKED_PRODUCTION_IP || parsed.host.includes(BLOCKED_PRODUCTION_IP)) {
-    throw new Error(
-      `Safety guard triggered: Database host matches blocked production IP ${BLOCKED_PRODUCTION_IP}. Seeding aborted.`,
-    );
-  }
-
-  const blockedHostPatterns = [
-    "poladex.shop",
-    "onrender.com",
-    "neon.tech",
-    "aws",
-    "rds",
-    "supabase",
-    "prod",
-    "production",
-  ];
-
-  for (const pattern of blockedHostPatterns) {
-    if (hostname.includes(pattern)) {
-      throw new Error(
-        `Safety guard triggered: Database host "${hostname}" matches protected production pattern "${pattern}". Seeding aborted.`,
-      );
-    }
-  }
-
-  if (dbName.includes("prod") || dbName.includes("production")) {
-    throw new Error(
-      `Safety guard triggered: Database name "${dbName}" matches protected production keyword. Seeding aborted.`,
-    );
-  }
-
-  const customAllowed = (process.env.ALLOWED_STAGING_SERVERS ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  const allowedSet = new Set([...DEFAULT_ALLOWED_STAGING_SERVERS, ...customAllowed]);
-
-  if (!allowedSet.has(hostname)) {
-    throw new Error(
-      `Safety guard triggered: Database host "${hostname}" is not in the allowed staging servers whitelist (${Array.from(allowedSet).join(", ")}).`,
-    );
-  }
-
-  const isLoopback =
-    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "0.0.0.0";
-
-  const allowStaging =
-    allowStagingFlag || process.env.ALLOW_STAGING_SEED === "1" || process.argv.includes("--allow-staging-seed");
-
-  if (!isLoopback && !allowStaging) {
-    throw new Error(
-      `Safety guard triggered: Database host "${hostname}" is a non-loopback host. ` +
-        `Seeding a remote/staging database requires explicit confirmation via '--allow-staging-seed' CLI flag or 'ALLOW_STAGING_SEED=1' env.`,
-    );
-  }
-}
-
-export async function assertDatabaseStagingMarker(sql: Sql, allowMarkerInit = false): Promise<void> {
-  const tableCheck = await sql<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1 FROM information_schema.tables 
-      WHERE table_schema = current_schema() AND table_name = 'staging_environment_markers'
-    ) AS exists;
-  `;
-
-  if (tableCheck[0]?.exists) {
-    const rows = await sql<{ is_staging: boolean; environment: string }[]>`
-      SELECT is_staging, environment FROM staging_environment_markers LIMIT 1;
-    `;
-    if (rows.length > 0 && (rows[0]!.is_staging === true || rows[0]!.environment === "staging")) {
-      return;
-    }
-    throw new Error(
-      "Safety guard triggered: Database marker table 'staging_environment_markers' exists but is not marked as staging.",
-    );
-  }
-
-  try {
-    const settingRows = await sql<{ env: string | null }[]>`
-      SELECT current_setting('matchday.environment', true) AS env;
-    `;
-    if (settingRows[0]?.env === "staging") {
-      return;
-    }
-  } catch {
-    // Ignore setting query errors
-  }
-
-  const allowInit =
-    allowMarkerInit || process.env.INIT_STAGING_MARKER === "1" || process.argv.includes("--init-staging-marker");
-
-  if (allowInit) {
-    await sql`
-      CREATE TABLE IF NOT EXISTS staging_environment_markers (
-        id text PRIMARY KEY,
-        is_staging boolean NOT NULL DEFAULT true,
-        environment text NOT NULL DEFAULT 'staging',
-        created_at timestamptz NOT NULL DEFAULT now()
-      );
-    `;
-    await sql`
-      INSERT INTO staging_environment_markers (id, is_staging, environment)
-      VALUES ('primary_marker', true, 'staging')
-      ON CONFLICT (id) DO UPDATE SET is_staging = true, environment = 'staging';
-    `;
-    return;
-  }
-
-  const [dbNameRow] = await sql<{ current_database: string }[]>`SELECT current_database();`;
-  const dbName = dbNameRow?.current_database ?? "unknown";
-
-  throw new Error(
-    `Safety guard triggered: Database "${dbName}" lacks a verified 'this is staging' marker in table 'staging_environment_markers'. ` +
-      `Seeding cannot proceed without a staging environment marker. ` +
-      `To initialize this database as staging, provide '--init-staging-marker' or set INIT_STAGING_MARKER=1.`,
-  );
-}
+export {
+  BLOCKED_PRODUCTION_IP,
+  DEFAULT_ALLOWED_STAGING_SERVERS,
+  assertDatabaseServerIdentity,
+  assertDatabaseStagingMarker,
+  assertSafeNonProductionDatabase,
+} from "./staging-db-guards.js";
 
 function fourEntryEliminationDefinition(
   formatRevisionId: string,
@@ -256,7 +92,7 @@ function fourEntryEliminationDefinition(
 }
 
 export async function seedStagingProductionReplica(
-  options: { databaseUrl?: string; verbose?: boolean; allowStaging?: boolean; allowInitMarker?: boolean } = {},
+  options: { databaseUrl?: string; verbose?: boolean; allowStaging?: boolean } = {},
 ) {
   const url = options.databaseUrl ?? databaseUrl;
   assertSafeNonProductionDatabase(url, options.allowStaging);
@@ -273,8 +109,11 @@ export async function seedStagingProductionReplica(
     log(` Target Database: ${url.replace(/:[^:@]+@/, ":***@")}`);
     log("============================================================\n");
 
-    // Guard: Verify Staging Marker before writing anything
-    await assertDatabaseStagingMarker(sql, options.allowInitMarker);
+    // Guards (before any write): the connected server must be an allowlisted staging cluster
+    // (covers tunnels/port-forwards), and must carry an operator-created marker bound to that cluster.
+    const identity = await assertDatabaseServerIdentity(sql);
+    log(` Server identity: system_identifier=${identity.systemIdentifier} database=${identity.database}`);
+    await assertDatabaseStagingMarker(sql, identity.systemIdentifier);
 
     // 1. Ensure active sport packs for all five sports
     log("[1/6] Verifying active sport pack versions for all 5 sports...");

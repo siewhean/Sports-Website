@@ -50,6 +50,7 @@
     "test:visual": "pnpm --filter @matchday/web test:visual",
     "seed:staging:pilot": "pnpm --filter @matchday/api exec tsx scripts/seed-staging-pilot.ts",
     "seed:staging:replica": "pnpm --filter @matchday/api exec tsx scripts/seed-staging-production-replica.ts",
+    "staging:mark-database": "pnpm --filter @matchday/api exec tsx scripts/staging-mark-database.ts",
     "simulate:tournament": "pnpm --filter @matchday/api exec tsx scripts/simulate-tournament.ts",
     "test:env-templates": "pnpm --filter @matchday/config build && node --test scripts/env-templates.test.mjs",
     "simulate:tournament:fast": "pnpm --filter @matchday/api exec tsx scripts/simulate-tournament.ts --profile=fast",
