@@ -122,7 +122,7 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
   await page.goto(`/organiser/competitions/${competitionId}/capacity`);
   const area = page.locator("fieldset").first();
   await area.getByLabel("Area name").fill("Court 1");
-  await expect(area.getByLabel("Match slot (minutes)")).toHaveValue("30");
+  await expect(area.getByLabel("Match slot (minutes)", { exact: true })).toHaveValue("30");
   await area.getByLabel("Date").first().fill("2027-08-01");
   await area.getByLabel("Starts", { exact: true }).first().fill("08:00");
   await area.getByLabel("Ends", { exact: true }).first().fill("18:00");
