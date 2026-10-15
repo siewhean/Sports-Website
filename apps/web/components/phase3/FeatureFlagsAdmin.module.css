@@ -114,7 +114,7 @@
 
 .ff-flag-item[aria-selected="true"] {
   border-color: var(--signal-strong);
-  background: #f0f4ec;
+  background: var(--field-bg);
 }
 
 .ff-flag-item__key {
@@ -181,18 +181,18 @@
 }
 
 .ff-badge--default {
-  background: #e6e6e2;
-  color: #3b3b38;
+  background: var(--surface-subtle);
+  color: var(--ink-muted);
 }
 
 .ff-badge--override {
-  background: #d8ecd2;
-  color: #1e5616;
+  background: var(--success-surface);
+  color: var(--success-ink);
 }
 
 .ff-badge--inherited {
-  background: #e2ebf6;
-  color: #1b4b7c;
+  background: var(--info-surface);
+  color: var(--info-ink);
 }
 
 .ff-form-grid {
@@ -241,7 +241,7 @@
   gap: 12px;
   align-items: center;
   padding: 12px 16px;
-  background: #faf9f6;
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   margin: 16px 0;
@@ -346,7 +346,7 @@
 .ff-modal h3 {
   margin: 0 0 10px;
   font-size: 1.2rem;
-  color: #744210;
+  color: var(--warning-ink);
 }
 
 .ff-modal p {
@@ -358,7 +358,7 @@
 .ff-diff-box {
   margin: 16px 0;
   padding: 12px 16px;
-  background: #fffaf0;
+  background: var(--warning-surface);
   border: 1px solid #f6e05e;
   border-radius: var(--radius-sm);
   display: grid;
@@ -378,20 +378,20 @@
 
 .ff-banner-success {
   padding: 12px 16px;
-  background: #f0fdf4;
-  border: 1px solid #86efac;
+  background: var(--success-surface);
+  border: 1px solid var(--success-line);
   border-radius: var(--radius-sm);
   margin-bottom: 20px;
-  color: #166534;
+  color: var(--success-ink);
 }
 
 .ff-banner-error {
   padding: 12px 16px;
-  background: #fef2f2;
-  border: 1px solid #fca5a5;
+  background: var(--danger-surface);
+  border: 1px solid var(--danger-line);
   border-radius: var(--radius-sm);
   margin-bottom: 20px;
-  color: #991b1b;
+  color: var(--danger-ink);
 }
 
 .ff-card__section-title {

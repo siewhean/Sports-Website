@@ -111,7 +111,7 @@
   width: 30px;
   height: 30px;
   margin-left: 4px;
-  border: 1px solid #91958f;
+  border: 1px solid var(--hairline);
   border-radius: 50%;
   background: var(--canvas);
   font-family: var(--font-mono);
@@ -143,7 +143,7 @@
 }
 .milestone > ol > li[data-complete="true"] button > span:first-child {
   border-color: var(--signal-strong);
-  color: #668100;
+  color: var(--success-ink);
 }
 .stepRail button:disabled {
   opacity: 0.54;
@@ -248,7 +248,7 @@
 .issueSummary {
   display: block;
   border-color: #e7b448;
-  background: #fffaf0;
+  background: var(--warning-surface);
 }
 .issueSummary ul {
   margin: 6px 0 0;
@@ -271,7 +271,7 @@
 .aiBrief > svg {
   width: 24px;
   height: 24px;
-  color: #6f8907;
+  color: var(--success-ink);
 }
 .aiBrief h2 {
   margin: 0;
@@ -290,7 +290,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0 16px;
   border: 1px solid var(--ink);
   background: var(--ink);
@@ -348,7 +348,7 @@
   width: 100%;
   min-height: var(--touch-target-min);
   padding: 10px 12px;
-  border: 1px solid #9ea19b;
+  border: 1px solid var(--field-border);
   border-radius: 4px;
   background: var(--surface);
   color: var(--ink);
@@ -408,7 +408,7 @@
 }
 .summaryRail {
   padding: 24px;
-  border: 1px solid #b9bbb5;
+  border: 1px solid var(--hairline);
   border-radius: 12px;
 }
 .summaryRail > p {
@@ -418,7 +418,7 @@
 }
 .summaryRail > strong {
   display: block;
-  color: #668100;
+  color: var(--success-ink);
   font-family: var(--font-mono);
   font-size: 3.7rem;
   font-weight: 450;
@@ -453,8 +453,8 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 44px;
-  color: #547000;
+  min-height: var(--touch-target-min);
+  color: var(--success-ink);
   font-size: 0.78rem;
   font-weight: 650;
   text-decoration: underline;
@@ -576,7 +576,7 @@
 }
 .recommendations button {
   justify-self: start;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   margin-top: 12px;
   padding: 0 16px;
   border: 1px solid var(--ink);
@@ -621,11 +621,11 @@
   height: 28px;
   border: 1px solid var(--warning);
   border-radius: 50%;
-  color: #946600;
+  color: var(--warning-ink);
 }
 .review li[data-ready="true"] > button > span:first-child {
   border-color: var(--signal-strong);
-  color: #668100;
+  color: var(--success-ink);
 }
 .review li svg {
   width: 16px;
@@ -738,7 +738,7 @@
   min-height: 86px;
   padding: 16px clamp(26px, 6vw, 86px);
   border-top: 1px solid var(--hairline);
-  background: rgb(255 255 255 / 96%);
+  background: var(--surface);
 }
 .actions button {
   display: inline-flex;
@@ -758,7 +758,7 @@
   transform: translateY(1px);
 }
 .back {
-  border: 1px solid #92958f;
+  border: 1px solid var(--hairline);
   background: var(--surface);
 }
 .continue {
@@ -899,7 +899,7 @@
     position: fixed;
     z-index: 3;
     padding: 12px 18px calc(12px + env(safe-area-inset-bottom));
-    background: rgb(255 255 255 / 98%);
+    background: var(--surface);
   }
   .actions button {
     min-height: 56px;

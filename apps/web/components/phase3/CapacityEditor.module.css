@@ -20,7 +20,7 @@
   justify-content: space-between;
   gap: 2rem;
   padding-bottom: 2rem;
-  border-bottom: 1px solid #d7d3c8;
+  border-bottom: 1px solid var(--hairline);
 }
 .editorHeader h2 {
   margin: 0.3rem 0 0.5rem;
@@ -30,7 +30,7 @@
 .editorHeader p:last-child {
   max-width: 62ch;
   margin: 0;
-  color: #5c5b55;
+  color: var(--ink-muted);
 }
 .kicker {
   margin: 0;
@@ -39,7 +39,7 @@
     monospace;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: #5c5b55;
+  color: var(--ink-muted);
 }
 .sourceNote {
   display: flex;
@@ -47,8 +47,8 @@
   align-items: flex-start;
   margin: 1.5rem 0 0;
   padding: 0.85rem 0;
-  border-bottom: 1px solid #d7d3c8;
-  color: #5c5b55;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink-muted);
   font-size: 0.88rem;
 }
 
@@ -57,7 +57,7 @@
   gap: 2rem;
   margin: 1.5rem 0 0;
   padding: 0 0 1rem;
-  border-bottom: 1px solid #d7d3c8;
+  border-bottom: 1px solid var(--hairline);
 }
 
 .sourceMeta div {
@@ -66,7 +66,7 @@
 }
 
 .sourceMeta dt {
-  color: #5c5b55;
+  color: var(--ink-muted);
   font-size: 0.72rem;
 }
 
@@ -90,7 +90,7 @@
   margin: 0;
   padding: 0 0 2.5rem;
   border: 0;
-  border-bottom: 1px solid #b9b5aa;
+  border-bottom: 1px solid var(--hairline);
 }
 .area legend {
   padding: 0 0 1.35rem;
@@ -110,18 +110,18 @@
   min-width: 0;
   font-size: 0.82rem;
   font-weight: 600;
-  color: #44443f;
+  color: var(--ink-muted);
 }
 .field input,
 .windowGroup input {
   width: 100%;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   box-sizing: border-box;
-  border: 1px solid #aaa79d;
+  border: 1px solid var(--field-border);
   border-radius: 0.45rem;
-  background: #fffef9;
+  background: var(--field-bg);
   padding: 0.65rem 0.75rem;
-  color: #20211f;
+  color: var(--ink);
   font:
     500 0.95rem/1.2 var(--font-geist-sans),
     sans-serif;
@@ -138,7 +138,7 @@
 .field small,
 .formError {
   margin: 0;
-  color: #8d2c20;
+  color: var(--danger-ink);
   font-size: 0.78rem;
   font-weight: 550;
 }
@@ -162,10 +162,10 @@
   gap: 0.75rem;
   align-items: end;
   padding: 0.9rem 0;
-  border-top: 1px solid #e2ded4;
+  border-top: 1px solid var(--hairline);
 }
 .windowRow {
-  border-top: 1px solid #e2ded4;
+  border-top: 1px solid var(--hairline);
 }
 .windowRow .window {
   border-top: 0;
@@ -175,27 +175,28 @@
 }
 .fieldHint {
   margin: 0;
-  color: #5c5b55;
+  color: var(--ink-muted);
   font-size: 0.76rem;
   font-weight: 450;
   line-height: 1.5;
 }
 .windowGroupHint {
   margin: 0.35rem 0 0.5rem;
-  color: #5c5b55;
+  color: var(--ink-muted);
   font-size: 0.76rem;
   font-weight: 450;
   line-height: 1.5;
 }
 .windowGroupSubtitle {
   margin: 0 0 0.5rem;
-  color: #5c5b55;
+  color: var(--ink-muted);
   font-size: 0.76rem;
   font-weight: 450;
   line-height: 1.5;
 }
 .checkbox {
-  min-height: 44px;
+  min-height: var(--touch-target-min);
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 0.65rem;
@@ -203,17 +204,18 @@
   font-weight: 600;
 }
 .checkbox input {
-  width: 44px;
-  height: 44px;
-  margin: 0;
-  accent-color: #8daa14;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin: 0 0 0 12px;
+  accent-color: var(--field-accent);
 }
 .primaryButton,
 .secondaryButton,
 .textButton,
 .iconButton,
 .removeArea {
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   border-radius: 0.45rem;
   font:
     650 0.84rem/1 var(--font-geist-sans),
@@ -230,7 +232,7 @@
   transform: translateY(1px);
 }
 .primaryButton {
-  border: 1px solid #20211f;
+  border: 1px solid var(--line-strong);
   background: #20211f;
   color: #fffef9;
   padding: 0 1.15rem;
@@ -239,9 +241,9 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  border: 1px solid #20211f;
+  border: 1px solid var(--line-strong);
   background: transparent;
-  color: #20211f;
+  color: var(--ink);
   padding: 0 1rem;
 }
 .textButton,
@@ -251,18 +253,18 @@
   gap: 0.4rem;
   border: 0;
   background: transparent;
-  color: #343530;
+  color: var(--ink-muted);
   padding: 0 0.35rem;
 }
 .removeArea {
   margin-top: 1rem;
-  color: #752c24;
+  color: var(--danger-ink);
 }
 .iconButton {
   width: 44px;
-  border: 1px solid #c4c0b6;
+  border: 1px solid var(--hairline);
   background: transparent;
-  color: #752c24;
+  color: var(--danger-ink);
 }
 .primaryButton:disabled,
 .secondaryButton:disabled,
@@ -278,17 +280,17 @@
   gap: 1rem;
   margin-top: 2rem;
   padding: 1rem 0;
-  border-top: 1px solid #b9b5aa;
+  border-top: 1px solid var(--hairline);
 }
 .actions span {
-  color: #5c5b55;
+  color: var(--ink-muted);
   font-size: 0.82rem;
 }
 .rail {
   position: sticky;
   top: 1.25rem;
   padding: 1.5rem 0 0;
-  border-top: 4px solid #20211f;
+  border-top: 4px solid var(--line-strong);
 }
 .rail > svg {
   width: 2rem;
@@ -308,10 +310,10 @@
   justify-content: space-between;
   gap: 1rem;
   padding: 0.95rem 0;
-  border-top: 1px solid #d7d3c8;
+  border-top: 1px solid var(--hairline);
 }
 .rail dt {
-  color: #5c5b55;
+  color: var(--ink-muted);
   font-size: 0.82rem;
 }
 .rail dd {
@@ -338,7 +340,7 @@
 .state p {
   max-width: 55ch;
   margin: 0;
-  color: #5c5b55;
+  color: var(--ink-muted);
 }
 .replan {
   grid-column: 1 / -1;
@@ -348,13 +350,13 @@
   border: 1px solid #b4541a;
   border-left-width: 4px;
   border-radius: 0.45rem;
-  background: #fff6ec;
-  color: #20211f;
+  background: var(--warning-surface);
+  color: var(--ink);
 }
 .replan > svg {
   width: 1.5rem;
   height: 1.5rem;
-  color: #8a3a0c;
+  color: var(--danger-ink);
 }
 .replan h2,
 .replan h3,
@@ -374,10 +376,10 @@
   gap: 0.35rem 0.9rem;
   align-items: baseline;
   padding: 0.5rem 0;
-  border-bottom: 1px solid #ead8c4;
+  border-bottom: 1px solid var(--warning-line);
 }
 .replanReason {
-  color: #8a3a0c;
+  color: var(--danger-ink);
   font-weight: 650;
 }
 .replanActions {

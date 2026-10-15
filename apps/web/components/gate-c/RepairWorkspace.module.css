@@ -1,7 +1,7 @@
 .workspace {
   display: grid;
   gap: 1rem;
-  color: var(--ink, #161b18);
+  color: var(--ink, var(--ink));
 }
 
 .live {
@@ -15,8 +15,8 @@
   padding: 0.875rem 1rem;
   border: 1px solid #b42318;
   border-radius: 0.75rem;
-  background: #fff1f0;
-  color: #7a271a;
+  background: var(--danger-surface);
+  color: var(--danger-ink);
 }
 
 .toolbar {
@@ -25,9 +25,9 @@
   gap: 1rem;
   align-items: end;
   padding: 1rem;
-  border: 1px solid #d8ddd9;
+  border: 1px solid var(--hairline);
   border-radius: 1rem;
-  background: #fff;
+  background: var(--surface);
 }
 
 .toolbar h2,
@@ -62,9 +62,9 @@
 .commands button,
 .exports button {
   min-height: 2.75rem;
-  border: 1px solid #aeb7b0;
+  border: 1px solid var(--field-border);
   border-radius: 0.65rem;
-  background: #fff;
+  background: var(--field-bg);
   color: inherit;
   font: inherit;
 }
@@ -110,9 +110,9 @@
   position: sticky;
   top: 1rem;
   overflow: hidden;
-  border: 1px solid #d8ddd9;
+  border: 1px solid var(--hairline);
   border-radius: 1rem;
-  background: #fff;
+  background: var(--surface);
 }
 
 .queue ol,
@@ -125,7 +125,7 @@
 }
 
 .queue li + li {
-  border-top: 1px solid #e6e9e7;
+  border-top: 1px solid var(--hairline);
 }
 
 .queue button {
@@ -142,7 +142,7 @@
 
 .queue button[aria-pressed="true"] {
   box-shadow: inset 4px 0 #176b45;
-  background: #eef8f2;
+  background: var(--success-surface);
 }
 
 .queue button span,
@@ -152,7 +152,7 @@
 }
 
 .queue button em {
-  color: #176b45;
+  color: var(--success-ink);
   font-size: 0.75rem;
   font-style: normal;
   font-weight: 750;
@@ -169,9 +169,9 @@
 .exports,
 .audit,
 .empty {
-  border: 1px solid #d8ddd9;
+  border: 1px solid var(--hairline);
   border-radius: 1rem;
-  background: #fff;
+  background: var(--surface);
 }
 
 .summary {
@@ -206,7 +206,7 @@
 
 .summary dt,
 .action dt {
-  color: #5d675f;
+  color: var(--ink-muted);
   font-size: 0.75rem;
 }
 
@@ -219,14 +219,14 @@
 .summary > strong {
   padding: 0.4rem 0.65rem;
   border-radius: 99px;
-  background: #fff4ce;
-  color: #6d4b00;
+  background: var(--warning-surface);
+  color: var(--warning-ink);
   font-size: 0.8rem;
 }
 
 .summary > strong[data-ready="true"] {
-  background: #dff6e8;
-  color: #0f5a38;
+  background: var(--success-surface);
+  color: var(--success-ink);
 }
 
 .actions {
@@ -260,7 +260,7 @@
 
 .action header p,
 .action header span {
-  color: #5d675f;
+  color: var(--ink-muted);
   font-size: 0.78rem;
   font-weight: 750;
 }
@@ -271,13 +271,13 @@
 }
 
 .reason {
-  color: #414a43;
+  color: var(--ink-muted);
 }
 
 .action details {
   padding: 0.7rem;
   border-radius: 0.65rem;
-  background: #f5f7f5;
+  background: var(--surface-subtle);
 }
 
 .action details summary {
@@ -322,13 +322,13 @@
 .adjustments {
   margin: 0;
   padding: 0.8rem;
-  border: 1px dashed #bec6c0;
+  border: 1px dashed var(--hairline);
   border-radius: 0.75rem;
 }
 
 .adjustments legend {
   padding: 0 0.35rem;
-  color: #5d675f;
+  color: var(--ink-muted);
   font-size: 0.8rem;
   font-weight: 750;
 }
@@ -375,7 +375,7 @@
   align-items: center;
   padding: 0.7rem;
   border-radius: 0.65rem;
-  background: #f5f7f5;
+  background: var(--surface-subtle);
 }
 
 .exports li span {
@@ -383,7 +383,7 @@
 }
 
 .exports li small {
-  color: #5d675f;
+  color: var(--ink-muted);
 }
 
 .audit {
@@ -401,12 +401,12 @@
   grid-template-columns: minmax(9rem, auto) minmax(10rem, 1fr) minmax(0, 2fr);
   gap: 0.75rem;
   padding-top: 0.6rem;
-  border-top: 1px solid #e6e9e7;
+  border-top: 1px solid var(--hairline);
 }
 
 .audit time,
 .audit span {
-  color: #5d675f;
+  color: var(--ink-muted);
 }
 
 .empty {
@@ -434,7 +434,7 @@
 
   .queue li {
     border-top: 0;
-    border-right: 1px solid #e6e9e7;
+    border-right: 1px solid var(--hairline);
     scroll-snap-align: start;
   }
 

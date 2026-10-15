@@ -2,6 +2,9 @@
   --chrome: #141716;
   --chrome-soft: #202321;
   --chrome-line: #3b3e3c;
+  /* Text on the always-dark chrome; --surface flips dark in dark mode. */
+  --chrome-ink: #f4f6f1;
+  --chrome-muted: #b9bfba;
   display: grid;
   grid-template-rows: 68px minmax(0, 1fr) 64px;
   min-height: 100dvh;
@@ -18,7 +21,7 @@
   padding: 0 18px;
   border-bottom: 1px solid var(--chrome-line);
   background: var(--chrome);
-  color: var(--surface);
+  color: var(--chrome-ink);
 }
 .context {
   display: flex;
@@ -123,11 +126,11 @@
   height: 17px;
 }
 .commandActions button {
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0 16px;
   border: 1px solid #4a4d4b;
   border-radius: 5px;
-  color: var(--surface);
+  color: var(--chrome-ink);
   font-size: 0.76rem;
   font-weight: 650;
 }
@@ -154,10 +157,10 @@
   display: flex;
   gap: 10px;
   align-items: center;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0 18px;
   border-bottom: 1px solid #d9b15a;
-  background: #fff8e8;
+  background: var(--warning-surface);
   font-size: 0.76rem;
 }
 .banner + .body {
@@ -179,7 +182,7 @@
   min-width: 0;
   overflow-y: auto;
   background: var(--chrome-soft);
-  color: var(--surface);
+  color: var(--chrome-ink);
 }
 .library {
   padding: 24px 16px;
@@ -208,7 +211,7 @@
   border: 0;
   border-bottom: 1px solid var(--chrome-line);
   background: transparent;
-  color: var(--surface);
+  color: var(--chrome-ink);
   text-align: left;
 }
 .library > button > span:first-child {
@@ -286,12 +289,12 @@
 }
 .connections path {
   fill: none;
-  stroke: #62665f;
+  stroke: var(--ink-muted);
   stroke-width: 2.5;
   marker-end: url(#phase4-arrow);
 }
 .connections marker path {
-  fill: #62665f;
+  fill: var(--ink-muted);
 }
 .stageNode {
   position: absolute;
@@ -429,12 +432,12 @@
 .inspectorForm select,
 .dialog input {
   width: 100%;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 9px 10px;
   border: 1px solid #555956;
   border-radius: 4px;
   background: #252826;
-  color: var(--surface);
+  color: var(--chrome-ink);
   font: inherit;
 }
 .inspectorForm label[data-issue="true"] input {
@@ -450,10 +453,10 @@
   gap: 8px;
   align-items: center;
   justify-content: center;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   border: 1px solid #696d69;
   background: transparent;
-  color: var(--surface);
+  color: var(--chrome-ink);
 }
 .removeStage svg {
   width: 17px;
@@ -507,11 +510,11 @@
   display: inline-flex;
   gap: 8px;
   align-items: center;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0 15px;
   border: 1px solid var(--ink);
   background: var(--ink);
-  color: var(--surface);
+  color: var(--chrome-ink);
 }
 .manual > header svg {
   width: 17px;
@@ -568,9 +571,9 @@
 .manual li input,
 .manual li select {
   width: 100%;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 8px 9px;
-  border: 1px solid #a7aaa4;
+  border: 1px solid var(--field-border);
   background: var(--surface);
   color: var(--ink);
   font-size: 0.75rem;
@@ -585,7 +588,7 @@
   padding: 8px 150px 8px 20px;
   border-top: 1px solid var(--chrome-line);
   background: var(--chrome);
-  color: var(--surface);
+  color: var(--chrome-ink);
 }
 .validationBar > div:first-child {
   display: flex;
@@ -621,11 +624,11 @@
   gap: 9px;
 }
 .validationActions button {
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0 14px;
   border: 1px solid #515451;
   background: transparent;
-  color: var(--surface);
+  color: var(--chrome-ink);
   font-size: 0.72rem;
 }
 .validationActions button:last-child:not(:disabled) {
@@ -686,7 +689,7 @@
   height: 20px;
 }
 .dialog input {
-  border-color: #9b9f99;
+  border-color: var(--field-border);
   background: var(--surface);
   color: var(--ink);
 }
@@ -744,7 +747,7 @@
   margin-top: 26px;
 }
 .dialog footer button {
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0 16px;
   border: 1px solid var(--ink);
   background: var(--surface);
@@ -784,11 +787,11 @@
   display: inline-flex;
   gap: 8px;
   align-items: center;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0 16px;
   border: 1px solid var(--ink);
   background: var(--ink);
-  color: var(--surface);
+  color: var(--chrome-ink);
 }
 .state svg {
   width: 18px;
