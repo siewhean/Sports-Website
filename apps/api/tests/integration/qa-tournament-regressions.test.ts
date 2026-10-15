@@ -6,6 +6,7 @@ import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { TransactionalCompetitionPublicationNotifier } from "../../src/competition-publication-notifier.js";
 import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
 import { Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
@@ -74,6 +75,11 @@ beforeAll(async () => {
     undefined,
     undefined,
     "qa-regressions-fallback-hmac-secret",
+    undefined,
+    undefined,
+    undefined,
+    // As the app wires it, so publishing a schedule queues the organiser's email in the outbox.
+    new TransactionalCompetitionPublicationNotifier("https://matchday.test"),
   );
   phase3 = new Phase3Runtime(sql as unknown as PostgresJsSql, phase3DomainAdapter);
 });
@@ -84,13 +90,13 @@ afterAll(async () => {
 });
 
 /** An 8-entry championship-focus event (two pools, then semis, final and bronze) with a published schedule. */
-async function championshipEvent(sportId: SportId) {
+async function championshipEvent(sportId: SportId, name = `QA ${sportId}`) {
   const actor = { accountId };
   const competition = await runtime.createCompetition(
     actor,
     {
       organisationId,
-      name: `QA ${sportId}`,
+      name,
       slug: `qa-${sportId}-${randomUUID()}`,
       timezone: "Asia/Singapore",
       startsOn: "2027-03-01",
@@ -400,8 +406,8 @@ describeInfrastructure("QA mock-tournament regressions", () => {
   });
 });
 
-// Track R2.7: real triggers (scoring finalisation, published-schedule reminders) through the
-// transactional outbox and SMTP delivery into Mailpit.
+// Track R2.7: real triggers (schedule publication, scoring finalisation, published-schedule
+// reminders) through the transactional outbox and SMTP delivery into Mailpit.
 describeInfrastructure("competition-day notifications are delivered", () => {
   const mailpitApiUrl = process.env.MAILPIT_API_URL ?? "http://127.0.0.1:8025";
 
@@ -447,6 +453,28 @@ describeInfrastructure("competition-day notifications are delivered", () => {
       if (batch.claimed === 0) return { delivered };
     }
   }
+
+  it("emails the organiser when the schedule is published", async () => {
+    const competitionName = `Published ${randomUUID().slice(0, 8)}`;
+    const event = await championshipEvent("badminton", competitionName);
+    const [queued] = await sql<{ id: string; status: string }[]>`
+      SELECT outbox.id,outbox.status
+      FROM notifications notification
+      JOIN notification_email_outbox outbox ON outbox.notification_id=notification.id
+      WHERE notification.account_id=${accountId} AND notification.type='competition-published'
+        AND notification.idempotency_key LIKE ${`competition-schedule-published:${event.competitionId}:%`}`;
+    expect(queued?.status).toBe("pending");
+    expect((await deliverOutbox()).delivered).toBeGreaterThanOrEqual(1);
+    const [sent] = await sql<{ status: string }[]>`SELECT status FROM notification_email_outbox WHERE id=${queued!.id}`;
+    expect(sent?.status).toBe("delivered");
+    const message = (await delivered(competitionName)).find(
+      (candidate) => candidate.Subject === `${competitionName} is published`,
+    );
+    expect(message, "schedule-published email delivered").toBeDefined();
+    expect(await messageText(message!.ID)).toContain(
+      `${competitionName} is now visible to participants and spectators.`,
+    );
+  });
 
   it("emails the organiser a W/O result when a walkover is finalised", async () => {
     const event = await championshipEvent("badminton");
