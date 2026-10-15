@@ -1011,4 +1011,104 @@ describeInfrastructure("Temporal Database Migration Matrix (R3)", () => {
       await sql.end({ timeout: 2 });
     }
   }, 45_000);
+
+  // ---------------------------------------------------------------------------
+  // Scenario 7: 0073 semifinal relabel backfill must not write to archived competitions
+  // ---------------------------------------------------------------------------
+  it("Scenario 7: 0073 relabels active elimination semifinals and leaves archived competitions untouched", async () => {
+    const schema = await createIsolatedSchema("s7_0073_archived");
+    const { directory: copiedDir, allMigrations } = await copyMigrationsThrough("0072_round_robin_recommendations.sql");
+
+    const initialMigrate = await migrateDatabase({ databaseUrl, migrationsDirectory: copiedDir, schema });
+    expect(initialMigrate.applied.at(-1)).toBe("0072_round_robin_recommendations.sql");
+
+    const sql = postgres(databaseUrl, { max: 1, prepare: false, connection: { search_path: schema } });
+    const accountId = randomUUID();
+    const organisationId = randomUUID();
+
+    async function seedMaterialisedKnockout(
+      label: string,
+    ): Promise<{ competitionId: string; formatRevisionId: string }> {
+      const competitionId = randomUUID();
+      const divisionId = randomUUID();
+      const formatRevisionId = randomUUID();
+      await sql`INSERT INTO competitions(
+          id,organisation_id,created_by,name,slug,sport_code,timezone,starts_on,ends_on,
+          venue,address,country_code,locale,plan_tier
+        ) VALUES(
+          ${competitionId},${organisationId},${accountId},${`Scenario 7 ${label}`},${`s7-${label}-${competitionId}`},
+          'badminton','Asia/Singapore','2027-03-01','2027-03-01','Hall','1 Ave','SG','en-SG','organiser_pro'
+        )`;
+      await sql`INSERT INTO competition_sport_settings(
+          competition_id,updated_by,sport_code,pack_version,pack_schema_version,recommended_snapshot,settings_override
+        ) VALUES(${competitionId},${accountId},'badminton','s7-pack-v1',1,'{}'::jsonb,'{}'::jsonb)`;
+      await sql`INSERT INTO divisions(id,competition_id,name,team_limit) VALUES(${divisionId},${competitionId},'Open',16)`;
+      await sql`INSERT INTO division_entries(id,division_id,name,seed,entry_type,status) VALUES
+        (${randomUUID()},${divisionId},'Seed 1',1,'team','confirmed'),
+        (${randomUUID()},${divisionId},'Seed 2',2,'team','confirmed'),
+        (${randomUUID()},${divisionId},'Seed 3',3,'team','confirmed'),
+        (${randomUUID()},${divisionId},'Seed 4',4,'team','confirmed')`;
+      const definition = fourEntryEliminationDefinition(formatRevisionId, randomUUID(), randomUUID(), randomUUID());
+      const [definitionHash] = await sql<
+        { hash: string }[]
+      >`SELECT phase4_sha256_json(${sql.json(definition)}) AS hash`;
+      await sql`INSERT INTO format_revisions(
+          id,competition_id,division_id,revision,definition,definition_hash,status,created_by,validation_contract
+        ) VALUES(
+          ${formatRevisionId},${competitionId},${divisionId},1,${sql.json(definition)},${definitionHash!.hash},'draft',${accountId},'phase3'
+        )`;
+      await sql`SELECT phase4_materialize_format_revision(${formatRevisionId})`;
+      return { competitionId, formatRevisionId };
+    }
+
+    async function stagesFor(formatRevisionId: string) {
+      return sql<{ id: string; stage: string; round_number: number; ordinal: number }[]>`
+        SELECT id, stage, round_number, ordinal FROM matches WHERE format_revision_id=${formatRevisionId} ORDER BY ordinal`;
+    }
+
+    try {
+      await sql`INSERT INTO accounts(id,primary_email,display_name)
+        VALUES(${accountId},${`${accountId}@example.test`},'Scenario 7 Owner')`;
+      await sql.begin(async (tx) => {
+        await tx`INSERT INTO organisations(id,name,slug) VALUES(${organisationId},'Scenario 7 Org',${`s7-org-${organisationId}`})`;
+        await tx`INSERT INTO organisation_memberships(organisation_id,account_id,role,status)
+          VALUES(${organisationId},${accountId},'owner','active')`;
+      });
+      const pack = { recommendedSlotMinutes: 20, recommendedSettings: { slotMinutes: 20 } };
+      const [packHash] = await sql<{ hash: string }[]>`SELECT phase4_sha256_json(${sql.json(pack)}) AS hash`;
+      await sql`INSERT INTO sport_pack_versions(sport_code,version,schema_version,definition,definition_hash,status,activated_at)
+        VALUES('badminton','s7-pack-v1',1,${sql.json(pack)},${packHash!.hash},'active',now())`;
+
+      const active = await seedMaterialisedKnockout("active");
+      const archived = await seedMaterialisedKnockout("archived");
+      await sql`UPDATE competitions SET status='archived',archived_from_status='draft' WHERE id=${archived.competitionId}`;
+
+      // Pre-0073 materialisation labels the penultimate elimination round 'quarterfinal'.
+      const activeBefore = await stagesFor(active.formatRevisionId);
+      const archivedBefore = await stagesFor(archived.formatRevisionId);
+      expect(activeBefore.map((m) => m.stage)).toEqual(["quarterfinal", "quarterfinal", "final"]);
+      expect(archivedBefore.map((m) => m.stage)).toEqual(["quarterfinal", "quarterfinal", "final"]);
+
+      const forward = allMigrations.filter((name) => name >= "0073_fix_semifinal_stage_labelling.sql");
+      await copyMigrationFiles(copiedDir, forward);
+      const upgrade = await migrateDatabase({ databaseUrl, migrationsDirectory: copiedDir, schema });
+      expect(upgrade.applied).toEqual(forward);
+      expect(upgrade.current).toEqual(allMigrations);
+
+      expect((await stagesFor(active.formatRevisionId)).map((m) => m.stage)).toEqual([
+        "semifinal",
+        "semifinal",
+        "final",
+      ]);
+      // Archived results are frozen: the backfill must leave them byte-for-byte unchanged.
+      expect(await stagesFor(archived.formatRevisionId)).toEqual(archivedBefore);
+
+      const [projectionGuard] = await sql<{ tgenabled: string }[]>`
+        SELECT tgenabled FROM pg_trigger
+        WHERE tgname='aa_matches_phase4_projection_guard' AND tgrelid=to_regclass(current_schema() || '.matches')`;
+      expect(projectionGuard?.tgenabled).toBe("O");
+    } finally {
+      await sql.end({ timeout: 2 });
+    }
+  }, 45_000);
 });
