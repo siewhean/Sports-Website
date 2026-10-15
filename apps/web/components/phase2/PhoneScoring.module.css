@@ -55,7 +55,7 @@
 }
 .statusChip:focus-visible {
   outline: 3px solid #e2fa77;
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 
 /* Big live score directly under the header; the controls follow so they sit in the thumb zone. */
@@ -133,7 +133,7 @@
 }
 .undoToast button:focus-visible {
   outline: 3px solid #e2fa77;
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 .eventLog {
   order: 4;
@@ -162,7 +162,7 @@
   font-size: 0.875rem;
 }
 .reasonChips button {
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   padding: 0 0.875rem;
   border: 1px solid #667064;
   border-radius: 999px;
@@ -178,7 +178,7 @@
 }
 .reasonChips button:focus-visible {
   outline: 3px solid #e2fa77;
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 
 /* Glare mode: pure black and white, thicker edges, team hues kept but brightened. */
@@ -223,7 +223,7 @@
 }
 .eventControls :global(.p2-event-context select),
 .eventControls :global(.p2-event-context input) {
-  min-height: 48px;
+  min-height: var(--touch-target-min);
 }
 .eventControls :global(.p2-segment-score) {
   margin-bottom: 0.5rem;

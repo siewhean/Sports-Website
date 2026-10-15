@@ -133,7 +133,7 @@
 .textButton:focus-visible,
 .iconButton:focus-visible {
   outline: 3px solid #b7d338;
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 .field small,
 .formError {

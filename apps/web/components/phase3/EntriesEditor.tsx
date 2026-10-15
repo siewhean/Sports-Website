@@ -8,6 +8,8 @@ import {
   phase3EntriesCopy,
   phase3EntriesMachine,
   totalActiveEntries,
+  validateDivisionInput,
+  validateEntryInput,
   type EntryEditorDivision,
 } from "@/lib/phase3-entries";
 import styles from "./EntriesEditor.module.css";
@@ -72,9 +74,17 @@ export function EntriesEditor({
     if (!canEdit) return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    const name = String(data.get(phase3EntriesMachine.divisionNameField) ?? "").trim();
+    const rawName = data.get(phase3EntriesMachine.divisionNameField);
     const code = String(data.get(phase3EntriesMachine.divisionCodeField) ?? "").trim();
-    const entryLimit = Number(data.get(phase3EntriesMachine.divisionLimitField));
+    const rawLimit = data.get(phase3EntriesMachine.divisionLimitField);
+
+    const validation = validateDivisionInput(rawName, rawLimit);
+    if (!validation.ok) {
+      setError(validation.error);
+      return;
+    }
+    const { name, entryLimit } = validation.value;
+
     const fingerprint = JSON.stringify({ name, code, entryLimit });
     const pending =
       divisionCommandRef.current?.fingerprint === fingerprint
@@ -111,8 +121,18 @@ export function EntriesEditor({
     if (!canEdit) return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    const name = String(data.get(phase3EntriesMachine.entryNameField) ?? "").trim();
-    const seed = Number(data.get(phase3EntriesMachine.entrySeedField));
+    const rawName = data.get(phase3EntriesMachine.entryNameField);
+    const rawSeed = data.get(phase3EntriesMachine.entrySeedField);
+
+    const validation = validateEntryInput(rawName, rawSeed);
+    if (!validation.ok) {
+      setError(validation.error);
+      return;
+    }
+    // The server is the source of truth for the free-plan entry limit; its
+    // FREE_ENTRY_LIMIT_REACHED (422) response is mapped by responseMessage().
+    const { name, seed } = validation.value;
+
     const fingerprint = JSON.stringify({ divisionId, name, seed });
     const existing = entryCommandRefs.current.get(divisionId);
     const pending = existing?.fingerprint === fingerprint ? existing : { fingerprint, key: crypto.randomUUID() };
@@ -231,7 +251,7 @@ export function EntriesEditor({
               ) : (
                 <p>{phase3EntriesCopy.empty}</p>
               )}
-              <form className={styles.createEntry} onSubmit={(event) => addEntry(event, division.id)}>
+              <form className={styles.createEntry} noValidate onSubmit={(event) => addEntry(event, division.id)}>
                 <label>
                   {phase3EntriesCopy.entryName}
                   <input name={phase3EntriesMachine.entryNameField} maxLength={120} required disabled={!canEdit} />
@@ -244,7 +264,6 @@ export function EntriesEditor({
                     min={1}
                     max={48}
                     defaultValue={nextSeed}
-                    required
                     disabled={!canEdit}
                   />
                 </label>

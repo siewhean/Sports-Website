@@ -20,7 +20,7 @@
   width: 64px;
   height: 64px;
   border: 1px solid var(--hairline);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
 }
 .icon svg {
@@ -53,10 +53,10 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   padding: 10px 20px;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--signal);
   color: var(--signal-ink);
   font: inherit;

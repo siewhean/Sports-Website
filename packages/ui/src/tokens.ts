@@ -34,7 +34,51 @@ export const designTokens = {
     state: "cubic-bezier(0.32, 0.72, 0, 1)",
   },
   space: [0, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128],
+  breakpoints: {
+    phone: 375,
+    tablet: 768,
+    desktop: 1280,
+  },
+  component: {
+    radiusSm: 6,
+    radiusMd: 10,
+    radiusLg: 16,
+    radiusFull: 9999,
+    touchTargetMin: 48,
+    focusRingWidth: 2,
+    focusRingOffset: 2,
+  },
 } as const;
 
 export const shellKinds = ["organiser", "official", "public"] as const;
 export type ShellKind = (typeof shellKinds)[number];
+
+export const surfaceStates = [
+  "ready",
+  "loading",
+  "empty",
+  "error",
+  "offline",
+  "conflict",
+  "read-only",
+  "permission",
+] as const;
+
+export type SurfaceState = (typeof surfaceStates)[number];
+
+// Contract: only failures (error) use role="alert" (assertive interruption).
+// Recoverable or informational states — offline, conflict, read-only,
+// permission — are rendered with the page, so they use role="status" and rely
+// on tone + copy rather than an assertive announcement.
+export const stateTokens = {
+  ready: { role: "status" as const, tone: "neutral" as const, alert: false },
+  loading: { role: "status" as const, tone: "neutral" as const, alert: false },
+  empty: { role: "status" as const, tone: "neutral" as const, alert: false },
+  error: { role: "alert" as const, tone: "danger" as const, alert: true },
+  offline: { role: "status" as const, tone: "warning" as const, alert: false },
+  conflict: { role: "status" as const, tone: "warning" as const, alert: false },
+  "read-only": { role: "status" as const, tone: "neutral" as const, alert: false },
+  permission: { role: "status" as const, tone: "warning" as const, alert: false },
+} as const;
+
+export type StateTokenKind = keyof typeof stateTokens;

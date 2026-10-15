@@ -7,6 +7,7 @@ import {
   SpinnerGap,
   WarningCircle,
 } from "@phosphor-icons/react/dist/ssr";
+import { stateTokens } from "@matchday/ui";
 import { phase2Copy, type SurfaceState } from "@/lib/phase2";
 
 const stateContent: Record<Exclude<SurfaceState, "ready">, { title: string; body: string; action?: string }> = {
@@ -45,7 +46,7 @@ export function SurfaceStatePanel({ state }: { state: Exclude<SurfaceState, "rea
   }
 
   return (
-    <section className={`p2-state p2-state--${state}`} role={state === "error" ? "alert" : "status"}>
+    <section className={`p2-state p2-state--${state}`} role={stateTokens[state]?.role ?? "status"}>
       <span className="p2-state__icon" aria-hidden="true">
         <Icon weight="light" />
       </span>

@@ -117,7 +117,7 @@
 .panel select:focus-visible,
 .divisionSwitch select:focus-visible {
   outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 .divisionSwitch,
 .filters label,
@@ -136,7 +136,7 @@
   min-height: 44px;
   padding: 0 12px;
   border: 1px solid var(--hairline);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
@@ -186,7 +186,7 @@
   grid-template-columns: minmax(0, 1fr);
   padding: 16px;
   border: 1px solid var(--hairline);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
 }
 .followHead {
@@ -245,7 +245,7 @@
   min-width: 0;
   padding: 14px 16px;
   border: 1px solid var(--hairline);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   color: var(--ink);
   text-decoration: none;
@@ -347,7 +347,7 @@
   min-height: 44px;
   padding: 4px 14px;
   border: 1px solid var(--hairline);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
@@ -541,7 +541,7 @@
 /* A just-changed score: a static outline for everyone, a brief pulse only when motion is welcome. */
 [data-changed].scoreCard,
 .fixtures > li[data-changed] .fixture {
-  outline: 2px solid var(--signal-strong);
+  outline: var(--focus-ring-width) solid var(--signal-strong);
   outline-offset: -2px;
 }
 @media (prefers-reduced-motion: no-preference) {

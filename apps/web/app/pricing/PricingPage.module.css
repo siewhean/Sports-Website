@@ -73,7 +73,7 @@
   background: var(--signal);
   color: var(--signal-ink);
   padding: 0.25rem 0.75rem;
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -137,7 +137,7 @@
 .ctaButton {
   display: block;
   text-align: center;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   padding: 0.85rem 1.5rem;
   border-radius: 0.5rem;
   font-weight: 600;

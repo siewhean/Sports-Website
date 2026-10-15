@@ -24,7 +24,9 @@ export default function OrganiserPage() {
         <h2 id="organiser-summary">{messages.organiser.summaryTitle}</h2>
         <ActionLink href="/organiser/competitions">{organiserCompetitionLibraryCopy.openLibrary}</ActionLink>
         <ActionLink href="/organiser/competitions/new">{messages.organiser.createCompetition}</ActionLink>
-        {demoFixturesEnabled() ? <ActionLink href="/format">{messages.organiser.nextAction}</ActionLink> : null}
+        {demoFixturesEnabled() ? (
+          <ActionLink href="/organiser/competitions/singapore-open/format">{messages.organiser.nextAction}</ActionLink>
+        ) : null}
       </section>
       <div className="operational-divider" />
       <section className="operational-list" aria-labelledby="fixtures-title">

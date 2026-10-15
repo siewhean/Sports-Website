@@ -10,7 +10,7 @@ import {
   type ConsentPreferences,
 } from "@matchday/ui";
 
-const prototypeRoutes = new Set(["/setup", "/format", "/score"]);
+const bannerExemptRoutes = new Set(["/score"]);
 
 export function ConsentManager() {
   const pathname = usePathname();
@@ -34,7 +34,7 @@ export function ConsentManager() {
     };
   }, []);
 
-  if (prototypeRoutes.has(pathname) || stored === undefined) return null;
+  if (bannerExemptRoutes.has(pathname) || stored === undefined) return null;
 
   function persist(preferences: Pick<ConsentPreferences, "analytics" | "marketing">) {
     const next = createConsentPreferences(preferences);

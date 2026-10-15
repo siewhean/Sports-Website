@@ -64,7 +64,7 @@
 }
 .divisionSelect:focus-visible {
   outline: 3px solid var(--signal);
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 .divisionSelect:disabled {
   opacity: 0.58;
@@ -304,7 +304,7 @@
   padding: 0;
   overflow: visible;
   border: 1px solid #767a74;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
   text-align: left;
@@ -323,7 +323,7 @@
   grid-template-columns: 25px 1fr 18px;
   gap: 8px;
   align-items: center;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   padding: 0 13px;
   border-bottom: 1px solid var(--hairline);
 }
@@ -540,7 +540,7 @@
   grid-template-columns: 30px 1fr;
   gap: 3px 10px;
   align-items: center;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   border: 0;
   background: transparent;
   text-align: left;

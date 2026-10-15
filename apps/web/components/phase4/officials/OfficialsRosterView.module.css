@@ -86,8 +86,8 @@
 }
 
 .cardButton:focus-visible {
-  outline: 2px solid #2563eb;
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid #2563eb;
+  outline-offset: var(--focus-ring-offset);
 }
 
 .cardSelected {
@@ -142,7 +142,7 @@
 .badge {
   display: inline-block;
   padding: 0.125rem 0.5rem;
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   font-size: 0.75rem;
   font-weight: 600;
   background: #e5e7eb;
@@ -152,7 +152,7 @@
 .selectedBadge {
   display: inline-block;
   padding: 0.125rem 0.5rem;
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   font-size: 0.75rem;
   font-weight: 600;
   background: #dbeafe;
@@ -366,7 +366,7 @@
 }
 
 .input:focus {
-  outline: 2px solid #2563eb;
+  outline: var(--focus-ring-width) solid #2563eb;
   border-color: #2563eb;
 }
 
@@ -613,7 +613,7 @@
 }
 
 .select:focus {
-  outline: 2px solid #2563eb;
+  outline: var(--focus-ring-width) solid #2563eb;
   border-color: #2563eb;
 }
 

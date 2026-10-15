@@ -208,16 +208,16 @@ The platform is production ready when all of the following hold for one exact Gi
 
 ### 6.2 Track overview
 
-| Track | Goal                                           | Depends on   | Target window       | Checkpoint         | Status (15 Oct, late)                                                     |
-| ----- | ---------------------------------------------- | ------------ | ------------------- | ------------------ | ------------------------------------------------------------------------- |
-| R1    | Correctness baseline and repeatable simulation | —            | 12–19 Oct 2026      | CP1                | Done — CP1 4 of 4 (box 4 via #117)                                        |
-| R2    | Competition-day robustness                     | R1           | 19 Oct – 2 Nov 2026 | CP2                | Merged — #103 (+ IDOR fix #116); CP2 2 of 5 (boxes 1, 2, 5 partial)       |
-| R3    | Scheduler speed and quality                    | R1           | 12 Oct – 9 Nov 2026 | CP3                | Merged — #99, #100, #102; CP3 3 of 4 (box 4 partial)                      |
-| R4    | AI: real provider or honest removal            | R3           | 2–23 Nov 2026       | CP4                | Merged — #111; CP4 complete (3 of 3, AI box N/A)                          |
-| R5    | Monitoring, alerting and operations            | —            | 12–26 Oct 2026      | CP5                | Merged — #112; CP5 1 of 5; alert tests and owner actions pending          |
-| R6    | Organiser UX, design system and code health    | R1, R2       | 2 Nov – 7 Dec 2026  | CP6                | In review — PR #113; R6.2/R6.3 not done                                   |
-| R7    | Commercial, legal and identity readiness       | owner inputs | by 7 Dec 2026       | CP7                | In review — PR #115 (docs and runbooks); CP7 0 of 4, owner inputs pending |
-| R8    | Release candidate, rehearsal and launch        | R1–R7        | 7–21 Dec 2026       | CP8 (Gate F) and L | Not started                                                               |
+| Track | Goal                                           | Depends on   | Target window       | Checkpoint         | Status (15 Oct, late)                                                              |
+| ----- | ---------------------------------------------- | ------------ | ------------------- | ------------------ | ---------------------------------------------------------------------------------- |
+| R1    | Correctness baseline and repeatable simulation | —            | 12–19 Oct 2026      | CP1                | Done — CP1 4 of 4 (box 4 via #117)                                                 |
+| R2    | Competition-day robustness                     | R1           | 19 Oct – 2 Nov 2026 | CP2                | Merged — #103 (+ IDOR fix #116); CP2 2 of 5 (boxes 1, 2, 5 partial)                |
+| R3    | Scheduler speed and quality                    | R1           | 12 Oct – 9 Nov 2026 | CP3                | Merged — #99, #100, #102; CP3 3 of 4 (box 4 partial)                               |
+| R4    | AI: real provider or honest removal            | R3           | 2–23 Nov 2026       | CP4                | Merged — #111; CP4 complete (3 of 3, AI box N/A)                                   |
+| R5    | Monitoring, alerting and operations            | —            | 12–26 Oct 2026      | CP5                | Merged — #112; CP5 1 of 5; alert tests and owner actions pending                   |
+| R6    | Organiser UX, design system and code health    | R1, R2       | 2 Nov – 7 Dec 2026  | CP6                | PR #113: R6.4 done; R6.1/R6.2/R6.5 partial; R6.6 lab-only; R6.3 deferred; CP6 open |
+| R7    | Commercial, legal and identity readiness       | owner inputs | by 7 Dec 2026       | CP7                | In review — PR #115 (docs and runbooks); CP7 0 of 4, owner inputs pending          |
+| R8    | Release candidate, rehearsal and launch        | R1–R7        | 7–21 Dec 2026       | CP8 (Gate F) and L | Not started                                                                        |
 
 Target windows are planning estimates. A checkpoint moves only when its evidence exists, not when the date arrives.
 
@@ -376,19 +376,19 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 **Deliverables**
 
-- R6.1 Organiser journey review: create → teams → format → schedule → publish → run day → finish, with friction removed and every error message naming the field and the fix.
-- R6.2 Design system: consolidate tokens and components; remove one-off styles; complete loading, empty, error, offline and permission states.
-- R6.3 Rename internal "phase" and "gate" identifiers in code and routes to product names, with no API contract break for live clients.
+- R6.1 Organiser journey review: create → teams → format → schedule → publish → run day → finish, with friction removed and every error message naming the field and the fix. (Partial, PR #113: create-competition and entries errors name the field and fix; full journey friction review not done)
+- R6.2 Design system: consolidate tokens and components; remove one-off styles; complete loading, empty, error, offline and permission states. (Partial, PR #113: state/role and component tokens in `packages/ui/src/tokens.ts`; touch-target, radius and focus-ring CSS vars adopted where values matched; component consolidation and one-off style removal not done)
+- R6.3 Rename internal "phase" and "gate" identifiers in code and routes to product names, with no API contract break for live clients. (Not done / deferred: route aliases removed per audit feedback until frontend call sites migrate; user-facing copy cleaned)
 - R6.4 Delete dead prototype code and the hidden V1-removed surfaces that will not return (per R2.6).
-- R6.5 Accessibility: automated axe checks on every page at phone, tablet and desktop; keyboard-only run of the organiser journey.
-- R6.6 Performance: public competition page and scoring page meet Core Web Vitals "good" on mobile.
+- R6.5 Accessibility: automated axe checks on every page at phone, tablet and desktop; keyboard-only run of the organiser journey. (PR #113: axe on 9 key routes × 4 Playwright projects plus a keyboard-only create-competition run; organiser routes use demo fixtures, not a signed-in session; not every page)
+- R6.6 Performance: public competition page and scoring page meet Core Web Vitals "good" on mobile. (Lab only, PR #113: CI asserts LCP ≤ 2.5 s and CLS ≤ 0.1 under Pixel 7 + Fast 4G emulation; measured LCP ~0.4 s, CLS 0.0012 after the font-fallback fix; no field data)
 
 **Checkpoint CP6 — UX**
 
 - [ ] A first-time organiser walkthrough (owner, recorded) completes a 16-team event setup in under 15 minutes with no help.
-- [ ] Zero WCAG A/AA axe violations on all routes.
-- [ ] No `phase`/`gate` names in user-visible text or URLs.
-- [ ] Dead code removed; bundle size and test count recorded before and after.
+- [ ] Zero WCAG A/AA axe violations on all routes. (Partial: zero violations on the 9 key routes in `tests/responsive-pages-accessibility.spec.ts` and the other `tests/*accessibility.spec.ts` suites, organiser routes on demo fixtures; not yet all routes)
+- [ ] No `phase`/`gate` names in user-visible text or URLs. (Not done: internal phase/gate API routes remain in use; user-visible copy cleaned).
+- [ ] Dead code removed; bundle size and test count recorded before and after. Evidence: `docs/qa/track-r6.md`.
 
 ---
 

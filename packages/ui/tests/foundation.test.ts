@@ -108,3 +108,21 @@ describe("typed prototype catalogue", () => {
     expect(directionForLocale("en-XA")).toBe("ltr");
   });
 });
+
+describe("organiser journey error messages", () => {
+  it("enforces field-and-fix guidance for all 12 competition creation fields", async () => {
+    const { competitionCreateFieldKeys, messages } = await import("../src/i18n.js");
+    expect(competitionCreateFieldKeys).toHaveLength(12);
+
+    for (const key of competitionCreateFieldKeys) {
+      const message = messages.organiserCreate.fieldErrors[key];
+      expect(message).toBeDefined();
+      expect(typeof message).toBe("string");
+      expect(message.length).toBeGreaterThan(15);
+      // Naming the action/fix: Starts with action verb
+      expect(message).toMatch(/^(Select|Enter|Choose)\b/);
+      // Not a generic placeholder
+      expect(message).not.toBe(messages.organiserCreate.invalidField);
+    }
+  });
+});

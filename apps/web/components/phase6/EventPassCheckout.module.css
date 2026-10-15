@@ -37,7 +37,7 @@
 
 .select {
   width: 100%;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   padding: 0 14px;
   border: 1px solid var(--hairline);
   border-radius: 12px;
@@ -50,7 +50,7 @@
 .primaryAction:focus-visible,
 .secondaryAction:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--focus) 45%, transparent);
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 
 .actions {

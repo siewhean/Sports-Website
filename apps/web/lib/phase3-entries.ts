@@ -49,6 +49,10 @@ export const phase3EntriesCopy = {
   freeLimit: "16 entries maximum across this competition",
   divisionCreated: "Division created.",
   entryCreated: "Entry added.",
+  divisionNameRequired: "Enter a division name between 2 and 100 characters.",
+  divisionLimitInvalid: "Select a division entry limit between 2 and 128.",
+  entryNameRequired: "Enter a team or competitor name between 2 and 120 characters.",
+  entrySeedInvalid: "Enter a whole number seed between 1 and 48, or leave blank.",
   commandFailed: "The change could not be saved. Your current entries remain unchanged.",
   invalidResponse: "The entries service returned an invalid response.",
   authRequired: "Your session can no longer change this competition.",
@@ -161,4 +165,39 @@ export function totalActiveEntries(divisions: readonly EntryEditorDivision[]): n
       total + division.entries.filter((entry) => entry.status === "active" || entry.status === "confirmed").length,
     0,
   );
+}
+
+export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+export function validateDivisionInput(
+  rawName: unknown,
+  rawLimit: unknown,
+): ValidationResult<{ name: string; entryLimit: number }> {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (name.length < 2 || name.length > 100) {
+    return { ok: false, error: phase3EntriesCopy.divisionNameRequired };
+  }
+  const limit = typeof rawLimit === "number" ? rawLimit : Number(rawLimit);
+  if (!Number.isInteger(limit) || limit < 2 || limit > 128) {
+    return { ok: false, error: phase3EntriesCopy.divisionLimitInvalid };
+  }
+  return { ok: true, value: { name, entryLimit: limit } };
+}
+
+export function validateEntryInput(
+  rawName: unknown,
+  rawSeed?: unknown,
+): ValidationResult<{ name: string; seed: number | null }> {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (name.length < 2 || name.length > 120) {
+    return { ok: false, error: phase3EntriesCopy.entryNameRequired };
+  }
+  if (rawSeed === undefined || rawSeed === null || (typeof rawSeed === "string" && rawSeed.trim() === "")) {
+    return { ok: true, value: { name, seed: null } };
+  }
+  const seed = typeof rawSeed === "number" ? rawSeed : Number(rawSeed);
+  if (!Number.isInteger(seed) || seed < 1 || seed > 48) {
+    return { ok: false, error: phase3EntriesCopy.entrySeedInvalid };
+  }
+  return { ok: true, value: { name, seed } };
 }

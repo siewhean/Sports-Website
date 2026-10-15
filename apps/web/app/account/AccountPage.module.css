@@ -42,9 +42,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   border: 1px solid var(--hairline);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 10px 18px;
   font: inherit;
   font-weight: 650;
@@ -101,9 +101,9 @@
   font-weight: 650;
 }
 .input {
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   border: 1px solid var(--hairline);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 10px 14px;
   background: var(--surface);
   color: var(--ink);

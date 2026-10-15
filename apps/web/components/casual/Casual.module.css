@@ -98,7 +98,7 @@
   border: 1px solid var(--hairline, #d3d4ce);
   border-radius: 999px;
   padding: 11px 17px;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   background: var(--surface, #fff);
   color: inherit;
   font: inherit;
@@ -131,7 +131,7 @@
   width: 100%;
   height: 50px;
   border: 1px solid var(--hairline, #d3d4ce);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--surface, #fff);
   color: var(--ink, #171918);
   padding: 0 14px;
@@ -140,7 +140,7 @@
 .field input:focus-visible,
 .field select:focus-visible {
   outline: 3px solid var(--focus, #5876d8);
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 .formActions {
   display: flex;
@@ -157,7 +157,7 @@
   min-height: 54px;
   padding: 12px 21px;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--signal, #b7dc22);
   color: var(--signal-ink, #12150b);
   font: 750 1rem var(--font-sans, sans-serif);
@@ -176,7 +176,7 @@
   background: transparent;
   color: inherit;
   padding: 12px 4px;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   font: 650 0.9rem var(--font-sans, sans-serif);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -247,7 +247,7 @@
   align-items: center;
   gap: 8px;
   width: fit-content;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   color: inherit;
   text-decoration: none;
   font-weight: 650;
@@ -399,7 +399,7 @@ button.scoreSide.away:hover {
 }
 .setSummary span {
   padding: 7px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: #2d3330;
   font-size: 0.8rem;
 }
@@ -421,7 +421,7 @@ button.scoreSide.away:hover {
   min-height: 56px;
   padding: 8px 12px;
   border: 1px solid var(--hairline, #d3d4ce);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--surface, #fff);
   color: inherit;
   font: 650 0.9rem var(--font-sans, sans-serif);
@@ -512,7 +512,7 @@ button.scoreSide.away:hover {
   margin: 0;
 }
 .friendsList button {
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   text-align: left;
   border: 1px solid var(--hairline, #d3d4ce);
   border-radius: 8px;

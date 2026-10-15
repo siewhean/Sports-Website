@@ -209,6 +209,10 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
     setAnnouncement("");
   }
 
+  function fieldErrorMessage(field: CompetitionCreateField): string {
+    return messages.organiserCreate.fieldErrors[field];
+  }
+
   function validateStep(stepIndex: number) {
     const bootstrapRequired = organisations.length === 0;
     const invalidField = createSteps[stepIndex]?.find(
@@ -217,7 +221,7 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
         !competitionCreateFieldIsValid(fieldName, draft),
     );
     if (!invalidField) return true;
-    setFieldErrors({ [invalidField]: messages.organiserCreate.invalidField });
+    setFieldErrors({ [invalidField]: fieldErrorMessage(invalidField) });
     setCommandError(messages.organiserCreate.validationSummary);
     requestAnimationFrame(() => focusField(invalidField));
     return false;
@@ -226,7 +230,12 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   function continueStep() {
     if (!validateStep(activeStep)) return;
     setCommandError("");
-    setActiveStep((current) => Math.min(current + 1, createSteps.length - 1));
+    const nextStep = Math.min(activeStep + 1, createSteps.length - 1);
+    setActiveStep(nextStep);
+    const firstField = createSteps[nextStep]?.[0];
+    if (firstField) {
+      requestAnimationFrame(() => focusField(firstField));
+    }
   }
 
   function focusField(field: CompetitionCreateField) {
@@ -245,7 +254,7 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
     if (invalidField) {
       const invalidStep = createSteps.findIndex((fields) => fields.some((field) => field === invalidField));
       if (invalidStep >= 0) setActiveStep(invalidStep);
-      setFieldErrors({ [invalidField]: messages.organiserCreate.invalidField });
+      setFieldErrors({ [invalidField]: fieldErrorMessage(invalidField) });
       setCommandError(messages.organiserCreate.validationSummary);
       requestAnimationFrame(() => focusField(invalidField));
       return;

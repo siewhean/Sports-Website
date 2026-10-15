@@ -1,6 +1,23 @@
 export const defaultLocale = "en-SG";
 export const defaultTimeZone = "Asia/Singapore";
 
+export const competitionCreateFieldKeys = [
+  "organisation_id",
+  "name",
+  "slug",
+  "sport_code",
+  "venue",
+  "address",
+  "locality",
+  "country_code",
+  "starts_on",
+  "ends_on",
+  "timezone",
+  "locale",
+] as const;
+
+export type CompetitionCreateFieldKey = (typeof competitionCreateFieldKeys)[number];
+
 export const messages = {
   metadata: {
     defaultTitle: "MATCHDAY · Competition operations",
@@ -196,6 +213,20 @@ export const messages = {
     saving: "Creating competition",
     created: "Competition created. Opening Assisted Setup.",
     invalidField: "Check this field.",
+    fieldErrors: {
+      organisation_id: "Select an organisation from the list to create a competition.",
+      name: "Enter a competition name between 2 and 120 characters.",
+      slug: "Enter a public address using only lowercase letters, numbers, and hyphens (e.g. 'singapore-open-2026').",
+      sport_code: "Choose a sport to configure competition rules and scoring format.",
+      venue: "Enter the primary venue or facility name.",
+      address: "Enter the street address for the venue.",
+      locality: "Enter a valid city or locality.",
+      country_code: "Enter a 2-letter ISO country code (e.g. 'SG' or 'GB').",
+      starts_on: "Select a valid start date (YYYY-MM-DD).",
+      ends_on: "Select an end date on or after the start date.",
+      timezone: "Select a valid IANA time zone (e.g. 'Asia/Singapore').",
+      locale: "Select a valid locale code (e.g. 'en-SG').",
+    } satisfies Record<CompetitionCreateFieldKey, string>,
     validationSummary: "Check the highlighted competition detail.",
     commandFailed: "The competition could not be created. Your details remain on this page.",
   },
