@@ -21,7 +21,7 @@ async function fixture(handler: RequestListener) {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address() as { port: number };
-  vi.stubEnv("RENDER_API_ORIGIN", "");
+  vi.stubEnv("API_ORIGIN", "");
   vi.stubEnv("MATCHDAY_API_BASE_URL", `http://127.0.0.1:${address.port}`);
 }
 
@@ -130,7 +130,7 @@ describe("same-origin public version stream", () => {
     "https://user:secret@api.test",
     "https://api.test/path",
   ])("fails closed for absent, recursive or unsafe backend configuration: %s", async (origin) => {
-    vi.stubEnv("RENDER_API_ORIGIN", "");
+    vi.stubEnv("API_ORIGIN", "");
     vi.stubEnv("MATCHDAY_API_BASE_URL", origin);
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);

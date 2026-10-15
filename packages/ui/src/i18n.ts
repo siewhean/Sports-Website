@@ -501,6 +501,7 @@ export const messages = {
     terms: "Terms",
     cookies: "Cookies",
     status: "Status",
+    opensInNewTab: "(opens in a new tab)",
     account: "My account",
   },
   account: {

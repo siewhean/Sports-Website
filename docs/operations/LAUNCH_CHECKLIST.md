@@ -42,3 +42,7 @@ The API runs an advisory-locked, batch-limited purge every `PDPA_PURGE_INTERVAL_
 | `PDPA_RETENTION_CASUAL_ANON_DAYS`     | `30`    | 1 - 3650      | Casual games never claimed by an account                  |
 
 Database note: migration `0068` replaces the append-only trigger on `scoring_access_attempts` with a guard that still rejects every UPDATE and rejects DELETE unless the purge job opted in for the transaction, the row is older than 7 days and its rate-limit window has closed.
+
+## Operational tooling & untracked files resolution (R5.5)
+
+- [x] Untracked scripts `production-certification.spec.ts` and `issue-pass-oci.cjs` (referenced in historical audit notes): confirmed absent from local working tree and git history; superseded by standard integration/e2e test suites (`pnpm test:integration`, `pnpm --filter @matchday/web test:e2e:gate-d`) and verified OCI deployment runbooks (`infra/oci/deploy-prod.sh`, `infra/oci/backup/restore-drill.sh`).
