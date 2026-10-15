@@ -179,8 +179,8 @@ A full simulation ran about 12 competitions across all five sports against the r
 | Format suggestions not checked against the venue                                      | Medium   | In progress — PR #100                  |
 | No warning when capacity changes after publishing                                     | Medium   | Open — Track R2                        |
 | Stale repair cases stay in the pending list                                           | Medium   | Open — Track R2                        |
-| AI quota shows "exhausted" while usage view shows units left                          | Medium   | Open — Track R4                        |
-| Stub double-elimination change fails schema validation                                | Low      | Open — Track R4                        |
+| AI quota shows "exhausted" while usage view shows units left                          | Medium   | Fixed — PR #111 (R4.4, migration 0074) |
+| Stub double-elimination change fails schema validation                                | Low      | Fixed — PR #111 (stub removed, R4.1)   |
 | Semifinals stored with stage "quarterfinal" (migration 0034)                          | Low      | Open — Track R2                        |
 | Fresh DB needs undocumented `SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT` | Low      | Open — Track R1                        |
 | Walkover scoreboard shows empty games, not the forfeit score                          | Product  | Decision needed — Track R2             |
@@ -310,23 +310,23 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 **Deliverables**
 
-- R4.1 Immediate: hide or disable the stub AI features that charge credits (format modify, schedule preferences, repair recommendations) in production until R4.2 ships. The deterministic v1 format recommendations stay; label them as rules-based suggestions.
-- R4.2 Provider decision ADR: choose a model provider (for example Claude via the Anthropic API) or decide to ship without AI for launch.
-- R4.3 If a provider is chosen:
+- [x] R4.1 Immediate: hide or disable the stub AI features that charge credits (format modify, schedule preferences, repair recommendations). The deterministic v1 format recommendations stay; label them as rules-based suggestions.
+- [x] R4.2 Provider decision ADR recorded (`docs/decisions/0010-launch-without-ai-template-explanations.md`) and its decisions implemented: launch with no AI provider, AI top-up checkout rejected (`409 AI_TOP_UP_UNAVAILABLE`, historical webhooks still replay), unused `GET …/ai/usage` removed. Building the template explanations themselves is still to do.
+- R4.3 If a provider is chosen post-launch:
   - a provider class behind `AiProviderPort` and a new `PHASE4_AI_PROVIDER` value;
   - prompt templates for format changes, schedule preferences and repair, mapped onto the real format-graph, constraint and move schemas;
   - every AI proposal validated by the domain validator and solver before it is shown;
   - no charge for no-op, invalid or rejected results;
   - evaluation sets, prompt-injection tests, timeouts, cost budget and per-organisation quotas;
   - first focus: explaining no-solution diagnostics and repair trade-offs in plain language.
-- R4.4 Fix the quota display mismatch and the double-elimination schema failure.
+- [x] R4.4 Quota display mismatch fixed: one org-wide calculation (`phase6_org_ai_quota`, migration 0074) drives the pre-check, the finalize charge and the billing `ai_quota`; per-actor allowances are audit-only. The double-elimination schema failure is gone with the removed `modifyFormat` stub (R4.1).
 
 **Checkpoint CP4 — AI**
 
-- [ ] No production feature charges credits for stub output.
-- [ ] Provider ADR recorded.
-- [ ] If AI ships: evaluation pass rate, injection tests and cost budget recorded; outputs remain proposal-only.
-- [ ] Quota display matches actual remaining units.
+- [x] No production feature charges credits for stub output. Evidence: `phase-4-runtime.test.ts` "R4.1: stub AI features (format modify, schedule preferences) fallback to manual at 0 cost" and "R4.1: repair recommendations return manual_fallback with 0 charge".
+- [x] Provider ADR recorded (`docs/decisions/0010-launch-without-ai-template-explanations.md`).
+- N/A — If AI ships: evaluation pass rate, injection tests and cost budget recorded; outputs remain proposal-only. (No AI at launch, ADR 0010.)
+- [x] Quota display matches actual remaining units. Evidence: `phase-4-runtime.test.ts` "R4.4: one org-wide quota across two actors drives pre-check, charge and display; stub brief charged once"; `simulate-tournament.ts` scenario 9 compares the brief `usage` field with billing `ai_quota`.
 
 ---
 
@@ -491,19 +491,19 @@ dependency and secret scans
 
 Engineering can continue without these, but the dependent checkpoint cannot pass until each exists.
 
-| Item                                                             | Needed for | State                             |
-| ---------------------------------------------------------------- | ---------- | --------------------------------- |
-| Better Stack account (heartbeat URL or API token)                | CP5        | Waiting on owner sign-up          |
-| Legal entity, address, support contact, jurisdiction             | CP7        | Not yet available                 |
-| Product domain decision                                          | CP7        | Staying on `poladex.shop` for now |
-| Event Pass and Organiser Pro prices and currency                 | CP7        | Configuration; to confirm         |
-| Stripe live-mode activation                                      | CP7        | Pending                           |
-| Auth0 production tenant with MFA                                 | CP7        | Pending                           |
-| AI provider decision (or launch without AI)                      | CP4        | Pending                           |
-| Walkover display, per-group standings, offline scoring decisions | CP2        | Pending                           |
-| A real local event for the rehearsal                             | CP8        | Pending                           |
-| Expected peak load (competitions, scoring devices, spectators)   | CP8        | Pending                           |
-| Formal legal/privacy approval                                    | First sale | Deferred per ADR 0005             |
+| Item                                                             | Needed for | State                                  |
+| ---------------------------------------------------------------- | ---------- | -------------------------------------- |
+| Better Stack account (heartbeat URL or API token)                | CP5        | Waiting on owner sign-up               |
+| Legal entity, address, support contact, jurisdiction             | CP7        | Not yet available                      |
+| Product domain decision                                          | CP7        | Staying on `poladex.shop` for now      |
+| Event Pass and Organiser Pro prices and currency                 | CP7        | Configuration; to confirm              |
+| Stripe live-mode activation                                      | CP7        | Pending                                |
+| Auth0 production tenant with MFA                                 | CP7        | Pending                                |
+| AI provider decision (or launch without AI)                      | CP4        | Decided — launch without AI (ADR 0010) |
+| Walkover display, per-group standings, offline scoring decisions | CP2        | Pending                                |
+| A real local event for the rehearsal                             | CP8        | Pending                                |
+| Expected peak load (competitions, scoring devices, spectators)   | CP8        | Pending                                |
+| Formal legal/privacy approval                                    | First sale | Deferred per ADR 0005                  |
 
 ## 10. Risk register
 

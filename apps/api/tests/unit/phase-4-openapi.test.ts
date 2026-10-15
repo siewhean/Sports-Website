@@ -28,6 +28,8 @@ describe("Phase 4 OpenAPI contract", () => {
       "/api/v1/schedule-revisions/{revisionId}/publish",
     ];
     expect(requiredPaths.every((path) => document.paths[path])).toBe(true);
+    // ADR 0010: the unused per-actor AI usage read was removed; quota lives in billing/current ai_quota.
+    expect(document.paths["/api/v1/organisations/{organisationId}/ai/usage"]).toBeUndefined();
 
     const setupPath = requiredPaths[0]!;
     const resumePath = requiredPaths[1]!;

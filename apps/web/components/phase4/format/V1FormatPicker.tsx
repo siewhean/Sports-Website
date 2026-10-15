@@ -62,6 +62,7 @@ const copy = {
   schedule: t("prototype.f4830a1dae29"),
   scheduleFeasible: opaqueId("Fits the schedule"),
   scheduleNotChecked: opaqueId("Not checked"),
+  rulesSuggestion: opaqueId("Rules-based suggestion"),
 } as const;
 
 function errorDetails(payload: unknown): { code: string | null; message: string | null } {
@@ -291,7 +292,7 @@ export function V1FormatPicker({
               <li className={styles.option} key={option.id}>
                 <div>
                   <p className={styles.optionIndex}>
-                    {copy.option} {index + 1}
+                    {copy.option} {index + 1} · {copy.rulesSuggestion}
                   </p>
                   <h4>{option.name}</h4>
                   <p className={styles.structure}>{option.structure}</p>
