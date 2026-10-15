@@ -289,6 +289,9 @@ jobs:
               - "packages/domain/**"
               - "packages/database/**"
               - "packages/contracts/**"
+              - "packages/config/**"
+              - ".env.example"
+              - "scripts/fresh-boot-check.sh"
               - ".github/workflows/ci.yml"
 
   tournament-simulation:
