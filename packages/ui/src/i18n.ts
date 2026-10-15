@@ -367,6 +367,7 @@ export const messages = {
     allScheduled: "All matches have a valid slot.",
     teams: "Teams",
     versus: "vs",
+    unnamedTeam: "unnamed team",
     match: "Match",
     division: "Division",
     round: "Round",
