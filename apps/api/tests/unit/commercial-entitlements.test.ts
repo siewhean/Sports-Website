@@ -188,7 +188,6 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
 
     const session = await runtime.createCheckoutSession(actor, "org-1", {
       tier: "organiser_pro",
-      topUpUnits: 5,
       successUrl: "https://example.com/success",
       cancelUrl: "https://example.com/cancel",
     });
@@ -197,7 +196,7 @@ describe("Commercial Entitlements & Billing Domain (BIL-001 through BIL-014)", (
     expect(session.checkout_url).toBe("https://checkout.stripe.com/c/pay/cs_live_real_stripe_session_12345678");
     expect(session.organisation_id).toBe("org-1");
     expect(session.tier).toBe("organiser_pro");
-    expect(session.top_up_units).toBe(5);
+    expect(session.top_up_units).toBe(0);
     expect(session.amount_total).toBe(9900);
     expect(session.currency).toBe("usd");
   });

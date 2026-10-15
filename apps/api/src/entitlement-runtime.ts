@@ -224,36 +224,15 @@ export class EntitlementRuntime {
   async getBillingSummary(organisationId: string): Promise<BillingSummary> {
     const sub = await this.getSubscriptionTier(this.sql, organisationId);
     const tierLimits = TIER_FEATURE_LIMITS[sub.tier];
-    const credits = (
-      await this.sql.unsafe<{ granted: number; consumed: number }>(
-        `SELECT
-             COALESCE(sum(g.quantity),0)::integer granted,
-             COALESCE(sum((
-               SELECT COALESCE(sum(c.quantity),0)
-               FROM ai_credit_consumptions c
-               WHERE c.grant_id=g.id
-             )),0)::integer consumed
-           FROM entitlement_grants g
-           WHERE g.organisation_id=$1 AND g.feature='ai_actions'
-             AND g.source IN ('top_up','admin_grant')
-             AND (g.expires_at IS NULL OR g.expires_at>now())`,
+    // R4.4: phase6_org_ai_quota is the single org-wide calculation shared with the
+    // AI pre-check and the finalize charge (migration 0074).
+    const quota = (
+      await this.sql.unsafe<{ base_limit: number; base_used: number; credits_granted: number; remaining: number }>(
+        `SELECT base_limit,base_used,credits_granted,remaining FROM phase6_org_ai_quota($1)`,
         [organisationId],
       )
-    )[0] ?? { granted: 0, consumed: 0 };
-    const baseUsed =
-      (
-        await this.sql.unsafe<{ used: number }>(
-          `SELECT count(*)::integer used
-           FROM ai_action_ledger l
-           WHERE l.organisation_id=$1 AND l.outcome='success' AND l.charged_units>0
-             AND l.created_at>=date_trunc('month',now())
-             AND NOT EXISTS (SELECT 1 FROM ai_credit_consumptions c WHERE c.ledger_id=l.id)`,
-          [organisationId],
-        )
-      )[0]?.used ?? 0;
-    const baseLimit = tierLimits.monthly_ai_actions;
-    const topUpRemaining = Math.max(0, credits.granted - credits.consumed);
-    const baseRemaining = Math.max(0, baseLimit - baseUsed);
+    )[0] ?? { base_limit: tierLimits.monthly_ai_actions, base_used: 0, credits_granted: 0, remaining: 0 };
+    const quotaLimit = quota.base_limit + quota.credits_granted;
     return {
       organisation_id: organisationId,
       tier: sub.tier,
@@ -266,9 +245,9 @@ export class EntitlementRuntime {
       sponsor_placements_allowed: tierLimits.features.includes("sponsor_placements"),
       max_entries_per_division: tierLimits.max_entries_per_division,
       ai_quota: {
-        limit: baseLimit + credits.granted,
-        used: Math.min(baseLimit, baseUsed) + credits.consumed,
-        remaining: baseRemaining + topUpRemaining,
+        limit: quotaLimit,
+        used: Math.max(0, quotaLimit - quota.remaining),
+        remaining: quota.remaining,
         period_start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString(),
         period_end: sub.currentPeriodEnd ? sub.currentPeriodEnd.toISOString() : null,
       },
@@ -564,6 +543,14 @@ export class EntitlementRuntime {
       | { purchaseType: "ai_top_up"; topUpUnits: number; successUrl: string; cancelUrl: string },
   ) {
     await this.assertOrganisationEditor(this.sql, organisationId, actor);
+    // ADR 0010: MATCHDAY launches with no AI provider, so AI top-ups are not sold.
+    // Rejected unconditionally (not just when AI mode is disabled): even in stub mode
+    // there is nothing real to buy. fulfilCheckout/revokeCheckout still honour
+    // historical ai_top_up sessions so old Stripe webhooks replay idempotently.
+    if ("purchaseType" in input || (input.topUpUnits ?? 0) > 0) {
+      throw new ApiError(409, ErrorCode.AI_TOP_UP_UNAVAILABLE, "AI top-ups are not available");
+    }
+    const plan = input;
     const client = this.stripeClient ?? null;
     if (!client) throw new ApiError(503, ErrorCode.SERVICE_UNAVAILABLE, "Stripe payment provider is not configured");
     const allowedOrigins = this.options.checkoutRedirectOrigins ?? [];
@@ -583,8 +570,8 @@ export class EntitlementRuntime {
         JSON.stringify([
           actor.accountId,
           organisationId,
-          "purchaseType" in input ? "ai_top_up" : input.tier,
-          "competitionId" in input ? input.competitionId : null,
+          plan.tier,
+          "competitionId" in plan ? plan.competitionId : null,
           units ?? 0,
           successUrl,
           cancelUrl,
@@ -592,33 +579,6 @@ export class EntitlementRuntime {
         ]),
       )
       .digest("hex")}`;
-
-    if ("purchaseType" in input) {
-      if (!client.createTopUpSession) {
-        throw new ApiError(503, ErrorCode.SERVICE_UNAVAILABLE, "Stripe AI top-up checkout is not configured");
-      }
-      const session = await client.createTopUpSession({
-        organisationId,
-        topUpUnits: input.topUpUnits,
-        successUrl,
-        cancelUrl,
-        idempotencyKey,
-      });
-      return {
-        session_id: session.sessionId,
-        checkout_url: session.checkoutUrl,
-        organisation_id: session.organisationId,
-        competition_id: null,
-        purchase_type: "ai_top_up" as const,
-        tier: null,
-        top_up_units: session.topUpUnits,
-        amount_total: session.amountTotal,
-        currency: session.currency,
-        expires_at: session.expiresAt,
-        success_url: session.successUrl,
-        cancel_url: session.cancelUrl,
-      };
-    }
 
     if (input.tier === "event_pass") {
       await this.assertCompetitionBelongsToOrganisation(this.sql, input.competitionId, organisationId);
