@@ -29,12 +29,18 @@ describe("public legal pages", () => {
     expect(catalogue).not.toContain("Standard terms and conditions for Matchday organiser and scoring services apply");
   });
 
-  it("states Singapore governing law and the legal entity placeholders in the terms", () => {
+  it("states Singapore governing law and the legal entity details or placeholders in the terms", () => {
     const terms = JSON.stringify(legalMessages.terms);
     expect(terms).toContain("laws of Singapore");
     expect(terms).toContain(legalPlaceholders.organisationName);
     expect(terms).toContain(legalPlaceholders.registeredAddress);
     expect(terms).toContain(legalPlaceholders.governingLawCourts);
+  });
+
+  it("verifies all legal placeholders are non-empty and formatted appropriately", () => {
+    for (const [key, value] of Object.entries(legalPlaceholders)) {
+      expect(value.length, `legalPlaceholder.${key} should not be empty`).toBeGreaterThan(0);
+    }
   });
 
   it("publishes substantive PDPA disclosures from the shared legal catalogue", () => {

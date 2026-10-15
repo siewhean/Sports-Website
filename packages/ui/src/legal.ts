@@ -57,7 +57,7 @@ export const retentionSchedule = [
 ] as const;
 
 export const legalMessages = {
-  updatedOn: "9 October 2026",
+  updatedOn: "15 October 2026",
   lastUpdated: "Last updated",
   terms: {
     sections: [

@@ -503,19 +503,20 @@ dependency and secret scans
 
 Engineering can continue without these, but the dependent checkpoint cannot pass until each exists.
 
-| Item                                                             | Needed for | State                                                                                   |
-| ---------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------- |
-| Better Stack account (heartbeat URL or API token)                | CP5        | Done 14 Oct: monitors, heartbeat, status page https://matchday-poladex.betteruptime.com |
-| Legal entity, address, support contact, jurisdiction             | CP7        | Not yet available                                                                       |
-| Product domain decision                                          | CP7        | Staying on `poladex.shop` for now                                                       |
-| Event Pass and Organiser Pro prices and currency                 | CP7        | Configuration; to confirm                                                               |
-| Stripe live-mode activation                                      | CP7        | Pending                                                                                 |
-| Auth0 production tenant with MFA                                 | CP7        | Pending                                                                                 |
-| AI provider decision (or launch without AI)                      | CP4        | Decided — launch without AI (ADR 0010, PR #111 merged)                                  |
-| Walkover display, per-group standings, offline scoring decisions | CP2        | Decided — ADRs 0008/0009 (PR #103 merged)                                               |
-| A real local event for the rehearsal                             | CP8        | Pending                                                                                 |
-| Expected peak load (competitions, scoring devices, spectators)   | CP8        | Pending                                                                                 |
-| Formal legal/privacy approval                                    | First sale | Deferred per ADR 0005                                                                   |
+| Item                                                             | Needed for | State                                                                                                                                              |
+| ---------------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Better Stack account (heartbeat URL or API token)                | CP5        | Done 14 Oct: monitors, heartbeat, status page https://matchday-poladex.betteruptime.com                                                            |
+| Legal entity, address, support contact, jurisdiction             | CP7        | Not yet available                                                                                                                                  |
+| Product domain decision                                          | CP7        | Staying on `poladex.shop` for now (see `docs/operations/DOMAIN_DECISION.md`)                                                                       |
+| Event Pass and Organiser Pro prices and currency                 | CP7        | Configuration; to confirm                                                                                                                          |
+| Stripe live-mode activation                                      | CP7        | Pending (runbook documented in `docs/operations/STRIPE_LIVE_RUNBOOK.md`)                                                                           |
+| Auth0 production tenant with MFA                                 | CP7        | Pending (break-glass runbook in `docs/operations/BREAK_GLASS.md`; drill not performed)                                                             |
+| Repository privacy and CI minutes budget                         | CP7        | Pending owner decision; measured ~56 billed min per PR run exceeds the Free/Pro quota at current cadence (`docs/operations/REPOSITORY_PRIVACY.md`) |
+| AI provider decision (or launch without AI)                      | CP4        | Decided — launch without AI (ADR 0010, PR #111 merged)                                                                                             |
+| Walkover display, per-group standings, offline scoring decisions | CP2        | Decided — ADRs 0008/0009 (PR #103 merged)                                                                                                          |
+| A real local event for the rehearsal                             | CP8        | Pending                                                                                                                                            |
+| Expected peak load (competitions, scoring devices, spectators)   | CP8        | Pending                                                                                                                                            |
+| Formal legal/privacy approval                                    | First sale | Deferred per ADR 0005, no approval obtained (see `docs/operations/LEGAL_APPROVAL.md`)                                                              |
 
 ## 10. Risk register
 
