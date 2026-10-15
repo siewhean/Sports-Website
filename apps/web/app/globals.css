@@ -3260,7 +3260,7 @@ svg {
   left: 8px;
   padding: 10px 14px;
   background: var(--ink);
-  color: white;
+  color: var(--surface);
   transform: translateY(-150%);
 }
 
