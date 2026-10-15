@@ -38,7 +38,7 @@ A deployment during an active freeze requires an **Emergency Hotfix** justificat
 
 1. P1 outage affecting active scoring or data corruption.
 2. Changes must be tested against the staging replica first.
-3. Rollback drill script [`scripts/run-gate-f-rollback-drill.mjs`](file:///Users/Siew%20Hean/Documents/Sports%20Website/scripts/run-gate-f-rollback-drill.mjs) must be ready if health fails.
+3. Rollback drill script [`scripts/run-gate-f-rollback-drill.mjs](../../scripts/run-gate-f-rollback-drill.mjs) must be ready if health fails.
 
 ---
 
@@ -64,7 +64,7 @@ A deployment during an active freeze requires an **Emergency Hotfix** justificat
 
 - Primary Alerting: Sentry Alert Rules (Spike & New Error webhooks) -> Notification Channel.
 - Host Access: Direct SSH to production OCI instance using authenticated SSH key.
-- Emergency Database Access: [Break-Glass Procedure](file:///Users/Siew%20Hean/Documents/Sports%20Website/docs/operations/BREAK_GLASS.md).
+- Emergency Database Access: [Break-Glass Procedure](BREAK_GLASS.md).
 
 ---
 

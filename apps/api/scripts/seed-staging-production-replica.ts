@@ -10,6 +10,7 @@
  * changes hit production.
  */
 
+import os from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,12 +23,54 @@ import type { PostgresJsSql } from "@matchday/identity";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
 
+export const BLOCKED_PRODUCTION_IP = "129.146.6.204";
+
+export const DEFAULT_ALLOWED_STAGING_SERVERS = [
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "0.0.0.0",
+  "staging.matchday.internal",
+  "staging-db.matchday.internal",
+  "matchday-staging",
+  "staging.internal",
+  "staging-db.internal",
+];
+
+function checkLocalNetworkInterfaces(): void {
+  const interfaces = os.networkInterfaces();
+  for (const [name, addrs] of Object.entries(interfaces)) {
+    if (!addrs) continue;
+    for (const addr of addrs) {
+      if (addr.address === BLOCKED_PRODUCTION_IP) {
+        throw new Error(
+          `Safety guard triggered: Host network interface "${name}" has production IP ${BLOCKED_PRODUCTION_IP}. Seeding is strictly forbidden on the production host.`,
+        );
+      }
+    }
+  }
+}
+
+function checkSshSession(): void {
+  const sshVars = [process.env.SSH_CLIENT, process.env.SSH_CONNECTION, process.env.SSH_TTY];
+  for (const val of sshVars) {
+    if (val && val.includes(BLOCKED_PRODUCTION_IP)) {
+      throw new Error(
+        `Safety guard triggered: Active SSH session contains production IP ${BLOCKED_PRODUCTION_IP}. Seeding is strictly forbidden across SSH tunnels or sessions to production.`,
+      );
+    }
+  }
+}
+
 export function assertSafeNonProductionDatabase(rawUrl: string, allowStagingFlag = false): void {
   if (process.env.APP_ENV === "production" || process.env.NODE_ENV === "production") {
     throw new Error(
       "Safety guard triggered: Seed script cannot run in production environment (APP_ENV or NODE_ENV is 'production').",
     );
   }
+
+  checkLocalNetworkInterfaces();
+  checkSshSession();
 
   let parsed: URL;
   try {
@@ -38,6 +81,12 @@ export function assertSafeNonProductionDatabase(rawUrl: string, allowStagingFlag
 
   const hostname = parsed.hostname.toLowerCase();
   const dbName = parsed.pathname.replace(/^\//, "").toLowerCase();
+
+  if (hostname === BLOCKED_PRODUCTION_IP || parsed.host.includes(BLOCKED_PRODUCTION_IP)) {
+    throw new Error(
+      `Safety guard triggered: Database host matches blocked production IP ${BLOCKED_PRODUCTION_IP}. Seeding aborted.`,
+    );
+  }
 
   const blockedHostPatterns = [
     "poladex.shop",
@@ -64,6 +113,18 @@ export function assertSafeNonProductionDatabase(rawUrl: string, allowStagingFlag
     );
   }
 
+  const customAllowed = (process.env.ALLOWED_STAGING_SERVERS ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const allowedSet = new Set([...DEFAULT_ALLOWED_STAGING_SERVERS, ...customAllowed]);
+
+  if (!allowedSet.has(hostname)) {
+    throw new Error(
+      `Safety guard triggered: Database host "${hostname}" is not in the allowed staging servers whitelist (${Array.from(allowedSet).join(", ")}).`,
+    );
+  }
+
   const isLoopback =
     hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "0.0.0.0";
 
@@ -76,6 +137,67 @@ export function assertSafeNonProductionDatabase(rawUrl: string, allowStagingFlag
         `Seeding a remote/staging database requires explicit confirmation via '--allow-staging-seed' CLI flag or 'ALLOW_STAGING_SEED=1' env.`,
     );
   }
+}
+
+export async function assertDatabaseStagingMarker(sql: Sql, allowMarkerInit = false): Promise<void> {
+  const tableCheck = await sql<{ exists: boolean }[]>`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.tables 
+      WHERE table_schema = current_schema() AND table_name = 'staging_environment_markers'
+    ) AS exists;
+  `;
+
+  if (tableCheck[0]?.exists) {
+    const rows = await sql<{ is_staging: boolean; environment: string }[]>`
+      SELECT is_staging, environment FROM staging_environment_markers LIMIT 1;
+    `;
+    if (rows.length > 0 && (rows[0]!.is_staging === true || rows[0]!.environment === "staging")) {
+      return;
+    }
+    throw new Error(
+      "Safety guard triggered: Database marker table 'staging_environment_markers' exists but is not marked as staging.",
+    );
+  }
+
+  try {
+    const settingRows = await sql<{ env: string | null }[]>`
+      SELECT current_setting('matchday.environment', true) AS env;
+    `;
+    if (settingRows[0]?.env === "staging") {
+      return;
+    }
+  } catch {
+    // Ignore setting query errors
+  }
+
+  const allowInit =
+    allowMarkerInit || process.env.INIT_STAGING_MARKER === "1" || process.argv.includes("--init-staging-marker");
+
+  if (allowInit) {
+    await sql`
+      CREATE TABLE IF NOT EXISTS staging_environment_markers (
+        id text PRIMARY KEY,
+        is_staging boolean NOT NULL DEFAULT true,
+        environment text NOT NULL DEFAULT 'staging',
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+    `;
+    await sql`
+      INSERT INTO staging_environment_markers (id, is_staging, environment)
+      VALUES ('primary_marker', true, 'staging')
+      ON CONFLICT (id) DO UPDATE SET is_staging = true, environment = 'staging';
+    `;
+    return;
+  }
+
+  const [dbNameRow] = await sql<{ current_database: string }[]>`SELECT current_database();`;
+  const dbName = dbNameRow?.current_database ?? "unknown";
+
+  throw new Error(
+    `Safety guard triggered: Database "${dbName}" lacks a verified 'this is staging' marker in table 'staging_environment_markers'. ` +
+      `Seeding cannot proceed without a staging environment marker. ` +
+      `To initialize this database as staging, provide '--init-staging-marker' or set INIT_STAGING_MARKER=1.`,
+  );
 }
 
 function fourEntryEliminationDefinition(
@@ -134,7 +256,7 @@ function fourEntryEliminationDefinition(
 }
 
 export async function seedStagingProductionReplica(
-  options: { databaseUrl?: string; verbose?: boolean; allowStaging?: boolean } = {},
+  options: { databaseUrl?: string; verbose?: boolean; allowStaging?: boolean; allowInitMarker?: boolean } = {},
 ) {
   const url = options.databaseUrl ?? databaseUrl;
   assertSafeNonProductionDatabase(url, options.allowStaging);
@@ -150,6 +272,9 @@ export async function seedStagingProductionReplica(
     log(" Track R8: Seeding Staging Production Replica");
     log(` Target Database: ${url.replace(/:[^:@]+@/, ":***@")}`);
     log("============================================================\n");
+
+    // Guard: Verify Staging Marker before writing anything
+    await assertDatabaseStagingMarker(sql, options.allowInitMarker);
 
     // 1. Ensure active sport packs for all five sports
     log("[1/6] Verifying active sport pack versions for all 5 sports...");
@@ -428,8 +553,17 @@ export async function seedStagingProductionReplica(
       `;
     }
 
-    // 6. Verify Database Invariants
+    // 6. Verify Database Invariants (Scoped ONLY to records created by this run)
     log("[5/6] Inspecting seeded replica invariants...");
+    const seededCompetitionIds = [
+      activeVball.competitionId,
+      completedTableTennis.competitionId,
+      archivedBasketball.competitionId,
+      archivedBadminton.competitionId,
+      liveCanoePolo.competitionId,
+      draftBadminton.competitionId,
+    ];
+
     const stats = await sql<
       {
         total_competitions: number;
@@ -440,11 +574,11 @@ export async function seedStagingProductionReplica(
       }[]
     >`
       SELECT
-        (SELECT count(*)::int FROM competitions) AS total_competitions,
-        (SELECT count(*)::int FROM competitions WHERE status = 'archived') AS archived_competitions,
-        (SELECT count(*)::int FROM matches) AS total_matches,
-        (SELECT count(*)::int FROM matches m JOIN competitions c ON c.id = m.competition_id WHERE c.status = 'archived') AS frozen_archived_matches,
-        (SELECT count(DISTINCT sport_code)::int FROM competitions) AS distinct_sports;
+        (SELECT count(*)::int FROM competitions WHERE id = ANY(${seededCompetitionIds})) AS total_competitions,
+        (SELECT count(*)::int FROM competitions WHERE id = ANY(${seededCompetitionIds}) AND status = 'archived') AS archived_competitions,
+        (SELECT count(*)::int FROM matches WHERE competition_id = ANY(${seededCompetitionIds})) AS total_matches,
+        (SELECT count(*)::int FROM matches m JOIN competitions c ON c.id = m.competition_id WHERE m.competition_id = ANY(${seededCompetitionIds}) AND c.status = 'archived') AS frozen_archived_matches,
+        (SELECT count(DISTINCT sport_code)::int FROM competitions WHERE id = ANY(${seededCompetitionIds})) AS distinct_sports;
     `;
 
     const summary = stats[0]!;
@@ -455,7 +589,13 @@ export async function seedStagingProductionReplica(
     log(`  - Total Matches:          ${summary.total_matches}`);
     log(`  - Frozen Archived Matches: ${summary.frozen_archived_matches}`);
 
-    if (summary.archived_competitions < 2 || summary.frozen_archived_matches < 6 || summary.distinct_sports < 5) {
+    if (
+      summary.total_competitions !== 6 ||
+      summary.archived_competitions !== 2 ||
+      summary.distinct_sports !== 5 ||
+      summary.total_matches !== 18 ||
+      summary.frozen_archived_matches !== 6
+    ) {
       throw new Error(`Staging replica seeder failed invariant expectations: ${JSON.stringify(summary)}`);
     }
 

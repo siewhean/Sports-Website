@@ -121,20 +121,51 @@ export async function runR8LoadTests(options = {}) {
     publicData.tiers?.find((t) => (t.tier ?? t.name ?? "").includes("Peak")) ??
     publicData.tiers?.[1] ??
     publicData.tiers?.[0];
-  const publicP95 = publicPeakTier?.metrics?.p95Ms ?? publicData.latency_p95_ms ?? 0;
-  const publicP50 = publicPeakTier?.metrics?.p50Ms ?? 0;
-  const publicSamples = publicPeakTier?.metrics?.sampleCount ?? 0;
-  const publicErrorRate = publicPeakTier?.metrics?.errorRate ?? 0;
+  const publicP95 = publicPeakTier?.metrics?.p95Ms ?? publicData.peak_summary?.p95Ms ?? publicData.latency_p95_ms;
+  const publicP50 = publicPeakTier?.metrics?.p50Ms ?? publicData.peak_summary?.p50Ms ?? 0;
+  const publicSamples =
+    publicPeakTier?.metrics?.sampleCount ?? publicData.peak_summary?.sampleCount ?? publicData.sample_count;
+  const publicErrorRate =
+    publicPeakTier?.metrics?.errorRate ?? publicData.peak_summary?.errorRate ?? publicData.error_rate;
 
   // Scoring benchmark tracks tiers; check peak tier (2x Peak or highest tier)
   const scoringPeakTier =
     scoringData.tiers?.find((t) => (t.tier ?? t.name ?? "").includes("Peak")) ??
     scoringData.tiers?.[1] ??
     scoringData.tiers?.[0];
-  const scoringP95 = scoringPeakTier?.metrics?.p95Ms ?? scoringPeakTier?.p95_ms ?? 0;
-  const scoringP50 = scoringPeakTier?.metrics?.p50Ms ?? scoringPeakTier?.p50_ms ?? 0;
-  const scoringSamples = scoringPeakTier?.metrics?.sampleCount ?? scoringPeakTier?.samples ?? 0;
-  const scoringErrorRate = scoringPeakTier?.metrics?.errorRate ?? scoringPeakTier?.error_rate ?? 0;
+  const scoringP95 = scoringPeakTier?.metrics?.p95Ms ?? scoringData.peak_summary?.p95Ms ?? scoringPeakTier?.p95_ms;
+  const scoringP50 = scoringPeakTier?.metrics?.p50Ms ?? scoringData.peak_summary?.p50Ms ?? scoringPeakTier?.p50_ms ?? 0;
+  const scoringSamples =
+    scoringPeakTier?.metrics?.sampleCount ?? scoringData.peak_summary?.sampleCount ?? scoringPeakTier?.samples;
+  const scoringErrorRate =
+    scoringPeakTier?.metrics?.errorRate ?? scoringData.peak_summary?.errorRate ?? scoringPeakTier?.error_rate;
+
+  // Reject empty runs and missing figures
+  const MIN_SAMPLES = 10;
+  const isNumberAndPositive = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
+  const isNumberAndNonNegative = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
+
+  if (
+    !isNumberAndPositive(publicP95) ||
+    !isNumberAndPositive(publicSamples) ||
+    publicSamples < MIN_SAMPLES ||
+    !isNumberAndNonNegative(publicErrorRate)
+  ) {
+    throw new Error(
+      `Public load benchmark produced invalid, empty, or missing metrics (p95Ms=${publicP95}, samples=${publicSamples}, errorRate=${publicErrorRate}). Empty runs and missing figures are rejected.`,
+    );
+  }
+
+  if (
+    !isNumberAndPositive(scoringP95) ||
+    !isNumberAndPositive(scoringSamples) ||
+    scoringSamples < MIN_SAMPLES ||
+    !isNumberAndNonNegative(scoringErrorRate)
+  ) {
+    throw new Error(
+      `Scoring load benchmark produced invalid, empty, or missing metrics (p95Ms=${scoringP95}, samples=${scoringSamples}, errorRate=${scoringErrorRate}). Empty runs and missing figures are rejected.`,
+    );
+  }
 
   const SCORING_P95_BUDGET_MS = 500;
   const PUBLIC_P95_BUDGET_MS = 2500;

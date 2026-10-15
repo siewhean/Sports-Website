@@ -301,6 +301,7 @@ test("cache purge audit returns PENDING without external evidence and validates 
   await withArtifacts(async (artifactsDir) => {
     const unverified = await runGateFCachePurgeAudit(SHA, { artifactsDir });
     assert.equal(unverified.verdict, "PENDING");
+    assert.equal(unverified.protocol_verification, "NOT_EXECUTED");
 
     const validEvidence = {
       schema_version: "2026.09.edge-purge-v1",
@@ -318,6 +319,7 @@ test("cache purge audit returns PENDING without external evidence and validates 
 
     const verified = await runGateFCachePurgeAudit(SHA, { artifactsDir, evidenceFile });
     assert.equal(verified.verdict, "PASS");
+    assert.equal(verified.protocol_verification, "VERIFIED");
   });
 });
 
@@ -325,8 +327,11 @@ test("ops audit returns PENDING for SLO, alert routing, cost controls and PENDIN
   await withArtifacts(async (artifactsDir) => {
     const res = await runGateFOpsAudit(SHA, { artifactsDir });
     assert.equal(res.sloBaseline.verdict, "PENDING");
+    assert.equal(res.sloBaseline.protocol_verification, "NOT_EXECUTED");
     assert.equal(res.alertRouting.verdict, "PENDING");
+    assert.equal(res.alertRouting.protocol_verification, "NOT_EXECUTED");
     assert.equal(res.costControls.verdict, "PENDING");
+    assert.equal(res.costControls.protocol_verification, "NOT_EXECUTED");
     assert.equal(res.featureFlags.verdict, "PENDING_IMPLEMENTATION");
     assert.equal(res.featureFlags.admin_ui_present, false);
   });
@@ -338,8 +343,13 @@ test("recertifications audit returns PENDING for DNS/TLS, SEO, Email when extern
     assert.equal(res.dnsTls.verdict, "PENDING");
     assert.equal(res.seo.verdict, "PENDING");
     assert.equal(res.email.verdict, "PENDING");
-    assert.equal(res.security.verdict, "PASS_AUTOMATED_SCOPE");
-    assert.equal(res.a11y.verdict, "PASS_AUTOMATED_SCOPE");
+    assert.equal(res.security.verdict, "NOT_EXECUTED");
+    assert.equal(res.security.dependency_audit, "NOT_EXECUTED");
+    assert.equal(res.security.secret_scan, "NOT_EXECUTED");
+    assert.equal(res.a11y.verdict, "NOT_EXECUTED");
+    assert.equal(res.a11y.automated_axe_playwright, "NOT_EXECUTED");
+    assert.equal(res.a11y.reduced_motion_contract, "NOT_EXECUTED");
+    assert.equal(res.a11y.high_contrast_contract, "NOT_EXECUTED");
     assert.equal(res.legal.verdict, "PASS_TECHNICAL_PACKAGE_WITH_DEFERMENT");
   });
 });
@@ -419,4 +429,26 @@ test("runGateFDrills rejects malformed candidate SHA", async () => {
     async () => runGateFDrills("invalid-sha"),
     /Gate F drills require an exact 40-character candidate SHA/,
   );
+});
+
+test("runGateFDrills produces FAIL overall verdict when any drill reports FAIL", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    const failedRollbackEvidence = {
+      schema_version: "2026.09.rollback-drill-v1",
+      evidence_class: "PROVIDER_RECEIPT",
+      candidate_sha: SHA,
+      environment: "production",
+      observed_at: new Date().toISOString(),
+      rollback_drill_id: "drill-failed-123",
+      simulated_or_observed_result: "FAIL",
+      scoring_availability: "COMPROMISED",
+    };
+    const evidenceFile = path.join(artifactsDir, "rollback-fail.json");
+    await writeFile(evidenceFile, JSON.stringify(failedRollbackEvidence));
+
+    const result = await runGateFDrills(SHA, { rollbackEvidenceFile: evidenceFile });
+    assert.equal(result.drills.zero_downtime_rollback.verdict, "FAIL");
+    assert.equal(result.status_summary.zero_downtime_rollback, "FAIL");
+    assert.equal(result.verdict, "FAIL");
+  });
 });

@@ -37,25 +37,36 @@ export async function runGateFRollbackDrill(candidateSha, options = {}) {
     validation.evidence?.simulated_or_observed_result === "PASS" &&
     validation.evidence?.scoring_availability === "PRESERVED";
 
+  const isFailed =
+    Boolean(validation.evidence?.rollback_drill_id) &&
+    (validation.evidence?.simulated_or_observed_result === "FAIL" ||
+      validation.evidence?.scoring_availability === "FAILED" ||
+      validation.evidence?.scoring_availability === "COMPROMISED");
+
   const isPass = hasSpecificProof;
+  const verdict = isPass ? "PASS" : isFailed ? "FAIL" : "PENDING";
 
   // Production rollback requires live external execution; do not invent simulation steps
   const receipt = {
     qa_item: "OPS-002",
     candidate_sha: sha,
     drill_type: "automated_zero_downtime_rollback_procedure",
-    drill_executed: isPass,
+    drill_executed: isPass || isFailed,
     scoring_availability: isPass
       ? (validation.evidence?.scoring_availability ?? "PRESERVED")
-      : "UNTESTED_PENDING_PRODUCTION_RUN",
-    simulation_steps: isPass ? (validation.evidence?.steps ?? []) : [],
-    simulation_result: isPass ? "OBSERVED_PASS" : "NOT_EXECUTED_PENDING_PRODUCTION_DRILL",
-    verdict: isPass ? "PASS" : "PENDING",
+      : isFailed
+        ? (validation.evidence?.scoring_availability ?? "FAILED")
+        : "UNTESTED_PENDING_PRODUCTION_RUN",
+    simulation_steps: isPass || isFailed ? (validation.evidence?.steps ?? []) : [],
+    simulation_result: isPass ? "OBSERVED_PASS" : isFailed ? "OBSERVED_FAIL" : "NOT_EXECUTED_PENDING_PRODUCTION_DRILL",
+    verdict,
     pending_reasons: isPass
       ? []
       : validation.errors.length > 0
         ? validation.errors
-        : ["external_production_rollback_evidence_missing"],
+        : isFailed
+          ? ["rollback_drill_failed_in_production"]
+          : ["external_production_rollback_evidence_missing"],
     ...(validation.evidenceSha256
       ? { input_evidence_sha256: validation.evidenceSha256, evidence_reference: evidenceFile }
       : {}),

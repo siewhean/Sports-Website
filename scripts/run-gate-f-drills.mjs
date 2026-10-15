@@ -127,16 +127,41 @@ export async function runGateFDrills(candidateSha, options = {}) {
   console.log(`  ✓ Security Audit:  ${recertsResult.security.verdict}`);
   console.log(`  ✓ Legal Technical: ${recertsResult.legal.verdict}\n`);
 
+  // Check for any FAIL results
+  const anyFailed =
+    migrationResult.verdict === "FAIL" ||
+    rollbackResult.verdict === "FAIL" ||
+    backupResult.verdict === "FAIL" ||
+    cacheResult.verdict === "FAIL" ||
+    opsResult.alertRouting.verdict === "FAIL" ||
+    opsResult.sloBaseline.verdict === "FAIL" ||
+    opsResult.costControls.verdict === "FAIL" ||
+    recertsResult.dnsTls.verdict === "FAIL" ||
+    recertsResult.security.verdict === "FAIL" ||
+    recertsResult.seo.verdict === "FAIL" ||
+    recertsResult.email.verdict === "FAIL" ||
+    recertsResult.a11y.verdict === "FAIL" ||
+    recertsResult.legal.verdict === "FAIL";
+
   // Determine dynamic overall verdict from actual execution results
   const allLiveDrillsPassed =
+    !anyFailed &&
     migrationResult.verdict === "PASS" &&
     rollbackResult.verdict === "PASS" &&
     backupResult.verdict === "PASS" &&
     cacheResult.verdict === "PASS" &&
     opsResult.alertRouting.verdict === "PASS" &&
-    opsResult.sloBaseline.verdict === "PASS";
+    opsResult.sloBaseline.verdict === "PASS" &&
+    opsResult.costControls.verdict === "PASS" &&
+    recertsResult.dnsTls.verdict === "PASS" &&
+    recertsResult.seo.verdict === "PASS" &&
+    recertsResult.email.verdict === "PASS";
 
-  const overallVerdict = allLiveDrillsPassed ? "PASS" : "CONFIG_AND_CONTRACT_AUDIT_PASS_PRODUCTION_DRILLS_PENDING";
+  const overallVerdict = anyFailed
+    ? "FAIL"
+    : allLiveDrillsPassed
+      ? "PASS"
+      : "CONFIG_AND_CONTRACT_AUDIT_PASS_PRODUCTION_DRILLS_PENDING";
 
   // Aggregate Drill Artifact
   const receipt = {
@@ -191,12 +216,32 @@ export async function runGateFDrills(candidateSha, options = {}) {
     simulation_environment: "staging_rehearsal_suite",
     verdict: overallVerdict,
     status_summary: {
-      migration_safety: migrationResult.verdict === "PASS" ? "STATIC_CONTRACT_AUDIT_PASS" : "FAIL",
-      zero_downtime_rollback: rollbackResult.drill_executed ? "PASS" : "NOT_EXECUTED_PENDING_PRODUCTION_RUN",
-      backup_isolated_restore: backupResult.verdict === "PASS" ? "PASS" : "NOT_EXECUTED_PENDING_PRODUCTION_BACKUP",
-      edge_cache_purge: cacheResult.verdict === "PASS" ? "PASS" : "CONFIG_AUDIT_ONLY_PURGE_NOT_EXECUTED",
-      alert_routing: opsResult.alertRouting.verdict === "PASS" ? "PASS" : "CONFIG_AUDIT_ONLY_ALERTS_NOT_FIRED",
+      migration_safety: migrationResult.verdict === "PASS" ? "STATIC_CONTRACT_AUDIT_PASS" : migrationResult.verdict,
+      zero_downtime_rollback: rollbackResult.drill_executed
+        ? rollbackResult.verdict
+        : rollbackResult.verdict === "FAIL"
+          ? "FAIL"
+          : "NOT_EXECUTED_PENDING_PRODUCTION_RUN",
+      backup_isolated_restore:
+        backupResult.verdict === "PASS"
+          ? "PASS"
+          : backupResult.verdict === "FAIL"
+            ? "FAIL"
+            : "NOT_EXECUTED_PENDING_PRODUCTION_BACKUP",
+      edge_cache_purge:
+        cacheResult.verdict === "PASS"
+          ? "PASS"
+          : cacheResult.verdict === "FAIL"
+            ? "FAIL"
+            : "CONFIG_AUDIT_ONLY_PURGE_NOT_EXECUTED",
+      alert_routing:
+        opsResult.alertRouting.verdict === "PASS"
+          ? "PASS"
+          : opsResult.alertRouting.verdict === "FAIL"
+            ? "FAIL"
+            : "CONFIG_AUDIT_ONLY_ALERTS_NOT_FIRED",
       security_recertification: recertsResult.security.verdict,
+      accessibility: recertsResult.a11y.verdict,
       legal_technical_compliance: recertsResult.legal.verdict,
     },
     generated_at: new Date().toISOString(),
@@ -237,7 +282,13 @@ export async function runGateFDrills(candidateSha, options = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sha = process.argv[2] ?? process.env.CANDIDATE_SHA;
   runGateFDrills(sha)
-    .then(() => process.exit(0))
+    .then((receipt) => {
+      if (receipt.verdict === "FAIL") {
+        console.error(`\n[FAILURE] Gate F drills overall verdict is FAIL.`);
+        process.exit(1);
+      }
+      process.exit(0);
+    })
     .catch((err) => {
       console.error("[FATAL] Gate F drills failed:", err.message);
       process.exit(1);
