@@ -10,7 +10,7 @@ const fetchMock = vi.fn();
 describe("casual API forwarding (mocked fetch)", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubEnv("RENDER_API_ORIGIN", "");
+    vi.stubEnv("API_ORIGIN", "");
     vi.stubEnv("MATCHDAY_API_BASE_URL", "http://127.0.0.1:4000");
   });
 
@@ -239,7 +239,7 @@ describe("production-topology casual client identity and rate-limit trust chain"
 
     const port = (caddyApiServer.address() as AddressInfo).port;
     caddyApiUrl = `http://127.0.0.1:${port}`;
-    vi.stubEnv("RENDER_API_ORIGIN", "");
+    vi.stubEnv("API_ORIGIN", "");
     vi.stubEnv("MATCHDAY_API_BASE_URL", caddyApiUrl);
   });
 

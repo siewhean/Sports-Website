@@ -18,9 +18,7 @@ export async function forwardPublicVersionStream(request: Request): Promise<Resp
   const incoming = new URL(request.url);
   if (request.method !== "GET") return failure(405);
   if (!/^\/api\/v1\/public\/competitions\/[^/]+\/versions$/u.test(incoming.pathname)) return failure(404);
-  const backend = configuredPublicOrigin(
-    process.env.RENDER_API_ORIGIN?.trim() || process.env.MATCHDAY_API_BASE_URL?.trim(),
-  );
+  const backend = configuredPublicOrigin(process.env.API_ORIGIN?.trim() || process.env.MATCHDAY_API_BASE_URL?.trim());
   if (!backend || backend === incoming.origin) return failure(503);
   const upstreamAbort = new AbortController();
   let closeDownstream: (() => void) | undefined;
