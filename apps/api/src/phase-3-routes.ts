@@ -711,7 +711,13 @@ export async function registerPhase3Routes(
     app.post<{
       Params: { competitionId: string };
       Headers: { origin?: string; "x-csrf-token"?: string };
-      Body: { name: string; code?: string; entry_limit: 8 | 12 | 16 | 24 | 48; idempotency_key: string };
+      Body: {
+        name: string;
+        code?: string;
+        entry_limit: 8 | 12 | 16 | 24 | 48;
+        planned_entry_count?: number;
+        idempotency_key: string;
+      };
     }>(
       "/api/v1/competitions/:competitionId/divisions",
       {
@@ -724,11 +730,12 @@ export async function registerPhase3Routes(
               name: Type.String({ minLength: 1 }),
               code: Type.Optional(Type.String()),
               entry_limit: Type.Union([8, 12, 16, 24, 48].map((value) => Type.Literal(value))),
+              planned_entry_count: Type.Optional(Type.Integer({ minimum: 1, maximum: 48 })),
               idempotency_key: Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" }),
             },
             { additionalProperties: false },
           ),
-          response: { 201: Generic, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse },
+          response: { 201: Generic, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
           tags: ["phase3-divisions"],
         },
       },
@@ -741,6 +748,9 @@ export async function registerPhase3Routes(
               name: request.body.name,
               ...(request.body.code ? { code: request.body.code } : {}),
               entryLimit: request.body.entry_limit,
+              ...(request.body.planned_entry_count === undefined
+                ? {}
+                : { plannedEntryCount: request.body.planned_entry_count }),
             },
             request.id,
             request.body.idempotency_key,
@@ -881,6 +891,7 @@ export async function registerPhase3Routes(
     Body: {
       revision: number;
       name?: string;
+      entry_type?: "team" | "individual" | "placeholder";
       seed?: number | null;
       metadata?: Record<string, unknown>;
       availability?: Array<{ start: string; end: string }>;
@@ -897,6 +908,9 @@ export async function registerPhase3Routes(
           {
             revision: Type.Integer({ minimum: 1 }),
             name: Type.Optional(Type.String({ minLength: 1 })),
+            entry_type: Type.Optional(
+              Type.Union([Type.Literal("team"), Type.Literal("individual"), Type.Literal("placeholder")]),
+            ),
             seed: Type.Optional(Type.Union([Type.Integer({ minimum: 1, maximum: 48 }), Type.Null()])),
             metadata: Type.Optional(Generic),
             availability: Type.Optional(EntryAvailability),
@@ -904,20 +918,55 @@ export async function registerPhase3Routes(
           },
           { additionalProperties: false },
         ),
-        response: { 200: Generic, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse },
+        response: { 200: Generic, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
         tags: ["phase3-entries"],
       },
     },
-    async (request) =>
-      options.runtime.updateEntry(
+    async (request) => {
+      const { entry_type: entryType, ...rest } = request.body;
+      return options.runtime.updateEntry(
         await actor(request),
         request.params.competitionId,
         request.params.divisionId,
         request.params.entryId,
-        request.body,
+        { ...rest, ...(entryType === undefined ? {} : { entryType }) },
         request.id,
         request.body.idempotency_key,
-      ),
+      );
+    },
+  );
+  app.post<{
+    Params: { competitionId: string; divisionId: string };
+    Headers: { origin?: string; "x-csrf-token"?: string };
+    Body: { count: number; idempotency_key: string };
+  }>(
+    "/api/v1/competitions/:competitionId/divisions/:divisionId/entries/plan",
+    {
+      schema: {
+        security: [{ sessionCookie: [] }],
+        headers: MutationHeaders,
+        params: Type.Object({ competitionId: Id, divisionId: Id }),
+        body: Type.Object(
+          { count: Type.Integer({ minimum: 1, maximum: 48 }), idempotency_key: IdempotencyKey },
+          { additionalProperties: false },
+        ),
+        response: { 201: Generic, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
+        tags: ["phase3-entries"],
+      },
+    },
+    async (request, reply) =>
+      reply
+        .code(201)
+        .send(
+          await options.runtime.planEntries(
+            await actor(request),
+            request.params.competitionId,
+            request.params.divisionId,
+            { count: request.body.count },
+            request.id,
+            request.body.idempotency_key,
+          ),
+        ),
   );
   app.delete<{
     Params: { competitionId: string; divisionId: string; entryId: string };
