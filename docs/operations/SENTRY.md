@@ -44,16 +44,54 @@ API and worker read `SENTRY_DSN` through `env_file`; web receives both through `
 
 To disable: blank the variables and redeploy.
 
-## Alert rules (email)
+## Alert rules (email, web, and API)
 
-In Sentry: **Alerts > Create Alert > Issues**, per project.
+In Sentry: **Alerts > Create Alert**, configured in each Sentry project you created (the single shared project, or `matchday-web` and `matchday-api` if split):
 
-1. **New issue**: When "A new issue is created", filter `environment:production`, action "Send a notification to Member/Team" (email).
-2. **Spike**: Issue alert, When "Issue is seen more than 20 times in 1 hour" (tune the threshold), filter `environment:production`, action email. Alternatively a Metric alert on `count()` of errors with a critical threshold.
-3. Optionally an issue alert for tag `service:matchday-api` or `service:matchday-worker` with a lower threshold, since those include dead-lettered jobs.
+### Rule 1: Production New Error (Issue Alert)
 
-Check **Settings > Account > Notifications** so your email receives issue alerts. Free plan quotas are small; enable "spike protection" and set an inbound filter for noisy browser extensions.
+- **Name**: `Production New Issue Alert`
+- **When**: An event is captured and "A new issue is created" (`first_seen_event`).
+- **If**: The event's tags match `environment:production`.
+- **Then**: "Send a notification to Member/Team" (owner email / SMS / paging integration).
+- **Frequency**: Trigger on every new issue.
+
+### Rule 2: Production Error Spike (Metric Alert)
+
+- **Name**: `Production Error Spike Alert`
+- **Metric**: `count()` of errors
+- **Filter**: `event.type:error environment:production`
+- **Time Window**: 5 minutes
+- **Thresholds**:
+  - **Critical**: `> 20` events in 5 minutes
+  - **Warning**: `> 10` events in 5 minutes
+- **Actions**: Trigger immediate alert email / notification; send resolved notification when rate drops below warning threshold.
+
+### Rule 3: Production Fatal Event (Issue Alert)
+
+Rule 1 fires only on the first event of a new issue. Rule 3 covers repeats of an existing issue that are fatal (process
+crash, unhandled rejection), which Rule 1 would stay silent on.
+
+- **Name**: `Production Fatal Event Alert`
+- **When**: "An event is captured" (every event, not only new issues).
+- **If**: `environment:production` AND `level:fatal`. Every service tags its events with `service` (`matchday-web`,
+  `matchday-api`, `matchday-worker`, set by `initialScope` in `packages/observability/src/sentry.ts`); in a single shared
+  project, add `tag[service]:matchday-worker` as a separate copy of this rule if worker crashes need a distinct route.
+- **Then**: Send immediate notification to owner/team.
+- **Frequency**: at most once per 5 minutes per issue (avoids a crash loop flooding the inbox).
+
+### Inbound Filters & Quota Protection
+
+- Check **Settings > Projects > (project) > Inbound Filters**:
+  - Enable "Filter out errors known to be caused by browser extensions".
+  - Enable "Filter out events coming from localhost or local IP addresses".
+  - Enable "Spike Protection" under Project Settings.
+- Check **Settings > Account > Notifications** to ensure email notifications are enabled and verified.
 
 ## Verifying after setup
 
-Deploy to staging with a staging DSN/`APP_ENV=staging`, then trigger a test event from a Node REPL on the VM or temporarily throw in a non-production route. Confirm the event shows release = the deployed SHA, no cookies/headers/query strings, and no email addresses. Do not test against the production project.
+Point a non-production deployment at a non-production DSN with `APP_ENV` set to a non-production value, then trigger a
+test error (for example, temporarily throw from a non-production-only code path, or call `Sentry.captureException` from a
+Node REPL in the API container on that host). Confirm the event shows release = the deployed SHA, carries the expected
+`service` tag (`matchday-web`, `matchday-api` or `matchday-worker`), contains no cookies, headers, query strings or email
+addresses, and that the alert rules above notify. Do not test against the production project.

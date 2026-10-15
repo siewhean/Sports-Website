@@ -12,8 +12,7 @@ the API the preview should use (no path, query, credentials or fragment). The ch
 hostname, never to the direct API hostname, so the host-only session cookie survives the OIDC callback and the
 organiser BFF.
 
-`RENDER_API_ORIGIN` is the deprecated former name of `API_ORIGIN`. It is still read when `API_ORIGIN` is unset so
-existing Vercel projects keep working; rename the variable in the Vercel project settings and then remove the old one.
+`RENDER_API_ORIGIN` was the deprecated former name of `API_ORIGIN`. It was removed from the codebase in Track R5. Removing it from Vercel Project Settings > Environment Variables is pending owner action (see `docs/qa/track-r5.md`). Always set `API_ORIGIN` (server-only) and `MATCHDAY_API_BASE_URL`.
 
 ## Setup checklist
 

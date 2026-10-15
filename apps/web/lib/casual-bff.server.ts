@@ -31,7 +31,7 @@ export function extractTrustedClientIp(request: Request): string {
 }
 
 export async function forwardCasualRequest(request: Request): Promise<Response> {
-  const configured = process.env.RENDER_API_ORIGIN?.trim() || process.env.MATCHDAY_API_BASE_URL?.trim();
+  const configured = process.env.API_ORIGIN?.trim() || process.env.MATCHDAY_API_BASE_URL?.trim();
   if (!configured) return unavailable();
   let backend: URL;
   try {

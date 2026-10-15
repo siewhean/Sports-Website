@@ -336,24 +336,24 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 **Deliverables**
 
-- R5.1 Better Stack uptime monitors for the web app, API readiness and public competition page, with phone/email alerts.
-- R5.2 Backup heartbeat: `BACKUP_HEARTBEAT_URL` set so a missed nightly backup alerts within 24 hours.
-- R5.3 Sentry alert rules for new issues and error-rate spikes on web and API.
-- R5.4 Status page linked from the site footer.
+- R5.1 Better Stack uptime monitors for web app, API readiness (`/health/ready`), and public competition page, with phone/email alerts (`docs/runbooks/uptime-monitoring.md`).
+- R5.2 Backup heartbeat: `BACKUP_HEARTBEAT_URL` wired into `matchday-backup.sh` so a missed nightly backup alerts within 24 hours (`docs/runbooks/uptime-monitoring.md`).
+- R5.3 Sentry alert rules for new issues and error-rate spikes on web and API (`docs/operations/SENTRY.md`).
+- R5.4 Status page linked from the site footer via `NEXT_PUBLIC_STATUS_PAGE_URL` (`apps/web/components/foundation/SiteChrome.tsx`).
 - R5.5 Housekeeping:
-  - remove `RENDER_API_ORIGIN` from Vercel;
-  - delete the unused Upstash database;
-  - close draft PR #70 and triage stale open PRs (#7–#19, #55, #57, #58, #67–#69, #94–#96): merge, supersede or close each with a note;
-  - decide on the untracked `production-certification.spec.ts` and `issue-pass-oci.cjs`.
-- R5.6 Quarterly restore drill (first: 10 January 2027) with results logged.
-- R5.7 Store `~/matchday-backup.agekey` offline in two places.
+  - remove `RENDER_API_ORIGIN` from Vercel and codebase (`docs/operations/VERCEL_PREVIEW.md`);
+  - delete the unused Upstash database (`docs/operations/UPSTASH_CLEANUP.md`);
+  - close draft PR #70 and triage stale open PRs (#7–#19, #55, #57, #58, #67–#70, #94–#96): merge, supersede or close each with a note;
+  - decide on the untracked `production-certification.spec.ts` and `issue-pass-oci.cjs` (`docs/operations/LAUNCH_CHECKLIST.md`).
+- R5.6 Quarterly restore drill with results logged in `docs/operations/RESTORE_DRILL_LOG.md` using `infra/oci/backup/restore-drill.sh` (scheduled; first drill 10 January 2027).
+- R5.7 Store `~/matchday-backup.agekey` offline in two places (guidance in `docs/operations/OFFLINE_KEYS.md`; owner confirmation pending).
 
 **Checkpoint CP5 — Operations**
 
 - [ ] A deliberate API stop triggers an alert within 5 minutes.
 - [ ] A skipped backup triggers a heartbeat alert.
 - [ ] A test error reaches Sentry and alerts.
-- [ ] Open-PR list contains only active work.
+- [x] Open-PR list contains only active work. (Evidence: `docs/qa/track-r5.md`.)
 - [ ] Backup key stored offline (owner confirms).
 
 ---
