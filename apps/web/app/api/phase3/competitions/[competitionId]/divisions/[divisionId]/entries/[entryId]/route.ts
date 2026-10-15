@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { parseCreatedEntry, phase3EntriesCopy, phase3EntriesMachine } from "@/lib/phase3-entries";
+import { isEntryRenameBody, parseCreatedEntry, phase3EntriesCopy, phase3EntriesMachine } from "@/lib/phase3-entries";
 import { forwardPhase3Mutation, jsonBody } from "@/lib/phase3-settings-command.server";
 
 function updateBody(
@@ -37,7 +37,8 @@ export async function PATCH(
   { params }: { params: Promise<{ competitionId: string; divisionId: string; entryId: string }> },
 ) {
   const body = await jsonBody(request);
-  if (!updateBody(body))
+  // A full name+seed update, or a rename that may convert a placeholder into a named team.
+  if (!updateBody(body) && !isEntryRenameBody(body))
     return NextResponse.json(
       { error: { code: phase3EntriesMachine.entryCommandInvalid, message: phase3EntriesCopy.commandFailed } },
       { status: 400 },

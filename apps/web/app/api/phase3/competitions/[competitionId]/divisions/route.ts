@@ -21,6 +21,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     method: phase3EntriesMachine.post,
     path: `/api/v1/competitions/${encodeURIComponent(competitionId)}/divisions`,
     body,
-    validate: (value) => parseCreatedDivision(value, competitionId, body.entry_limit) !== null,
+    validate: (value) =>
+      parseCreatedDivision(value, competitionId, body.entry_limit, body.planned_entry_count) !== null,
   });
 }

@@ -60,7 +60,9 @@ function validWorkspaceDivision(value: unknown): boolean {
       string(entry.name) &&
       (entry.seed === null || (Number.isInteger(entry.seed) && (entry.seed as number) >= 1)) &&
       typeof entry.status === "string" &&
-      ["active", "confirmed", "withdrawn", "replaced"].includes(entry.status),
+      ["active", "confirmed", "withdrawn", "replaced"].includes(entry.status) &&
+      (entry.entry_type === undefined || ["team", "individual", "placeholder"].includes(String(entry.entry_type))) &&
+      (entry.revision === undefined || (Number.isInteger(entry.revision) && (entry.revision as number) >= 1)),
     );
   });
 }
@@ -390,7 +392,13 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
         const entryName = string(entry.name);
         const status = string(entry.status);
         const seed = number(entry.seed);
-        return entryId && entryName && status ? [{ id: entryId, name: entryName, seed, status }] : [];
+        // Older reads omit entry_type/revision; default to a named team at revision 1.
+        const entryType =
+          entry.entry_type === "placeholder" || entry.entry_type === "individual" ? entry.entry_type : "team";
+        const revision = Number.isInteger(entry.revision) && Number(entry.revision) >= 1 ? Number(entry.revision) : 1;
+        return entryId && entryName && status
+          ? [{ id: entryId, name: entryName, seed, status, entryType, revision } as const]
+          : [];
       });
       return id && name
         ? [
