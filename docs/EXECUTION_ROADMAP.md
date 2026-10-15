@@ -2,7 +2,7 @@
 
 **Status:** Active — path to production readiness (re-baselined)
 
-**Date:** 12 October 2026 (re-baseline of the 16 July 2026 planning baseline)
+**Date:** 15 October 2026 (progress update; re-baselined 12 October 2026 from the 16 July 2026 planning baseline)
 
 **Source specification:** `docs/archive/sports_competition_platform_implementation_plan.md` (version 2.0, 16 July 2026)
 
@@ -13,7 +13,7 @@
 ## 1. How to read this document
 
 - **Sections 2–4** keep the original release contract, architecture baseline and design direction. They remain the requirements authority alongside the source specification.
-- **Section 5** records where the project actually is on 12 October 2026: what is certified, what is deployed, and what the October mock-tournament simulation proved.
+- **Section 5** records where the project actually is on 15 October 2026: what is certified, what is deployed, and what the October mock-tournament simulation proved.
 - **Section 6** is the forward plan: release tracks R1–R8, each with deliverables and measurable checkpoints, ending at production readiness.
 - **Sections 7–10** cover ownership, QA/QC protocol, external decisions, and the risk register.
 
@@ -52,7 +52,7 @@ apps/
   worker/              BullMQ jobs (email, notifications, background tasks)
 packages/
   domain/              Pure deterministic rules: formats, scoring, standings, schedule constraints
-  database/            PostgreSQL migrations (0001–0071+), repositories, factories
+  database/            PostgreSQL migrations (0001–0071 on `main`; 0072 in PR #100, 0073 in PR #103), repositories, factories
   ui/                  Accessible primitives, tokens, i18n catalogue
   contracts/           Versioned API schemas and shared types
   config/              Typed environment and feature-flag definitions
@@ -62,25 +62,25 @@ packages/
 infra/
   oci/                 Production compose, blue/green deploy, Caddy, backups, restore drill
 docs/
-  decisions/           Architecture and product decision records (ADR 0001–0006)
+  decisions/           Architecture and product decision records (ADR 0001–0006 on `main`; 0007–0009 proposed in open PRs)
   qa/                  Phase evidence and independent QA/QC verdicts
 ```
 
 ### Technology as deployed
 
-| Concern   | Choice                                                                                 |
-| --------- | -------------------------------------------------------------------------------------- |
-| Workspace | pnpm + Turborepo                                                                       |
-| Web       | Next.js 16 / React 19 on Vercel (`sfo1`)                                               |
-| API       | Fastify 5, Node 24, Docker on OCI ARM VM, blue/green slots behind Caddy 2.11           |
-| Data      | PostgreSQL 18.4, Redis 8.10                                                            |
-| Solver    | In-house deterministic greedy constructor in TypeScript (worker threads), see Track R3 |
-| Email     | Resend SMTP, sender `no-reply@matchday.poladex.shop`, restricted send-only key         |
-| Errors    | Sentry (`matchday-web`, `matchday-api`)                                                |
-| Payments  | Stripe (separate MATCHDAY account, test mode)                                          |
-| Identity  | OIDC (Auth0)                                                                           |
-| Backups   | Nightly age-encrypted dumps to OCI Object Storage `matchday-backups`; quarterly drill  |
-| CI        | GitHub Actions; arm64 image builds to GHCR; protected `main` with six required checks  |
+| Concern   | Choice                                                                                  |
+| --------- | --------------------------------------------------------------------------------------- |
+| Workspace | pnpm + Turborepo                                                                        |
+| Web       | Next.js 16 / React 19 on Vercel (`sfo1`)                                                |
+| API       | Fastify 5, Node 24, Docker on OCI ARM VM, blue/green slots behind Caddy 2.11            |
+| Data      | PostgreSQL 18.4, Redis 8.10                                                             |
+| Solver    | In-house deterministic greedy constructor in TypeScript (worker threads), see Track R3  |
+| Email     | Resend SMTP, sender `no-reply@matchday.poladex.shop`, restricted send-only key          |
+| Errors    | Sentry (`matchday-web`, `matchday-api`)                                                 |
+| Payments  | Stripe (separate MATCHDAY account, test mode)                                           |
+| Identity  | OIDC (Auth0)                                                                            |
+| Backups   | Nightly age-encrypted dumps to OCI Object Storage `matchday-backups`; quarterly drill   |
+| CI        | GitHub Actions; arm64 image builds to GHCR; protected `main` with seven required checks |
 
 The original baseline proposed a Python CP solver. The shipped solver is a TypeScript greedy constructor. Track R3 decides whether to add local search, CP-SAT, or both, and records the decision as an ADR.
 
@@ -125,7 +125,7 @@ Event-day control room meets modern sports editorial: calm graphite and warm neu
 - WCAG 2.2 AA is a release requirement.
 - Product and scoring surfaces respect reduced motion; frequent actions respond in under 200 ms.
 
-## 5. Current status (12 October 2026)
+## 5. Current status (15 October 2026)
 
 ### 5.1 Original phases and gates
 
@@ -143,16 +143,17 @@ Event-day control room meets modern sports editorial: calm graphite and warm neu
 
 ### 5.2 Production platform work completed since September
 
-| Area            | Done                                                                                                                                     |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Readiness fixes | Week-1 (PR #71) and week-2 (PR #72) hardening from the full audit, including the redesign                                                |
-| Hosting         | Render removed; OCI US West VM with blue/green deploys; Vercel production branch `main`, region `sfo1`; arm64 image builds (PR #82, #83) |
-| Infrastructure  | Boot volume grown to 100 GB; legacy C5 services removed; Caddy 2.11 pinned with drift guard (PR #93)                                     |
-| Backups         | Nightly encrypted backup to OCI Object Storage; restore drill passes; quarterly drill scheduled (PR #88)                                 |
-| Email           | Resend domain verified; reply-to support (PR #92); delivery confirmed to inbox                                                           |
-| Error tracking  | Sentry web and API projects live                                                                                                         |
-| Payments        | Stripe test-mode account with webhook events configured                                                                                  |
-| Dependencies    | Dependabot batch merged (PR #88); major Node updates ignored by policy                                                                   |
+| Area            | Done                                                                                                                                                                                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Readiness fixes | Week-1 (PR #71) and week-2 (PR #72) hardening from the full audit, including the redesign                                                                                                                                                                         |
+| Hosting         | Render removed; OCI US West VM with blue/green deploys; Vercel production branch `main`, region `sfo1`; arm64 image builds (PR #82, #83)                                                                                                                          |
+| Infrastructure  | Boot volume grown to 100 GB; legacy C5 services removed; Caddy 2.11 pinned with drift guard (PR #93)                                                                                                                                                              |
+| Backups         | Nightly encrypted backup to OCI Object Storage; restore drill passes; quarterly drill scheduled (PR #88)                                                                                                                                                          |
+| Email           | Resend domain verified; reply-to support (PR #92); delivery confirmed to inbox                                                                                                                                                                                    |
+| Error tracking  | Sentry web and API projects live                                                                                                                                                                                                                                  |
+| Payments        | Stripe test-mode account with webhook events configured                                                                                                                                                                                                           |
+| Dependencies    | Dependabot batch merged (PR #88); major Node updates ignored by policy                                                                                                                                                                                            |
+| Production      | `cbcefa91` live: `https://matchday.poladex.shop/api/v1/meta/build` reported `git_sha` `cbcefa91a3c07be27b3e1eb6b0180e6b901f9f75` (built 15 Oct 2026 05:48 UTC), which includes #103, #111 (`cf751896`), #112 (`6a0220eb`), #116 and #118; migrations through 0074 |
 
 ### 5.3 Mock-tournament simulation (11 October 2026)
 
@@ -162,31 +163,34 @@ A full simulation ran about 12 competitions across all five sports against the r
 
 **Defects found and their state:**
 
-| Defect                                                                                | Severity | State                                  |
-| ------------------------------------------------------------------------------------- | -------- | -------------------------------------- |
-| Schedule options endpoint always returned 500                                         | Critical | Fixed — PR #97 (merged)                |
-| Group winners never advanced into the knockout bracket                                | Critical | Fixed — PR #97 (merged)                |
-| Walkover/withdrawal read back as 0-0; withdrawal returned 500                         | High     | Fixed — PR #98 (merged)                |
-| Every manual move rejected after regenerating around locks                            | High     | Fixed — PR #98 (merged)                |
-| Manual recalculation did not fill knockout winner/loser slots                         | High     | Fixed — PR #98 (merged)                |
-| Missing scoring fields and free-plan cap returned 500                                 | Medium   | Fixed — PR #98 (merged)                |
-| Soft preferences caused false "no solution"                                           | High     | Fixed — PR #99 (open)                  |
-| Default 4-matches-per-day limit broke recommended formats                             | High     | Fixed — PR #99 (open)                  |
-| No-solution diagnostics covered officials only                                        | Medium   | Fixed — PR #99 (open)                  |
-| Scheduling slow (12–33 s per job; 4× slower after #99)                                | High     | In progress — PR #99 speed work        |
-| Schedules: many back-to-backs, uneven courts, long days                               | Medium   | In progress — PR #100 (local search)   |
-| Re-planning moved 14 of 28 matches when 4 needed to move                              | Medium   | In progress — PR #100 (minimal change) |
-| Format suggestions not checked against the venue                                      | Medium   | In progress — PR #100                  |
-| No warning when capacity changes after publishing                                     | Medium   | Open — Track R2                        |
-| Stale repair cases stay in the pending list                                           | Medium   | Open — Track R2                        |
-| AI quota shows "exhausted" while usage view shows units left                          | Medium   | Fixed — PR #111 (R4.4, migration 0074) |
-| Stub double-elimination change fails schema validation                                | Low      | Fixed — PR #111 (stub removed, R4.1)   |
-| Semifinals stored with stage "quarterfinal" (migration 0034)                          | Low      | Open — Track R2                        |
-| Fresh DB needs undocumented `SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT` | Low      | Open — Track R1                        |
-| Walkover scoreboard shows empty games, not the forfeit score                          | Product  | Decision needed — Track R2             |
-| Standings show one division table instead of one per group                            | Product  | Decision needed — Track R2             |
+| Defect                                                                                                     | Severity | State                                                                                                                                    |
+| ---------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Schedule options endpoint always returned 500                                                              | Critical | Fixed — PR #97 (merged)                                                                                                                  |
+| Group winners never advanced into the knockout bracket                                                     | Critical | Fixed — PR #97 (merged)                                                                                                                  |
+| Walkover/withdrawal read back as 0-0; withdrawal returned 500                                              | High     | Fixed — PR #98 (merged)                                                                                                                  |
+| Every manual move rejected after regenerating around locks                                                 | High     | Fixed — PR #98 (merged)                                                                                                                  |
+| Manual recalculation did not fill knockout winner/loser slots                                              | High     | Fixed — PR #98 (merged)                                                                                                                  |
+| Missing scoring fields and free-plan cap returned 500                                                      | Medium   | Fixed — PR #98 (merged)                                                                                                                  |
+| Soft preferences caused false "no solution"                                                                | High     | Fixed — PR #99 (merged)                                                                                                                  |
+| Default 4-matches-per-day limit broke recommended formats                                                  | High     | Fixed — PR #99 (merged)                                                                                                                  |
+| No-solution diagnostics covered officials only                                                             | Medium   | Fixed — PR #99 (merged)                                                                                                                  |
+| Scheduling slow (12–33 s per job; 4× slower after #99)                                                     | High     | Fixed — PRs #99, #100 (merged); S2 8.6 s in `docs/qa/r3-scheduler-benchmark.md`                                                          |
+| Schedules: many back-to-backs, uneven courts, long days                                                    | Medium   | Fixed — PRs #100, #102 (merged)                                                                                                          |
+| Re-planning moved 14 of 28 matches when 4 needed to move                                                   | Medium   | Fixed on the benchmark fixture — PR #100 (merged); scenario 7 via the API still moves some undisplaced Court 1 matches in time (see CP2) |
+| Format suggestions not checked against the venue                                                           | Medium   | Fixed — PR #100 (merged)                                                                                                                 |
+| No warning when capacity changes after publishing                                                          | Medium   | Fixed — PR #103 (merged)                                                                                                                 |
+| Stale repair cases stay in the pending list                                                                | Medium   | Fixed — PR #103 (merged)                                                                                                                 |
+| AI quota shows "exhausted" while usage view shows units left                                               | Medium   | Fixed — PR #111 (merged; R4.4, migration 0074)                                                                                           |
+| Stub double-elimination change fails schema validation                                                     | Low      | Fixed — PR #111 (merged; stub removed, R4.1)                                                                                             |
+| Semifinals stored with stage "quarterfinal" (migration 0034)                                               | Low      | Fixed — PR #103 (migration 0073); archived-competition backfill fix PR #118 (merged)                                                     |
+| Fresh DB needs undocumented `SCORING_ACCESS_RATE_LIMIT_LEGACY_V1_MATERIAL_COMMITMENT`                      | Low      | Fixed — PR #101 (merged)                                                                                                                 |
+| Walkover scoreboard shows empty games, not the forfeit score                                               | Product  | Decided ADR 0008; implemented — PR #103 (merged)                                                                                         |
+| Standings show one division table instead of one per group                                                 | Product  | Decided ADR 0008; implemented — PR #103 (merged)                                                                                         |
+| V1 bracket resolver always reported `championEntryId: null` (found by R1)                                  | Medium   | Fixed — PR #109 (merged 14 Oct)                                                                                                          |
+| Scoring append returned 500 on transient DB errors (original 500 not reproduced)                           | Medium   | Fixed — PR #110 (merged; 503 `SERVICE_BUSY`)                                                                                             |
+| Capacity PUT accepted another competition's playing-area ids (cross-tenant IDOR write, introduced in #103) | Critical | Fixed — PR #116 (merged 15 Oct, before any deploy of #103)                                                                               |
 
-**AI finding:** every AI feature is a deterministic stub (`PHASE4_AI_PROVIDER=disabled|stub`). The plumbing (schema validation, retries, cache, charging, quotas, audit, proposal-only application) is real; the outputs are canned. Two stub features charge credits for no-op or unusable output. Track R4 resolves this.
+**AI finding:** every AI feature is a deterministic stub (`PHASE4_AI_PROVIDER=disabled|stub`). The plumbing (schema validation, retries, cache, charging, quotas, audit, proposal-only application) is real; the outputs are canned. Two stub features charge credits for no-op or unusable output. R4 audit (14 Oct): the production provider is disabled, so no credits are charged today; the real exposure is the Stripe AI top-up selling credits that cannot be used. Track R4 resolves this.
 
 ## 6. Path to production readiness
 
@@ -204,18 +208,26 @@ The platform is production ready when all of the following hold for one exact Gi
 
 ### 6.2 Track overview
 
-| Track | Goal                                           | Depends on   | Target window       | Checkpoint         |
-| ----- | ---------------------------------------------- | ------------ | ------------------- | ------------------ |
-| R1    | Correctness baseline and repeatable simulation | —            | 12–19 Oct 2026      | CP1                |
-| R2    | Competition-day robustness                     | R1           | 19 Oct – 2 Nov 2026 | CP2                |
-| R3    | Scheduler speed and quality                    | R1           | 12 Oct – 9 Nov 2026 | CP3                |
-| R4    | AI: real provider or honest removal            | R3           | 2–23 Nov 2026       | CP4                |
-| R5    | Monitoring, alerting and operations            | —            | 12–26 Oct 2026      | CP5                |
-| R6    | Organiser UX, design system and code health    | R1, R2       | 2 Nov – 7 Dec 2026  | CP6                |
-| R7    | Commercial, legal and identity readiness       | owner inputs | by 7 Dec 2026       | CP7                |
-| R8    | Release candidate, rehearsal and launch        | R1–R7        | 7–21 Dec 2026       | CP8 (Gate F) and L |
+| Track | Goal                                           | Depends on   | Target window       | Checkpoint         | Status (15 Oct, late)                                                     |
+| ----- | ---------------------------------------------- | ------------ | ------------------- | ------------------ | ------------------------------------------------------------------------- |
+| R1    | Correctness baseline and repeatable simulation | —            | 12–19 Oct 2026      | CP1                | Done — CP1 4 of 4 (box 4 via #117)                                        |
+| R2    | Competition-day robustness                     | R1           | 19 Oct – 2 Nov 2026 | CP2                | Merged — #103 (+ IDOR fix #116); CP2 2 of 5 (boxes 1, 2, 5 partial)       |
+| R3    | Scheduler speed and quality                    | R1           | 12 Oct – 9 Nov 2026 | CP3                | Merged — #99, #100, #102; CP3 3 of 4 (box 4 partial)                      |
+| R4    | AI: real provider or honest removal            | R3           | 2–23 Nov 2026       | CP4                | Merged — #111; CP4 complete (3 of 3, AI box N/A)                          |
+| R5    | Monitoring, alerting and operations            | —            | 12–26 Oct 2026      | CP5                | Merged — #112; CP5 1 of 5; alert tests and owner actions pending          |
+| R6    | Organiser UX, design system and code health    | R1, R2       | 2 Nov – 7 Dec 2026  | CP6                | In review — PR #113; R6.2/R6.3 not done                                   |
+| R7    | Commercial, legal and identity readiness       | owner inputs | by 7 Dec 2026       | CP7                | In review — PR #115 (docs and runbooks); CP7 0 of 4, owner inputs pending |
+| R8    | Release candidate, rehearsal and launch        | R1–R7        | 7–21 Dec 2026       | CP8 (Gate F) and L | Not started                                                               |
 
 Target windows are planning estimates. A checkpoint moves only when its evidence exists, not when the date arrives.
+
+**Next actions (15 Oct 2026)**
+
+1. Production runs `cbcefa91` (deployed 15 Oct 2026; see §5.2). Deploy again after #115 only if runtime code changes (it is docs plus legal copy).
+2. Close the CP2 gaps: assert in scenario 7 that undisplaced matches keep their times (or make the API re-plan use the minimal-change mode that the benchmark proves); assert the public version token changes after a delay; add Mailpit delivery for the schedule-published email and a production test-competition run (R2.7).
+3. CP3 box 4: add official-overlap and court/team overlap checks to every simulation scenario.
+4. Finish #113 (R6) and merge #115 (R7 runbooks; the break-glass drill, live purchase, MFA and repository privacy remain owner actions).
+5. Owner actions (CP5): deliberate API-stop alert test, skipped-backup heartbeat alert, Sentry test event and alert, offline backup key confirmation. Note `docs/operations/REPOSITORY_PRIVACY.md` (PR #115): the current CI (~56 billed min per PR run) does not fit the Free/Pro private-repo quota without mitigation.
 
 ---
 
@@ -237,8 +249,8 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 - [x] PRs #97, #98, #99 merged; `main` green on all required checks. Evidence: https://github.com/siewhean/Sports-Website/pull/97, https://github.com/siewhean/Sports-Website/pull/98, https://github.com/siewhean/Sports-Website/pull/99 (merged 12 Oct 2026); latest `main` CI run https://github.com/siewhean/Sports-Website/actions/runs/38268394882 succeeded (all jobs green; visual-baselines skipped by design).
 - [x] `pnpm simulate:tournament` completes all nine scenarios locally and in CI with zero 5xx responses. Evidence: local 14 Oct 2026 fast 2,991 req / 66 s and full 7,216 req / 87 s, 0 5xx; CI PR run https://github.com/siewhean/Sports-Website/actions/runs/38557380027 (fast), dispatch https://github.com/siewhean/Sports-Website/actions/runs/38556014556 (full).
-- [x] Groups → knockout → final advancement verified for championship-focus, full-placement and compact-knockout templates in all five sports (scenario 1, full profile: every match final in `/current`, bracket resolved). Evidence: dispatch run https://github.com/siewhean/Sports-Website/actions/runs/38556014556. Note: the V1 graph bracket resolver always reports `championEntryId: null`; the champion is asserted from the championship match result.
-- [ ] A fresh clone boots against a fresh database using only `.env.example` values. Partial: CI copies `.env.example` to `.env`, migrates a fresh DB and runs `parseConfig` (APP_ENV=local) on it; an actual API process boot is not yet exercised.
+- [x] Groups → knockout → final advancement verified for championship-focus, full-placement and compact-knockout templates in all five sports (scenario 1, full profile: every match final in `/current`, bracket resolved). Evidence: dispatch run https://github.com/siewhean/Sports-Website/actions/runs/38556014556. The `championEntryId: null` bracket defect found here was fixed by PR #109 (merged 14 Oct 2026; `main` CI https://github.com/siewhean/Sports-Website/actions/runs/38572843275).
+- [x] A fresh clone boots against a fresh database using only `.env.example` values. Evidence: https://github.com/siewhean/Sports-Website/pull/117 (merged 15 Oct 2026, `ce5d08a7`); CI step "Fresh boot check (API + web from .env.example only)" boots the real API and web on a freshly migrated DB (health/ready 200, public API 200, web `/` 200): https://github.com/siewhean/Sports-Website/actions/runs/38681028139/job/116247608893.
 
 ---
 
@@ -261,11 +273,11 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 **Checkpoint CP2 — Competition-day robustness**
 
-- [x] Simulation scenario 7 (court closure mid-day) re-plans with only the affected matches moved and the public page updated.
-- [x] Delay tool shifts remaining matches and the public version token changes.
-- [x] Simulation scenario 8 (withdrawal) shows correct standings, forfeits and bracket.
-- [x] R2.5 and R2.6 decisions recorded and implemented.
-- [x] Notification emails arrive for each trigger.
+- [ ] Simulation scenario 7 (court closure mid-day) re-plans with only the affected matches moved and the public page updated. Partial: `apps/api/scripts/simulate-tournament.ts` scenario 7 asserts that no match remains on the closed court, that exactly the displaced matches change court, and that the public projection reflects it (https://github.com/siewhean/Sports-Website/pull/103). It does not assert that undisplaced matches keep their times: the script itself records that the solver moves 4–7 undisplaced Court 1 matches in time, logging `time-shifted-on-court-1` without asserting it. The R3 benchmark fixture proves minimal change (#100), but the API path in scenario 7 does not yet.
+- [ ] Delay tool shifts remaining matches and the public version token changes. Partial: the shift is proven (scenario 7 asserts +60 min in public `/current`; `apps/api/tests/integration/schedule-delay.test.ts` "applies a valid delay to only the matches from the chosen time onward", https://github.com/siewhean/Sports-Website/pull/103). No test asserts that the public version token or ETag changes after a delay.
+- [x] Simulation scenario 8 (withdrawal) shows correct standings, forfeits and bracket. Evidence: `simulate-tournament.ts` scenario 8 asserts the walkover snapshot is final, the entry is withdrawn, exact winner/loser standings rows, the winner in `advancement_slots` and placed in the downstream knockout match (https://github.com/siewhean/Sports-Website/pull/103; `main` CI https://github.com/siewhean/Sports-Website/actions/runs/38672550012).
+- [x] R2.5 and R2.6 decisions recorded and implemented. Evidence: `docs/decisions/0008-competition-day-robustness-product-decisions.md` (R2.5) and `docs/decisions/0009-v1-online-first-scoring-and-printable-contingency.md` (R2.6), PR https://github.com/siewhean/Sports-Website/pull/103; W/O badge and per-group tables tested in `apps/web/tests/phase-2-walkover-groups.spec.ts` and `public-competition-render.test.tsx`. Gaps: ADR 0008's "N slots required vs M available" badge is shown only as "Does not fit the schedule", and ADR 0009 names `/export/scoresheet` while the real route is the per-match `/exports/matches/:matchId/score-sheet`.
+- [ ] Notification emails arrive for each trigger. Partial: `qa-tournament-regressions.test.ts` delivers the result email (with W/O text) and the match reminder (opt-out honoured) to Mailpit; the schedule-published trigger is asserted only as an outbox row (`phase-2-runtime.test.ts`), and no production test-competition delivery is evidenced.
 
 ---
 
@@ -297,10 +309,10 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 **Checkpoint CP3 — Scheduler**
 
-- [ ] PRs #99 and #100 merged with CI green.
-- [ ] Every target above met on the benchmark suite, with results attached to the PR or `docs/qa`.
-- [ ] Solver ADR recorded.
-- [ ] Hard validity unchanged: zero team, court or official overlaps across all fixtures and simulation runs.
+- [x] PRs #99 and #100 merged with CI green. Evidence: https://github.com/siewhean/Sports-Website/pull/99 (merged 12 Oct, `main` CI https://github.com/siewhean/Sports-Website/actions/runs/38268394882); https://github.com/siewhean/Sports-Website/pull/100 (merged 14 Oct; PR CI https://github.com/siewhean/Sports-Website/actions/runs/38638515631 green; its `main` run was cancelled when superseded by #102's merge run https://github.com/siewhean/Sports-Website/actions/runs/38644445776, which passed).
+- [x] Every target above met on the benchmark suite, with results attached to the PR or `docs/qa`. Evidence: `docs/qa/r3-scheduler-benchmark.md` (https://github.com/siewhean/Sports-Website/pull/102): 0 of 32 feasible fixtures false `no_solution`; S1 0.56 s, S2 8.61 s; S1 back-to-backs 0; S7 re-plan moves 3 for 3 displaced (asserted in `benchmark.test.ts`); worst format check 330 ms; all 6 infeasible fixtures name cause and fix. Caveat: timings are from a local run on 12 Oct; CI asserts CPU time on reduced iterations.
+- [x] Solver ADR recorded. Evidence: `docs/decisions/0007-scheduler-solver-strategy.md` (https://github.com/siewhean/Sports-Website/pull/102).
+- [ ] Hard validity unchanged: zero team, court or official overlaps across all fixtures and simulation runs. Partial: the benchmark runs `validateSchedule` on every feasible fixture; in the simulation only scenario 2 checks court and team overlaps, and no simulation run checks official overlaps.
 
 ---
 
@@ -323,8 +335,8 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 **Checkpoint CP4 — AI**
 
-- [x] No production feature charges credits for stub output. Evidence: `phase-4-runtime.test.ts` "R4.1: stub AI features (format modify, schedule preferences) fallback to manual at 0 cost" and "R4.1: repair recommendations return manual_fallback with 0 charge".
-- [x] Provider ADR recorded (`docs/decisions/0010-launch-without-ai-template-explanations.md`).
+- [x] No production feature charges credits for stub output. Evidence: `phase-4-runtime.test.ts` "R4.1: stub AI features (format modify, schedule preferences) fallback to manual at 0 cost" and "R4.1: repair recommendations return manual_fallback with 0 charge" (https://github.com/siewhean/Sports-Website/pull/111; stub provider throws outside local/test in `phase-4-ai-provider.ts`).
+- [x] Provider ADR recorded (`docs/decisions/0010-launch-without-ai-template-explanations.md`, https://github.com/siewhean/Sports-Website/pull/111, merged 15 Oct).
 - N/A — If AI ships: evaluation pass rate, injection tests and cost budget recorded; outputs remain proposal-only. (No AI at launch, ADR 0010.)
 - [x] Quota display matches actual remaining units. Evidence: `phase-4-runtime.test.ts` "R4.4: one org-wide quota across two actors drives pre-check, charge and display; stub brief charged once"; `simulate-tournament.ts` scenario 9 compares the brief `usage` field with billing `ai_quota`.
 
@@ -350,11 +362,11 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 **Checkpoint CP5 — Operations**
 
-- [ ] A deliberate API stop triggers an alert within 5 minutes.
-- [ ] A skipped backup triggers a heartbeat alert.
-- [ ] A test error reaches Sentry and alerts.
-- [x] Open-PR list contains only active work. (Evidence: `docs/qa/track-r5.md`.)
-- [ ] Backup key stored offline (owner confirms).
+- [ ] A deliberate API stop triggers an alert within 5 minutes. Not yet performed: the uptime runbook (https://github.com/siewhean/Sports-Website/pull/112) records "Last alert test: not yet conducted", and its monitor settings (3-minute checks, alert after 2 failures) would need tightening to meet 5 minutes.
+- [ ] A skipped backup triggers a heartbeat alert. Note: Better Stack heartbeat "matchday nightly backup" (24 h, 2 h grace) wired via `BACKUP_HEARTBEAT_URL` and verified by a real backup run on 14 Oct 2026 outside the repo; no linkable evidence, and a skipped-backup alert is not yet shown.
+- [ ] A test error reaches Sentry and alerts. Procedure and alert rules documented in `docs/operations/SENTRY.md` (https://github.com/siewhean/Sports-Website/pull/112); no test event recorded yet.
+- [x] Open-PR list contains only active work. Evidence: `docs/qa/track-r5.md` (https://github.com/siewhean/Sports-Website/pull/112); 19 stale PRs closed; on 15 Oct 2026 https://github.com/siewhean/Sports-Website/pulls lists only #113, #114, #115 and Dependabot PRs.
+- [ ] Backup key stored offline (owner confirms). Guidance in `docs/operations/OFFLINE_KEYS.md` (https://github.com/siewhean/Sports-Website/pull/112); owner confirmation pending.
 
 ---
 
@@ -467,7 +479,7 @@ Later-release product scope remains after launch: registration and participant p
 4. UI changes require screenshots at phone, tablet and desktop sizes.
 5. A checkpoint cannot pass on a narrow test if its criterion is broader. Missing or indirect evidence is a failure.
 6. Human-only evidence that cannot be executed is recorded as `WAIVED_NOT_EXECUTED`, never `PASS` (ADR 0004/0005).
-7. Pull requests merge only with all required checks green: `secrets`, `quality-fast`, `integration`, `browser-e2e (shard 1/2)`, `browser-e2e (shard 2/2)`, `gate-d-real-e2e`. Branches must be up to date with `main`.
+7. Pull requests merge only with all required checks green: `secrets`, `quality-fast`, `integration`, `browser-e2e (shard 1/2)`, `browser-e2e (shard 2/2)`, `gate-d-real-e2e`, `tournament-simulation`. Branches must be up to date with `main`.
 
 Minimum automated gate:
 
@@ -491,19 +503,19 @@ dependency and secret scans
 
 Engineering can continue without these, but the dependent checkpoint cannot pass until each exists.
 
-| Item                                                             | Needed for | State                                  |
-| ---------------------------------------------------------------- | ---------- | -------------------------------------- |
-| Better Stack account (heartbeat URL or API token)                | CP5        | Waiting on owner sign-up               |
-| Legal entity, address, support contact, jurisdiction             | CP7        | Not yet available                      |
-| Product domain decision                                          | CP7        | Staying on `poladex.shop` for now      |
-| Event Pass and Organiser Pro prices and currency                 | CP7        | Configuration; to confirm              |
-| Stripe live-mode activation                                      | CP7        | Pending                                |
-| Auth0 production tenant with MFA                                 | CP7        | Pending                                |
-| AI provider decision (or launch without AI)                      | CP4        | Decided — launch without AI (ADR 0010) |
-| Walkover display, per-group standings, offline scoring decisions | CP2        | Pending                                |
-| A real local event for the rehearsal                             | CP8        | Pending                                |
-| Expected peak load (competitions, scoring devices, spectators)   | CP8        | Pending                                |
-| Formal legal/privacy approval                                    | First sale | Deferred per ADR 0005                  |
+| Item                                                             | Needed for | State                                                                                   |
+| ---------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------- |
+| Better Stack account (heartbeat URL or API token)                | CP5        | Done 14 Oct: monitors, heartbeat, status page https://matchday-poladex.betteruptime.com |
+| Legal entity, address, support contact, jurisdiction             | CP7        | Not yet available                                                                       |
+| Product domain decision                                          | CP7        | Staying on `poladex.shop` for now                                                       |
+| Event Pass and Organiser Pro prices and currency                 | CP7        | Configuration; to confirm                                                               |
+| Stripe live-mode activation                                      | CP7        | Pending                                                                                 |
+| Auth0 production tenant with MFA                                 | CP7        | Pending                                                                                 |
+| AI provider decision (or launch without AI)                      | CP4        | Decided — launch without AI (ADR 0010, PR #111 merged)                                  |
+| Walkover display, per-group standings, offline scoring decisions | CP2        | Decided — ADRs 0008/0009 (PR #103 merged)                                               |
+| A real local event for the rehearsal                             | CP8        | Pending                                                                                 |
+| Expected peak load (competitions, scoring devices, spectators)   | CP8        | Pending                                                                                 |
+| Formal legal/privacy approval                                    | First sale | Deferred per ADR 0005                                                                   |
 
 ## 10. Risk register
 
@@ -511,8 +523,8 @@ Engineering can continue without these, but the dependent checkpoint cannot pass
 | -------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------- |
 | Single VM hosts API, database and Redis            | High   | Nightly encrypted backups, tested restore, uptime alerts (R5); revisit managed DB after launch |
 | Scheduler regressions are invisible to unit tests  | High   | Benchmark fixtures and simulation in CI (R1, R3)                                               |
-| Stub AI misleads paying users                      | High   | Hide charged stub features now (R4.1)                                                          |
-| No alerting today                                  | High   | Better Stack and Sentry alerts (R5)                                                            |
+| Stub AI misleads paying users                      | High   | No production charge today (provider disabled); AI top-ups being disabled (R4)                 |
+| Outages or errors missed (was: no alerting)        | Medium | Mitigated: Better Stack live 14 Oct; Sentry alert rules pending (R5)                           |
 | Human testing waived (devices, pentest, reviewers) | Medium | Recorded as waived; live rehearsal event (R8.4) as partial mitigation                          |
 | Public repository                                  | Medium | Make private with trimmed CI (R7.5); never commit secrets (secrets scan required)              |
 | CI minutes budget after going private              | Medium | Nightly heavy suites, fast PR profile                                                          |
