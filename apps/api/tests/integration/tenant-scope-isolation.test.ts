@@ -7,7 +7,7 @@ import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import postgres, { type Sql } from "postgres";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
-import { Phase3Runtime } from "../../src/phase-3-runtime.js";
+import { Phase3Runtime, type Phase3CapacityReplaceInput } from "../../src/phase-3-runtime.js";
 import { Phase4Runtime, type Phase4AiOptions } from "../../src/phase-4-runtime.js";
 import { PublishedExportRuntime } from "../../src/published-export-runtime.js";
 
@@ -245,6 +245,175 @@ describeInfrastructure("cross-tenant child-id isolation", () => {
     }
     await expect(exports.generateCompetitionJson(victimCompetition, victim)).resolves.toMatchObject({
       competition: { id: victimCompetition },
+    });
+  });
+
+  describe("replaceCapacity: playing-area and window ids are scoped to the competition", () => {
+    const window = { date: "2027-08-01", startTime: "09:00", endTime: "12:00" };
+    let victimArea!: {
+      id: string;
+      name: string;
+      sort_order: number;
+      slot_minutes: number;
+      fixed_reserve_slots: number;
+    };
+    let victimWindowId!: string;
+    let attackerRevision = 1;
+
+    const victimRows = async () => ({
+      area: required(
+        await client<
+          {
+            id: string;
+            competition_id: string;
+            name: string;
+            sort_order: number;
+            slot_minutes: number;
+            fixed_reserve_slots: number;
+          }[]
+        >`SELECT id,competition_id,name,sort_order,slot_minutes,fixed_reserve_slots FROM playing_areas WHERE id=${victimArea.id}`,
+      ),
+      windows: await client<{ id: string; competition_id: string; playing_area_id: string }[]>`
+        SELECT id,competition_id,playing_area_id FROM competition_availability_windows WHERE competition_id=${victimCompetition}
+        ORDER BY id`,
+    });
+
+    // Run an attacker capacity replace and reduce the outcome to what the caller can observe, minus the
+    // ids the server assigns, so a foreign id and a random id can be compared for equality.
+    const attempt = async (input: Omit<Phase3CapacityReplaceInput, "revision">, suppliedIds: readonly string[]) => {
+      try {
+        const result = await phase3.replaceCapacity(
+          attacker,
+          attackerCompetition,
+          { revision: attackerRevision, ...input },
+          randomUUID(),
+        );
+        attackerRevision = result.revision;
+        const returnedIds = [
+          ...result.areas.map((area) => area.id),
+          ...result.areas.flatMap((area) => [...area.availability, ...area.unavailable].map((value) => value.id)),
+        ];
+        return {
+          ok: true as const,
+          echoedSuppliedId: suppliedIds.some((id) => returnedIds.includes(id)),
+          areas: result.areas.map((area) => ({
+            name: area.name,
+            sort_order: area.sort_order,
+            slot_minutes: area.slot_minutes,
+            fixed_reserve_slots: area.fixed_reserve_slots,
+            availability: area.availability.length,
+          })),
+        };
+      } catch (error) {
+        const candidate = error as { statusCode?: number; code?: string };
+        return { ok: false as const, statusCode: candidate.statusCode ?? 500, code: candidate.code ?? "INTERNAL" };
+      }
+    };
+
+    beforeAll(async () => {
+      const victimCapacity = await phase3.replaceCapacity(
+        victim,
+        victimCompetition,
+        {
+          revision: 1,
+          areas: [
+            { name: "Victim Court", sortOrder: 3, slotMinutes: 30, fixedReserveSlots: 1, availability: [window] },
+          ],
+        },
+        randomUUID(),
+      );
+      const area = required(victimCapacity.areas);
+      victimArea = {
+        id: area.id,
+        name: area.name,
+        sort_order: area.sort_order,
+        slot_minutes: area.slot_minutes,
+        fixed_reserve_slots: area.fixed_reserve_slots,
+      };
+      victimWindowId = required(area.availability).id;
+    });
+
+    it("a foreign playing-area id with no windows behaves exactly like a random id and never touches the victim court", async () => {
+      const before = await victimRows();
+      const area = (id: string) => ({
+        id,
+        name: "Hijacked",
+        sortOrder: 9,
+        slotMinutes: 30,
+        fixedReserveSlots: 7,
+        availability: [],
+      });
+      const randomId = randomUUID();
+      const foreign = await attempt({ areas: [area(victimArea.id)] }, [victimArea.id]);
+      const missing = await attempt({ areas: [area(randomId)] }, [randomId]);
+      expect(foreign).toEqual(missing);
+      expect(foreign).toMatchObject({ ok: true, echoedSuppliedId: false });
+      expect(await victimRows()).toEqual(before);
+      expect(before.area).toMatchObject({ ...victimArea, competition_id: victimCompetition });
+    });
+
+    it("a foreign playing-area id with windows is indistinguishable from a random id (no 500 / FK oracle)", async () => {
+      const before = await victimRows();
+      const area = (id: string) => ({
+        id,
+        name: "Hijacked",
+        sortOrder: 2,
+        slotMinutes: 30,
+        fixedReserveSlots: 4,
+        availability: [window],
+      });
+      const randomId = randomUUID();
+      const foreign = await attempt({ areas: [area(victimArea.id)] }, [victimArea.id]);
+      const missing = await attempt({ areas: [area(randomId)] }, [randomId]);
+      expect(foreign).toEqual(missing);
+      expect(foreign).toMatchObject({ ok: true, echoedSuppliedId: false });
+      expect(await victimRows()).toEqual(before);
+    });
+
+    it("a foreign availability-window id is indistinguishable from a random window id", async () => {
+      const before = await victimRows();
+      const area = (windowId: string) => ({
+        name: "Attacker Court",
+        slotMinutes: 30,
+        availability: [{ id: windowId, ...window }],
+      });
+      const randomId = randomUUID();
+      const foreign = await attempt({ areas: [area(victimWindowId)] }, [victimWindowId]);
+      const missing = await attempt({ areas: [area(randomId)] }, [randomId]);
+      expect(foreign).toEqual(missing);
+      expect(foreign).toMatchObject({ ok: true, echoedSuppliedId: false });
+      expect(await victimRows()).toEqual(before);
+    });
+
+    it("the owner still renames a court in place by its own id and keeps its own window ids", async () => {
+      const current = await phase3.capacity(victim, victimCompetition);
+      const own = required(current.areas);
+      const renamed = await phase3.replaceCapacity(
+        victim,
+        victimCompetition,
+        {
+          revision: current.revision,
+          areas: [
+            {
+              id: own.id,
+              name: "Victim Centre Court",
+              sortOrder: own.sort_order,
+              slotMinutes: own.slot_minutes,
+              fixedReserveSlots: own.fixed_reserve_slots,
+              availability: own.availability.map((value) => ({
+                id: value.id,
+                date: value.date,
+                startTime: value.start_time,
+                endTime: value.end_time,
+              })),
+            },
+          ],
+        },
+        randomUUID(),
+      );
+      expect(renamed.areas).toHaveLength(1);
+      expect(renamed.areas[0]).toMatchObject({ id: victimArea.id, name: "Victim Centre Court" });
+      expect(renamed.areas[0]!.availability.map((value) => value.id)).toEqual([victimWindowId]);
     });
   });
 });

@@ -1597,13 +1597,17 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
     );
     expect(first).toMatchObject({ revision: 2, timezone: "Europe/London", permission: "write", read_only: false });
     expect(first.areas[0]).toMatchObject({
-      id: areaId,
       sort_order: 4,
       slot_minutes: 30,
       fixed_reserve_slots: 2,
-      availability: [{ id: availableId, date: "2027-10-31", start_time: "01:00", end_time: "03:00" }],
-      unavailable: [{ id: unavailableId, date: "2027-10-31", start_time: "01:30", end_time: "02:00" }],
+      availability: [{ date: "2027-10-31", start_time: "01:00", end_time: "03:00" }],
+      unavailable: [{ date: "2027-10-31", start_time: "01:30", end_time: "02:00" }],
     });
+    // Ids this competition has never issued are not trusted (they could belong to another tenant), so
+    // new resources get server-assigned ids; once issued, they round-trip unchanged (asserted below).
+    expect(first.areas[0]!.id).not.toBe(areaId);
+    expect(first.areas[0]!.availability[0]!.id).not.toBe(availableId);
+    expect(first.areas[0]!.unavailable[0]!.id).not.toBe(unavailableId);
     const replay = await runtime.replaceCapacity(
       actor,
       competition.id,
