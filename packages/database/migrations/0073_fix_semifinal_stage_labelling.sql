@@ -128,13 +128,19 @@ $$ LANGUAGE plpgsql;
 -- can observe or exploit the window, and a failure rolls the trigger state back too.
 -- Only `stage` changes; every other guarded projection column is untouched, so
 -- phase4_materialization_is_exact stays true for every revision.
+-- Archived competitions are excluded: their results are frozen and
+-- phase3_guard_nested_competition_mutation (aa_matches_phase3_archive_guard) rejects any write to
+-- them, so their historical 'quarterfinal' labels are intentionally left as recorded. That guard
+-- stays enabled; only the projection guard is lifted.
 ALTER TABLE matches DISABLE TRIGGER aa_matches_phase4_projection_guard;
 
 WITH graph_stage AS (
   SELECT revision.id AS format_revision_id, stage->>'id' AS stage_id
   FROM format_revisions revision
   CROSS JOIN LATERAL jsonb_array_elements(revision.definition->'stages') stage
+  JOIN competitions competition ON competition.id=revision.competition_id
   WHERE revision.graph_materialized_at IS NOT NULL
+    AND competition.status<>'archived'
     AND stage->>'kind'='single_elimination'
 ), stage_depth AS (
   SELECT graph_stage.format_revision_id, graph_stage.stage_id,
@@ -148,8 +154,10 @@ WITH graph_stage AS (
 )
 UPDATE matches match
 SET stage='semifinal'
-FROM stage_depth depth
+FROM stage_depth depth, competitions competition
 WHERE match.format_revision_id=depth.format_revision_id
+  AND competition.id=match.competition_id
+  AND competition.status<>'archived'
   AND match.graph_stage_id=depth.stage_id
   AND match.graph_purpose='progression'
   AND match.round_number=depth.max_round-1
