@@ -26,9 +26,9 @@
 .textButton,
 .secondaryButton,
 .primaryButton {
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 10px 16px;
   font: inherit;
   font-weight: 650;
@@ -120,7 +120,7 @@
 }
 .category {
   padding: 5px 9px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface-subtle);
   color: var(--ink);
   font-weight: 700;
@@ -140,7 +140,7 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   cursor: pointer;
 }
 .preferenceRow input {

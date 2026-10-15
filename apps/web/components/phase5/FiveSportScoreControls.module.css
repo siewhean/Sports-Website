@@ -149,7 +149,7 @@
 .action:focus-visible,
 .secondaryGroup summary:focus-visible {
   outline: 3px solid #e2fa77;
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 .action strong {
   font-size: 0.875rem;

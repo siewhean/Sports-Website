@@ -39,7 +39,7 @@
 }
 .scroller:focus-visible {
   outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 .rounds {
   display: grid;
@@ -88,7 +88,7 @@ a.card:hover {
 }
 a.card:focus-visible {
   outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 .card[data-followed] {
   border-color: var(--signal-strong);

@@ -125,7 +125,7 @@
 .wide input:focus-visible,
 .submit:focus-visible {
   outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 
 .hint {
@@ -180,7 +180,7 @@
 
 .back:focus-visible {
   outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 
 .nextSteps {

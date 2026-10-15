@@ -66,15 +66,19 @@ export const surfaceStates = [
 
 export type SurfaceState = (typeof surfaceStates)[number];
 
+// Contract: only failures (error) use role="alert" (assertive interruption).
+// Recoverable or informational states — offline, conflict, read-only,
+// permission — are rendered with the page, so they use role="status" and rely
+// on tone + copy rather than an assertive announcement.
 export const stateTokens = {
   ready: { role: "status" as const, tone: "neutral" as const, alert: false },
   loading: { role: "status" as const, tone: "neutral" as const, alert: false },
   empty: { role: "status" as const, tone: "neutral" as const, alert: false },
   error: { role: "alert" as const, tone: "danger" as const, alert: true },
   offline: { role: "status" as const, tone: "warning" as const, alert: false },
-  conflict: { role: "alert" as const, tone: "warning" as const, alert: true },
+  conflict: { role: "status" as const, tone: "warning" as const, alert: false },
   "read-only": { role: "status" as const, tone: "neutral" as const, alert: false },
-  permission: { role: "alert" as const, tone: "warning" as const, alert: true },
+  permission: { role: "status" as const, tone: "warning" as const, alert: false },
 } as const;
 
 export type StateTokenKind = keyof typeof stateTokens;

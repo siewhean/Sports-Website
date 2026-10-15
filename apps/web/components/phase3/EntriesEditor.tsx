@@ -129,12 +129,9 @@ export function EntriesEditor({
       setError(validation.error);
       return;
     }
+    // The server is the source of truth for the free-plan entry limit; its
+    // FREE_ENTRY_LIMIT_REACHED (422) response is mapped by responseMessage().
     const { name, seed } = validation.value;
-
-    if (activeCount >= phase3EntriesMachine.maximumFreeEntries) {
-      setError(phase3EntriesCopy.freeLimitReached);
-      return;
-    }
 
     const fingerprint = JSON.stringify({ divisionId, name, seed });
     const existing = entryCommandRefs.current.get(divisionId);
@@ -254,7 +251,7 @@ export function EntriesEditor({
               ) : (
                 <p>{phase3EntriesCopy.empty}</p>
               )}
-              <form className={styles.createEntry} onSubmit={(event) => addEntry(event, division.id)}>
+              <form className={styles.createEntry} noValidate onSubmit={(event) => addEntry(event, division.id)}>
                 <label>
                   {phase3EntriesCopy.entryName}
                   <input name={phase3EntriesMachine.entryNameField} maxLength={120} required disabled={!canEdit} />
@@ -267,7 +264,6 @@ export function EntriesEditor({
                     min={1}
                     max={48}
                     defaultValue={nextSeed}
-                    required
                     disabled={!canEdit}
                   />
                 </label>

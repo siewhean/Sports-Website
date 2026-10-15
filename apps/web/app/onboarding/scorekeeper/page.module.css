@@ -39,7 +39,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   padding: 12px 24px;
   border-radius: 12px;
   background: var(--signal);

@@ -57,7 +57,7 @@
 
 .nextAction > a {
   flex: 0 0 auto;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   gap: 12px;
 }
 
@@ -269,7 +269,7 @@
 .primaryAction:focus-visible,
 .secondaryAction:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--focus) 45%, transparent);
-  outline-offset: 2px;
+  outline-offset: var(--focus-ring-offset);
 }
 
 .empty {

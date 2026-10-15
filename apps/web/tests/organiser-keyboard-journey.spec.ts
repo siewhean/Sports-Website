@@ -9,7 +9,9 @@ test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo))
 
 const competitionId = "4dc85811-e715-40f4-8609-2523f7516e5a";
 
-test("@a11y organiser competition creation walkthrough completes with keyboard only", async ({ page }) => {
+test("@a11y organiser competition creation walkthrough completes with keyboard only (demo fixtures, mocked create API)", async ({
+  page,
+}) => {
   await page.route("**/api/phase3/competitions", async (route) => {
     if (route.request().method() === "GET") {
       await route.fulfill({

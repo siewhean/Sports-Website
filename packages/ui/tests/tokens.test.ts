@@ -10,8 +10,8 @@ describe("design system tokens and states", () => {
       expect(["status", "alert"]).toContain(token.role);
       expect(["neutral", "warning", "danger"]).toContain(token.tone);
 
-      // Critical error/alert states must announce immediately
-      if (state === "error" || state === "conflict" || state === "permission") {
+      // Only failures interrupt assertively; recoverable states are polite status.
+      if (state === "error") {
         expect(token.role).toBe("alert");
         expect(token.alert).toBe(true);
       } else {

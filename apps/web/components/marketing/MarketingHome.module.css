@@ -179,7 +179,7 @@
   align-items: center;
   gap: 8px;
   margin-top: 28px;
-  min-height: 48px;
+  min-height: var(--touch-target-min);
   font-weight: 650;
   text-decoration: underline;
   text-underline-offset: 5px;
