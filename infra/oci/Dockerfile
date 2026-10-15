@@ -10,7 +10,7 @@
 #   runtime       non-root, production dependencies and build output only (no pnpm/corepack, no toolchain)
 #   api|worker|web  serving images derived from runtime
 
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS build
+FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS build
 
 WORKDIR /app
 # CI=true keeps pnpm non-interactive when it later rewrites node_modules for the production prune.
@@ -76,7 +76,7 @@ RUN set -eux; \
   done
 
 # ---- runtime ---------------------------------------------------------------------------------------------------
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS runtime
+FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
