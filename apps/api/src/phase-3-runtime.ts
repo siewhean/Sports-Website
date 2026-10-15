@@ -2348,19 +2348,46 @@ export class Phase3Runtime {
         `SELECT id, name FROM playing_areas WHERE competition_id=$1`,
         [competitionId],
       );
+      const existingWindowIds = new Set(
+        (
+          await tx.unsafe<{ id: string }>(
+            `SELECT id FROM competition_availability_windows WHERE competition_id=$1
+             UNION ALL
+             SELECT id FROM playing_area_unavailable_intervals WHERE competition_id=$1`,
+            [competitionId],
+          )
+        ).map((row) => row.id),
+      );
+      // Resource ids are client-echoed, so they are trusted only when they already belong to THIS
+      // competition. Any other id — one that exists nowhere, or one owned by another tenant's
+      // competition — is treated identically, as if the client had sent no id: a foreign id can
+      // never reach another tenant's row, and neither the outcome nor an error (unique/FK
+      // violation) reveals whether that id exists elsewhere. Duplicates are checked on the raw ids
+      // so an invalid request is still rejected the same way whatever the ids refer to.
+      const suppliedIdentifiers = input.areas.flatMap((area) => [
+        ...(area.id ? [area.id] : []),
+        ...[...area.availability, ...(area.unavailable ?? [])].flatMap((window) => (window.id ? [window.id] : [])),
+      ]);
+      if (new Set(suppliedIdentifiers).size !== suppliedIdentifiers.length) {
+        throw new ApiError(422, ErrorCode.CAPACITY_ID_DUPLICATE, "Capacity resource identifiers must be unique");
+      }
+      const ownAreaIds = new Set(existingAreas.map((area) => area.id));
+      const ownAreaId = (id: string | undefined) => (id && ownAreaIds.has(id) ? id : undefined);
+      const ownWindowId = (id: string | undefined) => (id && existingWindowIds.has(id) ? id : randomUUID());
       // Areas are matched by the id the client echoes back from the capacity view, so a rename
       // updates the existing court in place. The request contract keeps `id` optional for older
-      // clients; only for those id-less areas do we fall back, explicitly, to an exact
-      // (case/space-insensitive) name match against an existing area that no other submitted area
-      // claims by id. Anything else is a genuinely new court.
-      const claimedIds = new Set(input.areas.flatMap((area) => (area.id ? [area.id] : [])));
+      // clients (and new courts carry a client-generated id this competition has never seen); only
+      // for those areas do we fall back, explicitly, to an exact (case/space-insensitive) name match
+      // against an existing area that no other submitted area claims by id. Anything else is a
+      // genuinely new court with a server-assigned id.
+      const claimedIds = new Set(input.areas.flatMap((area) => (ownAreaId(area.id) ? [area.id!] : [])));
       const unclaimedByName = new Map(
         existingAreas
           .filter((area) => !claimedIds.has(area.id))
           .map((area) => [area.name.toLowerCase().trim(), area.id] as const),
       );
       const preparedAreas = input.areas.map((area, index) => {
-        let id = area.id;
+        let id = ownAreaId(area.id);
         if (!id) {
           const nameKey = area.name.toLowerCase().trim();
           id = unclaimedByName.get(nameKey) ?? randomUUID();
@@ -2371,16 +2398,16 @@ export class Phase3Runtime {
 
       const availability = preparedAreas.flatMap((area) =>
         area.availability.map((window) => ({
-          id: window.id ?? randomUUID(),
-          areaId: area.id,
           ...window,
+          id: ownWindowId(window.id),
+          areaId: area.id,
         })),
       );
       const unavailable = preparedAreas.flatMap((area) =>
         (area.unavailable ?? []).map((window) => ({
-          id: window.id ?? randomUUID(),
-          areaId: area.id,
           ...window,
+          id: ownWindowId(window.id),
+          areaId: area.id,
         })),
       );
       const identifiers = [
@@ -2427,16 +2454,23 @@ export class Phase3Runtime {
       await tx.unsafe(`DELETE FROM playing_area_unavailable_intervals WHERE competition_id=$1`, [competitionId]);
 
       for (const area of preparedAreas) {
-        await tx.unsafe(
+        // Defence in depth: the conflict update is restricted to this competition's own row, so even
+        // an id that slipped past the ownership filter above can never rewrite another tenant's court.
+        const written = await tx.unsafe<{ id: string }>(
           `INSERT INTO playing_areas (id,competition_id,name,sort_order,slot_minutes,fixed_reserve_slots)
            VALUES ($1,$2,$3,$4,$5,$6)
            ON CONFLICT (id) DO UPDATE SET
              name=EXCLUDED.name,
              sort_order=EXCLUDED.sort_order,
              slot_minutes=EXCLUDED.slot_minutes,
-             fixed_reserve_slots=EXCLUDED.fixed_reserve_slots`,
+             fixed_reserve_slots=EXCLUDED.fixed_reserve_slots
+           WHERE playing_areas.competition_id=EXCLUDED.competition_id
+           RETURNING id`,
           [area.id, competitionId, area.name.trim(), area.sortOrder, area.slotMinutes, area.fixedReserveSlots ?? 0],
         );
+        if (written.length !== 1) {
+          throw new ApiError(422, ErrorCode.CAPACITY_INVALID, "Capacity input is invalid");
+        }
       }
 
       const preparedIds = preparedAreas.map((a) => a.id);
