@@ -48,134 +48,6 @@ const configuredApiOrigin = apiOrigin();
 const sentryRelease = requestedBuildId ?? process.env.VERCEL_GIT_COMMIT_SHA?.trim() ?? releaseBuildId;
 const sentryEnvironment = process.env.APP_ENV?.trim() || process.env.VERCEL_ENV?.trim() || process.env.NODE_ENV;
 
-export const productRouteRewrites = [
-  // R6.3 Product route aliases for phase3 / phase4 / gate-c routes
-  {
-    source: "/api/competitions/:competitionId/divisions/:path*",
-    destination: "/api/phase3/competitions/:competitionId/divisions/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/divisions",
-    destination: "/api/phase3/competitions/:competitionId/divisions",
-  },
-  {
-    source: "/api/competitions/:competitionId/capacity",
-    destination: "/api/phase3/competitions/:competitionId/capacity",
-  },
-  {
-    source: "/api/competitions/:competitionId/settings/:path*",
-    destination: "/api/phase3/competitions/:competitionId/settings/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/settings",
-    destination: "/api/phase3/competitions/:competitionId/settings",
-  },
-  {
-    source: "/api/competitions/:competitionId/setup-draft/:path*",
-    destination: "/api/phase4/competitions/:competitionId/setup-draft/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/setup-draft",
-    destination: "/api/phase4/competitions/:competitionId/setup-draft",
-  },
-  {
-    source: "/api/competitions/:competitionId/officials/:path*",
-    destination: "/api/phase4/competitions/:competitionId/officials/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/officials",
-    destination: "/api/phase4/competitions/:competitionId/officials",
-  },
-  {
-    source: "/api/competitions/:competitionId/matches/:path*",
-    destination: "/api/phase4/competitions/:competitionId/matches/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/matches",
-    destination: "/api/phase4/competitions/:competitionId/matches",
-  },
-  {
-    source: "/api/competitions/:competitionId/schedule/:path*",
-    destination: "/api/phase4/competitions/:competitionId/schedule/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/v1-format-recommendations/:path*",
-    destination: "/api/phase4/competitions/:competitionId/v1-format-recommendations/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/repairs/:path*",
-    destination: "/api/gate-c/competitions/:competitionId/repairs/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/repairs",
-    destination: "/api/gate-c/competitions/:competitionId/repairs",
-  },
-  {
-    source: "/api/competitions/:competitionId/access-passes/:path*",
-    destination: "/api/gate-c/competitions/:competitionId/access-passes/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/access-passes",
-    destination: "/api/gate-c/competitions/:competitionId/access-passes",
-  },
-  {
-    source: "/api/competitions/:competitionId/result-conflicts/:path*",
-    destination: "/api/gate-c/competitions/:competitionId/result-conflicts/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/result-conflicts",
-    destination: "/api/gate-c/competitions/:competitionId/result-conflicts",
-  },
-  {
-    source: "/api/competitions/:competitionId/takeover-requests/:path*",
-    destination: "/api/gate-c/competitions/:competitionId/takeover-requests/:path*",
-  },
-  {
-    source: "/api/competitions/:competitionId/exports/:path*",
-    destination: "/api/gate-c/competitions/:competitionId/exports/:path*",
-  },
-  {
-    source: "/api/competitions",
-    destination: "/api/phase3/competitions",
-  },
-  {
-    source: "/api/competitions/:competitionId",
-    destination: "/api/phase3/competitions/:competitionId",
-  },
-  {
-    source: "/api/organisations/bootstrap",
-    destination: "/api/phase3/organisations/bootstrap",
-  },
-  {
-    source: "/api/organisations/:organisationId/format-templates/:path*",
-    destination: "/api/phase4/organisations/:organisationId/format-templates/:path*",
-  },
-  {
-    source: "/api/organisations/:organisationId/format-templates",
-    destination: "/api/phase4/organisations/:organisationId/format-templates",
-  },
-  {
-    source: "/api/organisations/:organisationId/ai/:path*",
-    destination: "/api/phase4/organisations/:organisationId/ai/:path*",
-  },
-  {
-    source: "/api/schedule/:path*",
-    destination: "/api/phase4/schedule/:path*",
-  },
-  {
-    source: "/api/format-revisions/:path*",
-    destination: "/api/phase4/format-revisions/:path*",
-  },
-  {
-    source: "/api/admin/feature-flags/:path*",
-    destination: "/api/phase3/admin/feature-flags/:path*",
-  },
-  {
-    source: "/api/admin/sport-packs/:path*",
-    destination: "/api/phase3/admin/sport-packs/:path*",
-  },
-];
-
 const nextConfig: NextConfig = {
   compress: true,
   env: {
@@ -214,17 +86,15 @@ const nextConfig: NextConfig = {
           },
         ]
       : [],
-  rewrites: async () => [
-    ...(configuredApiOrigin
+  rewrites: async () =>
+    configuredApiOrigin
       ? [
           {
             source: "/api/v1/:path*",
             destination: `${configuredApiOrigin}/api/v1/:path*`,
           },
         ]
-      : []),
-    ...productRouteRewrites,
-  ],
+      : [],
   images: {
     formats: ["image/avif", "image/webp"],
     minimumCacheTTL: 31_536_000,

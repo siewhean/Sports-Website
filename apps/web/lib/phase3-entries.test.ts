@@ -6,6 +6,8 @@ import {
   parseCreatedEntry,
   phase3EntriesCopy,
   totalActiveEntries,
+  validateDivisionInput,
+  validateEntryInput,
 } from "./phase3-entries";
 
 describe("division and entry commands", () => {
@@ -85,6 +87,92 @@ describe("division and entry commands", () => {
         },
       ]),
     ).toBe(16);
+  });
+
+  it("validates division inputs and requires valid name and limits", () => {
+    expect(validateDivisionInput("Open", 16)).toEqual({ ok: true, value: { name: "Open", entryLimit: 16 } });
+    expect(validateDivisionInput("  Premier  ", "24")).toEqual({
+      ok: true,
+      value: { name: "Premier", entryLimit: 24 },
+    });
+    expect(validateDivisionInput("A", 16)).toEqual({ ok: false, error: phase3EntriesCopy.divisionNameRequired });
+    expect(validateDivisionInput("", 16)).toEqual({ ok: false, error: phase3EntriesCopy.divisionNameRequired });
+    expect(validateDivisionInput("Open", 1)).toEqual({ ok: false, error: phase3EntriesCopy.divisionLimitInvalid });
+    expect(validateDivisionInput("Open", 129)).toEqual({ ok: false, error: phase3EntriesCopy.divisionLimitInvalid });
+    expect(validateDivisionInput("Open", "not-a-number")).toEqual({
+      ok: false,
+      error: phase3EntriesCopy.divisionLimitInvalid,
+    });
+    expect(validateDivisionInput("Open", 16.5)).toEqual({
+      ok: false,
+      error: phase3EntriesCopy.divisionLimitInvalid,
+    });
+  });
+
+  it("validates entry inputs, accepting blank seeds as null and validating non-blank seeds", () => {
+    // Blank seed inputs must be accepted with seed: null
+    expect(validateEntryInput("Marina Blue", "")).toEqual({
+      ok: true,
+      value: { name: "Marina Blue", seed: null },
+    });
+    expect(validateEntryInput("Marina Blue", "   ")).toEqual({
+      ok: true,
+      value: { name: "Marina Blue", seed: null },
+    });
+    expect(validateEntryInput("Marina Blue", undefined)).toEqual({
+      ok: true,
+      value: { name: "Marina Blue", seed: null },
+    });
+    expect(validateEntryInput("Marina Blue", null)).toEqual({
+      ok: true,
+      value: { name: "Marina Blue", seed: null },
+    });
+
+    // Valid positive seeds 1..48
+    expect(validateEntryInput("Marina Blue", 1)).toEqual({
+      ok: true,
+      value: { name: "Marina Blue", seed: 1 },
+    });
+    expect(validateEntryInput("Marina Blue", "48")).toEqual({
+      ok: true,
+      value: { name: "Marina Blue", seed: 48 },
+    });
+
+    // Invalid seeds: 0, negative, >48, non-integer, non-numeric
+    expect(validateEntryInput("Marina Blue", 0)).toEqual({
+      ok: false,
+      error: phase3EntriesCopy.entrySeedInvalid,
+    });
+    expect(validateEntryInput("Marina Blue", "0")).toEqual({
+      ok: false,
+      error: phase3EntriesCopy.entrySeedInvalid,
+    });
+    expect(validateEntryInput("Marina Blue", 49)).toEqual({
+      ok: false,
+      error: phase3EntriesCopy.entrySeedInvalid,
+    });
+    expect(validateEntryInput("Marina Blue", -5)).toEqual({
+      ok: false,
+      error: phase3EntriesCopy.entrySeedInvalid,
+    });
+    expect(validateEntryInput("Marina Blue", 2.5)).toEqual({
+      ok: false,
+      error: phase3EntriesCopy.entrySeedInvalid,
+    });
+    expect(validateEntryInput("Marina Blue", "first")).toEqual({
+      ok: false,
+      error: phase3EntriesCopy.entrySeedInvalid,
+    });
+
+    // Short or missing entry name
+    expect(validateEntryInput("A", "")).toEqual({
+      ok: false,
+      error: phase3EntriesCopy.entryNameRequired,
+    });
+    expect(validateEntryInput("", 1)).toEqual({
+      ok: false,
+      error: phase3EntriesCopy.entryNameRequired,
+    });
   });
 
   it("provides field-and-fix validation guidance for divisions and entries", () => {

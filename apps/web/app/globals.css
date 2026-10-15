@@ -22,6 +22,18 @@
   --ease-state: cubic-bezier(0.32, 0.72, 0, 1);
   --font-sans: var(--font-geist-sans, "Geist"), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-geist-mono, "Geist Mono"), ui-monospace, SFMono-Regular, monospace;
+
+  /* Design System Tokens (packages/ui/src/tokens.ts) */
+  --touch-target-min: 48px;
+  --breakpoint-phone: 375px;
+  --breakpoint-tablet: 768px;
+  --breakpoint-desktop: 1280px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
 }
 
 @media (prefers-color-scheme: dark) {

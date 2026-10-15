@@ -8,6 +8,8 @@ import {
   phase3EntriesCopy,
   phase3EntriesMachine,
   totalActiveEntries,
+  validateDivisionInput,
+  validateEntryInput,
   type EntryEditorDivision,
 } from "@/lib/phase3-entries";
 import styles from "./EntriesEditor.module.css";
@@ -72,18 +74,16 @@ export function EntriesEditor({
     if (!canEdit) return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    const name = String(data.get(phase3EntriesMachine.divisionNameField) ?? "").trim();
+    const rawName = data.get(phase3EntriesMachine.divisionNameField);
     const code = String(data.get(phase3EntriesMachine.divisionCodeField) ?? "").trim();
-    const entryLimit = Number(data.get(phase3EntriesMachine.divisionLimitField));
+    const rawLimit = data.get(phase3EntriesMachine.divisionLimitField);
 
-    if (name.length < 2) {
-      setError(phase3EntriesCopy.divisionNameRequired);
+    const validation = validateDivisionInput(rawName, rawLimit);
+    if (!validation.ok) {
+      setError(validation.error);
       return;
     }
-    if (!Number.isInteger(entryLimit) || entryLimit < 2 || entryLimit > 128) {
-      setError(phase3EntriesCopy.divisionLimitInvalid);
-      return;
-    }
+    const { name, entryLimit } = validation.value;
 
     const fingerprint = JSON.stringify({ name, code, entryLimit });
     const pending =
@@ -121,17 +121,16 @@ export function EntriesEditor({
     if (!canEdit) return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    const name = String(data.get(phase3EntriesMachine.entryNameField) ?? "").trim();
-    const seed = Number(data.get(phase3EntriesMachine.entrySeedField));
+    const rawName = data.get(phase3EntriesMachine.entryNameField);
+    const rawSeed = data.get(phase3EntriesMachine.entrySeedField);
 
-    if (name.length < 2) {
-      setError(phase3EntriesCopy.entryNameRequired);
+    const validation = validateEntryInput(rawName, rawSeed);
+    if (!validation.ok) {
+      setError(validation.error);
       return;
     }
-    if (!Number.isInteger(seed) || seed < 1 || seed > 48) {
-      setError(phase3EntriesCopy.entrySeedInvalid);
-      return;
-    }
+    const { name, seed } = validation.value;
+
     if (activeCount >= phase3EntriesMachine.maximumFreeEntries) {
       setError(phase3EntriesCopy.freeLimitReached);
       return;

@@ -166,3 +166,38 @@ export function totalActiveEntries(divisions: readonly EntryEditorDivision[]): n
     0,
   );
 }
+
+export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+export function validateDivisionInput(
+  rawName: unknown,
+  rawLimit: unknown,
+): ValidationResult<{ name: string; entryLimit: number }> {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (name.length < 2 || name.length > 100) {
+    return { ok: false, error: phase3EntriesCopy.divisionNameRequired };
+  }
+  const limit = typeof rawLimit === "number" ? rawLimit : Number(rawLimit);
+  if (!Number.isInteger(limit) || limit < 2 || limit > 128) {
+    return { ok: false, error: phase3EntriesCopy.divisionLimitInvalid };
+  }
+  return { ok: true, value: { name, entryLimit: limit } };
+}
+
+export function validateEntryInput(
+  rawName: unknown,
+  rawSeed?: unknown,
+): ValidationResult<{ name: string; seed: number | null }> {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (name.length < 2 || name.length > 120) {
+    return { ok: false, error: phase3EntriesCopy.entryNameRequired };
+  }
+  if (rawSeed === undefined || rawSeed === null || (typeof rawSeed === "string" && rawSeed.trim() === "")) {
+    return { ok: true, value: { name, seed: null } };
+  }
+  const seed = typeof rawSeed === "number" ? rawSeed : Number(rawSeed);
+  if (!Number.isInteger(seed) || seed < 1 || seed > 48) {
+    return { ok: false, error: phase3EntriesCopy.entrySeedInvalid };
+  }
+  return { ok: true, value: { name, seed } };
+}

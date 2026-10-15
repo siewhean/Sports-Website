@@ -378,7 +378,7 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 - R6.1 Organiser journey review: create → teams → format → schedule → publish → run day → finish, with friction removed and every error message naming the field and the fix.
 - R6.2 Design system: consolidate tokens and components; remove one-off styles; complete loading, empty, error, offline and permission states.
-- R6.3 Rename internal "phase" and "gate" identifiers in code and routes to product names, with no API contract break for live clients.
+- R6.3 Rename internal "phase" and "gate" identifiers in code and routes to product names, with no API contract break for live clients. (Not done / deferred: route aliases removed per audit feedback until frontend call sites migrate; user-facing copy cleaned)
 - R6.4 Delete dead prototype code and the hidden V1-removed surfaces that will not return (per R2.6).
 - R6.5 Accessibility: automated axe checks on every page at phone, tablet and desktop; keyboard-only run of the organiser journey.
 - R6.6 Performance: public competition page and scoring page meet Core Web Vitals "good" on mobile.
@@ -387,7 +387,7 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 - [ ] A first-time organiser walkthrough (owner, recorded) completes a 16-team event setup in under 15 minutes with no help.
 - [ ] Zero WCAG A/AA axe violations on all routes. Evidence: automated Playwright axe suites (`tests/*accessibility.spec.ts`) and keyboard-only journey (`tests/organiser-keyboard-journey.spec.ts`).
-- [ ] No `phase`/`gate` names in user-visible text or URLs. Evidence: product routes created with backward compatibility for legacy API routes.
+- [ ] No `phase`/`gate` names in user-visible text or URLs. (Not done: internal phase/gate API routes remain in use; user-visible copy cleaned).
 - [ ] Dead code removed; bundle size and test count recorded before and after. Evidence: `docs/qa/track-r6.md`.
 
 ---
