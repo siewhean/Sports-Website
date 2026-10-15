@@ -289,6 +289,9 @@ jobs:
               - "packages/domain/**"
               - "packages/database/**"
               - "packages/contracts/**"
+              - "packages/config/**"
+              - ".env.example"
+              - "scripts/fresh-boot-check.sh"
               - ".github/workflows/ci.yml"
 
   tournament-simulation:
@@ -374,6 +377,14 @@ jobs:
           cp .env.example .env
           pnpm db:migrate
           pnpm test:env-templates
+      - name: Fresh boot check (API + web from .env.example only)
+        # CP1: a fresh clone boots against a fresh database using only .env.example values. The
+        # script strips every .env key from the job env (APP_ENV=test, LOG_LEVEL=silent, ...) so the
+        # template alone configures the real built API (node apps/api/dist/main.js) and `next start`.
+        # No overrides: .env.example DATABASE_URL/REDIS_URL already match the service containers.
+        if: env.RUN_SIMULATION == 'true'
+        timeout-minutes: 3
+        run: ./scripts/fresh-boot-check.sh
       - name: Run tournament simulation (${{ env.SIMULATION_PROFILE }})
         if: env.RUN_SIMULATION == 'true'
         run: pnpm simulate:tournament --profile="$SIMULATION_PROFILE"
