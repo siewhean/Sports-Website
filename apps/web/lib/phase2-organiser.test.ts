@@ -199,8 +199,9 @@ describe("organiser competition workspace mapping", () => {
         id: divisionId,
         name: "Open",
         entries: [
-          { id: homeId, name: "North", seed: 1, status: "active" },
-          { id: awayId, name: "South", seed: 2, status: "active" },
+          // Legacy reads without entry_type/revision default to a named team at revision 1.
+          { id: homeId, name: "North", seed: 1, status: "active", entryType: "team", revision: 1 },
+          { id: awayId, name: "South", seed: 2, status: "active", entryType: "team", revision: 1 },
         ],
       },
     ]);
