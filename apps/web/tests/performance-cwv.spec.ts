@@ -6,12 +6,11 @@ test.afterEach(async ({ page }, testInfo) => assertConsoleGuard(page, testInfo))
 
 test.use({ ...devices["Pixel 7"] });
 
-// CLS uses the web.dev "good" threshold everywhere. LCP is only held to the 2500 ms "good" threshold on local runs;
-// shared CI runners are CPU-contended, so CI enforces a regression ceiling instead and does not certify "good" LCP.
+// web.dev "good" thresholds, asserted on every run (CI measured LCP ~0.4 s and CLS 0.0012 in run 38682130973).
+// This is a lab measurement: Pixel 7 viewport/UA + Fast 4G network emulation, no CPU throttling, local server.
+// It is evidence of no regressions, not field (CrUX) data.
 const CLS_GOOD = 0.1;
 const LCP_GOOD_MS = 2500;
-const LCP_CI_CEILING_MS = 4000;
-const lcpLimit = process.env.CI ? LCP_CI_CEILING_MS : LCP_GOOD_MS;
 
 type Vitals = { lcp: number; cls: number; supportsLcp: boolean; shifts: string[] };
 
@@ -77,17 +76,17 @@ async function measureVitals(page: Page): Promise<Vitals> {
 }
 
 function assertVitals(vitals: Vitals) {
-  const summary = `LCP ${Math.round(vitals.lcp)} ms (limit ${lcpLimit} ms${process.env.CI ? ", CI ceiling" : ", good"}), CLS ${vitals.cls.toFixed(4)}`;
+  const summary = `LCP ${Math.round(vitals.lcp)} ms (good <= ${LCP_GOOD_MS} ms), CLS ${vitals.cls.toFixed(4)} (good <= ${CLS_GOOD})`;
   test.info().annotations.push({ type: "cwv", description: summary });
   console.log(`[cwv] ${test.info().title}: ${summary}`);
   expect(vitals.supportsLcp, "Browser engine must support largest-contentful-paint observer").toBe(true);
   expect(vitals.lcp, "LCP value must be measured and greater than 0").toBeGreaterThan(0);
-  expect(vitals.lcp, summary).toBeLessThanOrEqual(lcpLimit);
+  expect(vitals.lcp, summary).toBeLessThanOrEqual(LCP_GOOD_MS);
   expect(vitals.cls, `${summary}\nlayout shifts:\n${vitals.shifts.join("\n")}`).toBeLessThanOrEqual(CLS_GOOD);
 }
 
 test.describe("mobile Core Web Vitals (R6.6, Pixel 7 + Fast 4G emulation)", () => {
-  test("public competition page has good CLS and LCP under the run's ceiling", async ({ page }) => {
+  test("public competition page has good LCP and CLS in the lab profile", async ({ page }) => {
     await emulateFast4G(page);
     await page.goto("/competitions/singapore-open");
     await dismissConsent(page);
@@ -95,7 +94,7 @@ test.describe("mobile Core Web Vitals (R6.6, Pixel 7 + Fast 4G emulation)", () =
     assertVitals(await measureVitals(page));
   });
 
-  test("scoring page has good CLS and LCP under the run's ceiling", async ({ page }) => {
+  test("scoring page has good LCP and CLS in the lab profile", async ({ page }) => {
     await emulateFast4G(page);
     await page.goto("/score");
     await dismissConsent(page);
