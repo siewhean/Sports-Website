@@ -38,6 +38,8 @@ const gateSubsequentMigrationNames = [
   "0059_phase6_shared_ai_credits.sql",
   "0060_phase6_event_pass_competition_scope.sql",
   "0061_phase6_reject_organisation_event_pass.sql",
+  // 0074 redefines 0059 functions, so it must replay after 0059.
+  "0074_r4_org_wide_ai_quota.sql",
 ] as const;
 
 beforeAll(async () => dropTestSchema(config.databaseUrl, schema));

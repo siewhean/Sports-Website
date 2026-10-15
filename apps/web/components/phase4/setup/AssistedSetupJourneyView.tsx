@@ -61,6 +61,7 @@ const copy = {
   selectedSport: opaqueId("Selected sport"),
   customised: opaqueId("Customised"),
   recommended: opaqueId("Recommended"),
+  rulesSuggestion: opaqueId("Rules-based suggestion"),
   immutableSettingsReferences: opaqueId("immutable settings references"),
   competitionSettings: opaqueId("Competition settings"),
   divisionSettings: opaqueId("Division settings"),
@@ -816,7 +817,9 @@ function RecommendationStep({
         return (
           <article key={item.id} data-selected={selected} data-shortfall={shortfall}>
             <header>
-              <span>{item.capacity_status.replaceAll("_", " ")}</span>
+              <span>
+                {copy.rulesSuggestion} · {item.capacity_status.replaceAll("_", " ")}
+              </span>
               <h2>{item.name}</h2>
               <p>{item.structure}</p>
             </header>
@@ -1141,7 +1144,7 @@ function stepIntro(step: Phase4SetupStepId) {
       entries: opaqueId("Validated imports and entry revisions are referenced without copying sensitive source rows."),
       format_preferences: opaqueId("Six explicit preference groups drive the deterministic recommendation engine."),
       format_recommendations: opaqueId(
-        "Choose from at most three meaningfully different options. Capacity changes are explicit.",
+        "Rules-based suggestions computed deterministically from your capacity and format preferences (no AI models used).",
       ),
       schedule_review: opaqueId("Compare named quality components before selecting a schedule revision."),
       review_publish: opaqueId("Nothing becomes public until the organiser confirms the exact pinned evidence."),

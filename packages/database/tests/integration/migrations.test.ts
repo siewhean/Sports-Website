@@ -238,6 +238,8 @@ describe("foundation migrations", () => {
         "0061_phase6_reject_organisation_event_pass.sql",
         "0065_cp9a1_restore_search_path_safety.sql",
         "0066_cp9a1_restore_validator_search_path_safety.sql",
+        // 0074 redefines 0059 functions, so it must replay after 0059.
+        "0074_r4_org_wide_ai_quota.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {

@@ -519,6 +519,14 @@ export type Phase4PublicProjectionPort = {
   ): Promise<void>;
 };
 
+/** R4.4: organisation-wide remaining AI units — same SQL as finalize charge and billing display. */
+async function readOrgAiQuotaRemaining(tx: PostgresJsSql, organisationId: string): Promise<number> {
+  const row = (
+    await tx.unsafe<{ remaining: number }>(`SELECT remaining FROM phase6_org_ai_quota($1)`, [organisationId])
+  )[0];
+  return row?.remaining ?? 0;
+}
+
 export class Phase4Runtime {
   private readonly competitionRepo: CompetitionRepository;
   private readonly organisationRepo: OrganisationRepository;
@@ -2474,27 +2482,20 @@ export class Phase4Runtime {
 
   async readAiUsage(actor: Phase3Actor, organisationId: string) {
     await this.organisationAccess(this.sql, organisationId, actor);
-    const rows = await this.sql.unsafe<{
-      action: string;
-      period_start: string;
-      action_limit: number;
-      used_units: number;
-      revision: number;
-      updated_at: Date | string;
-    }>(
-      `SELECT action,period_start,action_limit,used_units,revision,updated_at FROM ai_usage_allowances
-       WHERE organisation_id=$1 AND actor_account_id=$2 AND period_start<=current_date
-       ORDER BY action,period_start DESC`,
-      [organisationId, actor.accountId],
-    );
-    const latest = [...new Map(rows.map((row) => [row.action, row])).values()];
+    // R4.4: the organisation-wide quota (phase6_org_ai_quota) is the single source
+    // of truth. Per-actor allowance rows are an audit trail only and not returned.
+    const quota = (
+      await this.sql.unsafe<{ base_limit: number; base_used: number; credits_granted: number; remaining: number }>(
+        `SELECT base_limit,base_used,credits_granted,remaining FROM phase6_org_ai_quota($1)`,
+        [organisationId],
+      )
+    )[0] ?? { base_limit: 0, base_used: 0, credits_granted: 0, remaining: 0 };
+    const limit = quota.base_limit + quota.credits_granted;
     return {
       organisation_id: organisationId,
-      actions: latest.map((row) => ({
-        ...row,
-        remaining_units: row.action_limit - row.used_units,
-        updated_at: instant(row.updated_at),
-      })),
+      limit,
+      used: Math.max(0, limit - quota.remaining),
+      remaining: quota.remaining,
     };
   }
 
@@ -2542,13 +2543,7 @@ export class Phase4Runtime {
           )
         )[0],
       );
-      const allowance = (
-        await tx.unsafe<{ action_limit: number; used_units: number }>(
-          `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
-           AND action='text_to_brief' AND period_start<=current_date ORDER BY period_start DESC LIMIT 1`,
-          [organisationId, actor.accountId],
-        )
-      )[0];
+      const quotaRemaining = await readOrgAiQuotaRemaining(tx, organisationId);
       const requestedLedgerId = randomUUID();
       const began = first(
         await tx.unsafe<{ value: JsonObject | string }>(
@@ -2582,7 +2577,7 @@ export class Phase4Runtime {
         cached: beginValue.cache_result,
         replay,
         finalized: beginValue.ledger.outcome !== "pending" ? beginValue.ledger : null,
-        quotaAvailable: Boolean(!allowance || allowance.used_units < allowance.action_limit),
+        quotaAvailable: quotaRemaining > 0,
       };
     });
     const usage = async () => this.readAiUsage(actor, organisationId);
@@ -2772,13 +2767,7 @@ export class Phase4Runtime {
         throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
       await assertDivisionInCompetition(tx, divisionId, competitionId);
 
-      const allowance = (
-        await tx.unsafe<{ action_limit: number; used_units: number }>(
-          `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
-           AND action='format_modification' AND period_start<=current_date ORDER BY period_start DESC LIMIT 1`,
-          [organisationId, actor.accountId],
-        )
-      )[0];
+      const quotaRemaining = await readOrgAiQuotaRemaining(tx, organisationId);
 
       const requestedLedgerId = randomUUID();
       const began = first(
@@ -2812,7 +2801,7 @@ export class Phase4Runtime {
         ledgerId: beginValue.ledger.id,
         cached: beginValue.cache_result,
         finalized: beginValue.ledger.outcome !== "pending" ? beginValue.ledger : null,
-        quotaAvailable: Boolean(!allowance || allowance.used_units < allowance.action_limit),
+        quotaAvailable: quotaRemaining > 0,
       };
     });
 
@@ -2987,13 +2976,7 @@ export class Phase4Runtime {
         throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
       await assertDivisionInCompetition(tx, divisionId, competitionId);
 
-      const allowance = (
-        await tx.unsafe<{ action_limit: number; used_units: number }>(
-          `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
-           AND action='schedule_preferences' AND period_start<=current_date ORDER BY period_start DESC LIMIT 1`,
-          [organisationId, actor.accountId],
-        )
-      )[0];
+      const quotaRemaining = await readOrgAiQuotaRemaining(tx, organisationId);
 
       const requestedLedgerId = randomUUID();
       const began = first(
@@ -3027,7 +3010,7 @@ export class Phase4Runtime {
         ledgerId: beginValue.ledger.id,
         cached: beginValue.cache_result,
         finalized: beginValue.ledger.outcome !== "pending" ? beginValue.ledger : null,
-        quotaAvailable: Boolean(!allowance || allowance.used_units < allowance.action_limit),
+        quotaAvailable: quotaRemaining > 0,
       };
     });
 
@@ -3186,13 +3169,7 @@ export class Phase4Runtime {
         throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
       await assertChildInCompetition(tx, "repair_case", caseId, competitionId);
 
-      const allowance = (
-        await tx.unsafe<{ action_limit: number; used_units: number }>(
-          `SELECT action_limit,used_units FROM ai_usage_allowances WHERE organisation_id=$1 AND actor_account_id=$2
-           AND action='repair_recommendations' AND period_start<=current_date ORDER BY period_start DESC LIMIT 1`,
-          [organisationId, actor.accountId],
-        )
-      )[0];
+      const quotaRemaining = await readOrgAiQuotaRemaining(tx, organisationId);
 
       const requestedLedgerId = randomUUID();
       const began = first(
@@ -3235,7 +3212,7 @@ export class Phase4Runtime {
         ledgerId: beginValue.ledger.id,
         cached: beginValue.cache_result,
         finalized: beginValue.ledger.outcome !== "pending" ? beginValue.ledger : null,
-        quotaAvailable: Boolean(!allowance || allowance.used_units < allowance.action_limit),
+        quotaAvailable: quotaRemaining > 0,
       };
     });
 
