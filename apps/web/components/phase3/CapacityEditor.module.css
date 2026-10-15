@@ -132,10 +132,10 @@
 .secondaryButton:focus-visible,
 .textButton:focus-visible,
 .iconButton:focus-visible {
-  outline: 3px solid #b7d338;
+  outline: 3px solid var(--focus);
   outline-offset: var(--focus-ring-offset);
 }
-.field small,
+.field > small,
 .formError {
   margin: 0;
   color: var(--danger-ink);
@@ -158,7 +158,7 @@
 }
 .window {
   display: grid;
-  grid-template-columns: minmax(9rem, 1.4fr) repeat(2, minmax(7rem, 1fr)) minmax(10rem, 1.2fr) 44px;
+  grid-template-columns: minmax(9rem, 1.4fr) repeat(2, minmax(7rem, 1fr)) minmax(10rem, 1.2fr) var(--touch-target-min);
   gap: 0.75rem;
   align-items: end;
   padding: 0.9rem 0;
@@ -193,6 +193,21 @@
   font-size: 0.76rem;
   font-weight: 450;
   line-height: 1.5;
+}
+.fieldLabel {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 24px;
+  color: var(--ink);
+}
+.windowGroup input[type="checkbox"] {
+  width: 22px;
+}
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 .checkbox {
   min-height: var(--touch-target-min);
@@ -261,7 +276,7 @@
   color: var(--danger-ink);
 }
 .iconButton {
-  width: 44px;
+  width: var(--touch-target-min);
   border: 1px solid var(--hairline);
   background: transparent;
   color: var(--danger-ink);

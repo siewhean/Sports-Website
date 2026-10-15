@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
+import { NumberField } from "@matchday/ui/react";
 import { Clock, ShieldWarning } from "@phosphor-icons/react";
 import {
   commandErrorMessage,
@@ -127,16 +128,11 @@ export function ScheduleDelayPanel({
       >
         <label>
           <span>{phase4ScheduleCopy.delayMinutes}</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            min={0}
-            max={720}
-            step={1}
-            value={minutes}
+          <NumberField
+            value={minutes === "" ? null : Number(minutes)}
             aria-describedby={`${id}-minutes-hint`}
             aria-invalid={Boolean(error) && error === phase4ScheduleCopy.delayInvalidMinutes}
-            onChange={(event) => setMinutes(event.target.value)}
+            onValueChange={(next) => setMinutes(next === null ? "" : String(next))}
           />
           <small id={`${id}-minutes-hint`}>{phase4ScheduleCopy.delayMinutesHint}</small>
         </label>

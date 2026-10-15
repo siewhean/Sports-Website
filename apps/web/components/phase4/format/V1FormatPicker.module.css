@@ -64,7 +64,7 @@
 }
 
 .blockedIntro > svg {
-  color: var(--warning);
+  color: var(--warning-ink);
 }
 
 .successPanel > svg {
@@ -107,7 +107,7 @@
 .primaryLink {
   border: 1px solid var(--signal-strong);
   background: var(--signal);
-  color: var(--ink);
+  color: var(--signal-ink);
 }
 
 .primaryButton:disabled {
@@ -154,7 +154,7 @@
 .prerequisiteItem[data-ready="true"] .prerequisiteIcon {
   border-color: var(--signal-strong);
   background: var(--signal);
-  color: var(--ink);
+  color: var(--signal-ink);
 }
 
 .prerequisiteItem strong {
@@ -173,7 +173,7 @@
   margin: 0;
   padding: 0.85rem 0;
   border-block: 1px solid var(--danger);
-  color: var(--danger);
+  color: var(--danger-ink);
   font-size: 0.83rem;
   font-weight: 620;
 }

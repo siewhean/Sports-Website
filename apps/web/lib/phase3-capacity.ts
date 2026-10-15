@@ -512,6 +512,7 @@ export function isCapacityMutationBody(value: unknown): value is CapacityMutatio
 }
 
 export const phase3CapacityCopy = {
+  moreAbout: "More about",
   title: "Capacity",
   intro:
     "Set the times each playing area is available. MATCHDAY calculates how many match slots fit, accounting for slot length and any reserved or blocked-out time.",

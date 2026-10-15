@@ -130,7 +130,7 @@
 
 .strategy button[aria-checked="true"] {
   background: var(--schedule-signal);
-  color: var(--ink);
+  color: var(--signal-ink);
 }
 
 .strategy svg,
@@ -212,6 +212,7 @@
 .delayForm button {
   background: var(--schedule-signal);
   border-color: var(--schedule-signal-dark);
+  color: var(--signal-ink);
 }
 
 .options {
@@ -1069,4 +1070,10 @@
   .optionRows article {
     border-color: CanvasText;
   }
+}
+
+/* Planned (placeholder) teams are labels, not names: show them as secondary text. */
+.placeholderTeam {
+  color: var(--ink-muted);
+  font-style: italic;
 }

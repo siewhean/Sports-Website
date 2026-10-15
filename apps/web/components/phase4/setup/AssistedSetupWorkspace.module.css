@@ -90,6 +90,7 @@
 
 .stepRail li[data-current="true"]::before {
   background: var(--signal-strong);
+  color: var(--signal-ink);
 }
 .stepRail button {
   display: grid;
@@ -131,7 +132,7 @@
   font-weight: 650;
 }
 .stepRail small {
-  font-size: 0.68rem;
+  font-size: 0.72rem;
 }
 .milestone > ol > li[data-current="true"] button {
   color: var(--ink);
@@ -139,14 +140,19 @@
 .milestone > ol > li[data-current="true"] button > span:first-child {
   border-color: var(--signal-strong);
   background: var(--signal-strong);
-  color: var(--surface);
+  color: var(--signal-ink);
 }
 .milestone > ol > li[data-complete="true"] button > span:first-child {
   border-color: var(--signal-strong);
   color: var(--success-ink);
 }
 .stepRail button:disabled {
-  opacity: 0.54;
+  /* Steps not reached yet stay readable (AA) rather than fading to an illegible grey. */
+  opacity: 1;
+  color: var(--ink-muted);
+}
+.stepRail button:disabled > span:first-child {
+  border-style: dashed;
 }
 
 .railNote {
@@ -190,6 +196,14 @@
 }
 .heading h1:focus {
   outline: none;
+}
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.titleRow :global(.md-infotip) {
+  align-self: center;
 }
 .heading > div > span {
   display: block;
@@ -256,10 +270,12 @@
 }
 
 .basicsLayout {
+  /* The optional brief sits above the form so fields keep a usable width at every breakpoint. */
   display: grid;
-  grid-template-columns: minmax(250px, 0.78fr) minmax(440px, 1.5fr);
-  gap: clamp(30px, 5vw, 74px);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 32px;
   align-items: start;
+  max-width: 900px;
 }
 .aiBrief {
   display: grid;
@@ -320,8 +336,12 @@
 
 .fieldGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Two columns only when each column has room for real values; long fields span the row. */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
   gap: 24px 20px;
+}
+.fieldWide {
+  grid-column: 1 / -1;
 }
 .field,
 .aiBrief label {
@@ -331,14 +351,20 @@
   font-size: 0.78rem;
   font-weight: 640;
 }
-.field > span,
+.fieldLabel {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 24px;
+  color: var(--ink);
+}
 .aiBrief label > span {
   color: var(--ink);
 }
 .field small,
 .aiBrief label small {
   color: var(--ink-muted);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 450;
   line-height: 1.4;
 }
@@ -350,7 +376,7 @@
   padding: 10px 12px;
   border: 1px solid var(--field-border);
   border-radius: 4px;
-  background: var(--surface);
+  background: var(--field-bg);
   color: var(--ink);
   font: inherit;
   font-size: 0.9rem;
@@ -894,6 +920,13 @@
   }
   .recommendations article {
     border-top: 1px solid var(--hairline);
+  }
+  /* Keep focused fields and the step callout clear of the fixed Back/Continue bar. */
+  :global(html):has(.workspace) {
+    scroll-padding-bottom: calc(104px + env(safe-area-inset-bottom));
+  }
+  .issueSummary {
+    scroll-margin-bottom: calc(104px + env(safe-area-inset-bottom));
   }
   .actions {
     position: fixed;

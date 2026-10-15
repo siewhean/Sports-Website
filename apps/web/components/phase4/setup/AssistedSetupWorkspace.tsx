@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { NumberField } from "@matchday/ui/react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -556,22 +557,20 @@ function BasicsStep({
           />
         </Field>
         <Field id="setup-entry-count" label={t("prototype.338ec01dd683")}>
-          <input
-            type="number"
-            min={2}
-            max={512}
+          <NumberField
             value={value.entry_count}
-            onChange={(event) => patch({ entry_count: Number(event.target.value) })}
+            onValueChange={(next) => {
+              if (next !== null) patch({ entry_count: next });
+            }}
             disabled={disabled}
           />
         </Field>
         <Field id="setup-division-count" label={t("prototype.442a06547692")}>
-          <input
-            type="number"
-            min={1}
-            max={64}
+          <NumberField
             value={value.division_count}
-            onChange={(event) => patch({ division_count: Number(event.target.value) })}
+            onValueChange={(next) => {
+              if (next !== null) patch({ division_count: next });
+            }}
             disabled={disabled}
           />
         </Field>
@@ -713,13 +712,12 @@ function PreferencesStep({
   return (
     <div className={styles.preferences}>
       <Field label={t("prototype.325eaefc3daf")} helper={t("prototype.10b678fb92e3")}>
-        <input
-          type="number"
-          min={1}
-          max={32}
+        <NumberField
           value={value.minimum_matches.per_entry}
           disabled={disabled}
-          onChange={(event) => onChange({ ...value, minimum_matches: { per_entry: Number(event.target.value) } })}
+          onValueChange={(next) => {
+            if (next !== null) onChange({ ...value, minimum_matches: { per_entry: next } });
+          }}
         />
       </Field>
       <fieldset>

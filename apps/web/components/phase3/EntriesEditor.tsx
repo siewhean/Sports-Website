@@ -1,7 +1,8 @@
 "use client";
 
-import { type FocusEvent, type FormEvent, useRef, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { NumberField } from "@matchday/ui/react";
 import {
   isPlaceholderEntry,
   normalisePlannedCount,
@@ -10,7 +11,6 @@ import {
   parsePlannedEntries,
   phase3EntriesCopy,
   phase3EntriesMachine,
-  tidyPlannedCountInput,
   totalActiveEntries,
   validateDivisionInput,
   validateEntryInput,
@@ -34,10 +34,6 @@ function responseMessage(status: number, payload: unknown): string {
   if (status === 422 && upstream?.toLowerCase().includes(phase3EntriesMachine.freePlanMessageFragment))
     return phase3EntriesCopy.freeLimitReached;
   return upstream ?? phase3EntriesCopy.commandFailed;
-}
-
-function tidyPlannedCount(event: FocusEvent<HTMLInputElement>) {
-  event.currentTarget.value = tidyPlannedCountInput(event.currentTarget.value);
 }
 
 export function EntriesEditor({
@@ -321,13 +317,9 @@ export function EntriesEditor({
         </label>
         <label>
           {phase3EntriesCopy.plannedTeams}
-          <input
+          <NumberField
             name={phase3EntriesMachine.plannedCountField}
-            inputMode="numeric"
-            pattern="[0-9]*"
-            autoComplete="off"
             aria-describedby="planned-teams-hint"
-            onBlur={tidyPlannedCount}
             disabled={!canEdit}
           />
           <small id="planned-teams-hint" className={styles.hint}>
@@ -367,7 +359,7 @@ export function EntriesEditor({
                       <li key={entry.id}>
                         <span>{entry.seed ?? "—"}</span>
                         <strong>
-                          {entry.name}
+                          {placeholder ? <span className={styles.placeholderName}>{entry.name}</span> : entry.name}
                           {placeholder ? (
                             <span className={styles.placeholderBadge}>{phase3EntriesCopy.unnamedBadge}</span>
                           ) : null}
@@ -408,14 +400,7 @@ export function EntriesEditor({
               >
                 <label>
                   {phase3EntriesCopy.planMoreCount}
-                  <input
-                    name={phase3EntriesMachine.planCountField}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    autoComplete="off"
-                    onBlur={tidyPlannedCount}
-                    disabled={!canEdit || divisionFull}
-                  />
+                  <NumberField name={phase3EntriesMachine.planCountField} disabled={!canEdit || divisionFull} />
                 </label>
                 <button type="submit" disabled={busy || divisionFull || !canEdit}>
                   {busy ? phase3EntriesCopy.busy : phase3EntriesCopy.planMore}
@@ -428,14 +413,7 @@ export function EntriesEditor({
                 </label>
                 <label>
                   {phase3EntriesCopy.seed}
-                  <input
-                    name={phase3EntriesMachine.entrySeedField}
-                    type="number"
-                    min={1}
-                    max={48}
-                    defaultValue={nextSeed}
-                    disabled={!canEdit}
-                  />
+                  <NumberField name={phase3EntriesMachine.entrySeedField} defaultValue={nextSeed} disabled={!canEdit} />
                 </label>
                 <button type="submit" disabled={busy || divisionFull || !canEdit}>
                   {busy ? phase3EntriesCopy.busy : phase3EntriesCopy.addEntry}

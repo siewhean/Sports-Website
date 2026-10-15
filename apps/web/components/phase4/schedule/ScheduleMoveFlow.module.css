@@ -417,6 +417,7 @@
 .actions button {
   border-color: #759400;
   background: var(--signal);
+  color: var(--signal-ink);
 }
 
 .actions button:disabled {

@@ -53,7 +53,7 @@ export const phase3EntriesCopy = {
     "Create every division, then add entries. You can plan how many teams each division has and name them later. Free competitions allow at most 16 active entries across all divisions, including unnamed teams.",
   eyebrow: "Competition structure",
   divisionName: "Division name",
-  divisionCode: "Division code",
+  divisionCode: "Division code (optional)",
   divisionLimit: "Division entry limit",
   addDivision: "Add division",
   entryName: "Entry name",

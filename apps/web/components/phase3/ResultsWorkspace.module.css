@@ -173,7 +173,7 @@
 .tableScroll:focus-visible,
 .recalculate:focus-visible,
 .explanation summary:focus-visible {
-  outline: 3px solid #b7d338;
+  outline: 3px solid var(--focus);
   outline-offset: var(--focus-ring-offset);
 }
 
@@ -414,7 +414,7 @@
 .operations button:focus-visible,
 .operations select:focus-visible,
 .operations textarea:focus-visible {
-  outline: 3px solid #b7d338;
+  outline: 3px solid var(--focus);
   outline-offset: var(--focus-ring-offset);
 }
 

@@ -212,7 +212,7 @@
   line-height: 1.45;
 }
 
-.p3-field input[type="number"],
+.p3-field input[inputmode="numeric"],
 .p3-field select,
 .p3-decision-rail select {
   width: 100%;
@@ -235,8 +235,8 @@
 .p3-toggle-target {
   display: grid;
   justify-self: end;
-  width: 44px;
-  height: 44px;
+  width: var(--touch-target-min);
+  height: var(--touch-target-min);
   border: 1px solid transparent;
   border-radius: 7px;
   place-items: center;
@@ -259,7 +259,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--danger);
+  color: var(--danger-ink);
   font-size: 0.72rem;
 }
 
@@ -307,8 +307,8 @@
 
 .p3-field--ordered button {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: var(--touch-target-min);
+  height: var(--touch-target-min);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -335,7 +335,7 @@
 
 .p3-command-error {
   flex-basis: 100%;
-  color: var(--danger);
+  color: var(--danger-ink);
   font-size: 0.75rem;
 }
 

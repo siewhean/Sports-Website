@@ -29,7 +29,8 @@ function render(canEdit: boolean, input: EntryEditorDivision[] = divisions) {
 }
 
 function entryItem(html: string, name: string): string {
-  const start = html.indexOf(`<strong>${name}`);
+  // Named entries render the name directly in <strong>; placeholders wrap it in a secondary-styled span.
+  const start = html.indexOf(`>${name}<`);
   expect(start).toBeGreaterThan(-1);
   const end = html.indexOf("</li>", start);
   return html.slice(start, end);
@@ -54,10 +55,20 @@ describe("EntriesEditor planned teams", () => {
     expect(html).toContain(phase3EntriesCopy.plannedTeamsHint);
   });
 
+  it("requires only the division name when creating a division", () => {
+    const html = render(true);
+    const start = html.indexOf('name="division-name"');
+    const form = html.slice(html.lastIndexOf("<form", start), html.indexOf("</form>", start));
+    const required = form.match(/<(input|select)[^>]*required[^>]*>/g) ?? [];
+    expect(required).toHaveLength(1);
+    expect(required[0]).toContain('name="division-name"');
+  });
+
   it("marks placeholder entries as unnamed and offers a rename form", () => {
     const html = render(true);
     const placeholder = entryItem(html, "Open 1");
     expect(placeholder).toContain(phase3EntriesCopy.unnamedBadge);
+    expect(html).toMatch(/<strong><span class="[^"]*">Open 1<\/span>/);
     expect(placeholder).toContain('name="placeholder-name"');
     expect(placeholder).toContain(phase3EntriesCopy.renameSave);
     expect(countOf(html, `>${phase3EntriesCopy.unnamedBadge}<`)).toBe(1);

@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, type ChangeEvent } from "react";
+import { useMemo, useState } from "react";
+import { NumberField } from "@matchday/ui/react";
 import { useRouter } from "next/navigation";
 import {
   ArrowCounterClockwise,
@@ -431,18 +432,15 @@ function SettingField({
     <div className={cx("p3-field")}>
       <label htmlFor={id}>{definition.label}</label>
       {definition.type === "integer" ? (
-        <input
+        <NumberField
           id={id}
-          type="number"
-          min={definition.minimum}
-          max={definition.maximum}
-          value={value === null || value === undefined ? "" : String(value)}
+          value={typeof value === "number" ? value : null}
           disabled={disabled}
           aria-invalid={Boolean(error)}
           aria-describedby={describedBy}
-          onChange={(event: ChangeEvent<HTMLInputElement>) =>
-            onChange(event.target.value === "" && definition.nullable ? null : Number(event.target.value))
-          }
+          onValueChange={(next) => {
+            if (next !== null || definition.nullable) onChange(next);
+          }}
         />
       ) : (
         <select

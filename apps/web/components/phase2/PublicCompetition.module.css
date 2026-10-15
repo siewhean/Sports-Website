@@ -73,6 +73,7 @@
 }
 .liveStatus[data-tone="live"] span {
   background: var(--signal-strong);
+  color: var(--signal-ink);
 }
 .liveStatus[data-tone="warn"] span {
   background: var(--warning);

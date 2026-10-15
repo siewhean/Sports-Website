@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { interpolate } from "@matchday/ui";
 import {
@@ -53,6 +53,20 @@ import { NoSolutionOfficialDiagnostics } from "./NoSolutionOfficialDiagnostics";
 import { ScheduleDelayPanel } from "./ScheduleDelayPanel";
 import styles from "./ScheduleWorkspace.module.css";
 
+/** Names of planned (placeholder) entries, so unnamed teams read as secondary labels. */
+const PlaceholderNamesContext = createContext<ReadonlySet<string>>(new Set());
+
+function TeamName({ label }: { label: string }) {
+  const placeholders = useContext(PlaceholderNamesContext);
+  if (!placeholders.has(label)) return <>{label}</>;
+  return (
+    <span className={styles.placeholderTeam}>
+      {label}
+      <span className="visually-hidden">, {phase4ScheduleCopy.unnamedTeam}</span>
+    </span>
+  );
+}
+
 type ErrorPayload = { error?: { code?: string } };
 
 function errorCode(value: unknown): string | null {
@@ -93,14 +107,17 @@ export function ScheduleWorkspace({
   officials,
   initialSelectedMatchId = null,
   initialNotice = null,
+  placeholderNames = [],
 }: {
   advanced?: boolean;
+  placeholderNames?: readonly string[];
   document: ScheduleDocument;
   officials?: ScheduleOfficialsProjection;
   initialSelectedMatchId?: string | null;
   initialNotice?: typeof phase4ScheduleMachine.moveNotice | null;
 }) {
   const [document, setDocument] = useState(initialDocument);
+  const placeholderSet = useMemo(() => new Set(placeholderNames), [placeholderNames]);
   const hydrated = useSyncExternalStore(
     subscribeToHydration,
     () => true,
@@ -442,167 +459,177 @@ export function ScheduleWorkspace({
   }
 
   return (
-    <div className={styles.workspace} data-testid="phase4-schedule">
-      <h2 ref={statusHeadingRef} className={styles.commandStatus} tabIndex={-1}>
-        {phase4ScheduleCopy.commandStatus}
-      </h2>
-      <p className={styles.live} aria-live="polite" aria-atomic="true">
-        {message || commandError}
-      </p>
+    <PlaceholderNamesContext.Provider value={placeholderSet}>
+      <div className={styles.workspace} data-testid="phase4-schedule">
+        <h2 ref={statusHeadingRef} className={styles.commandStatus} tabIndex={-1}>
+          {phase4ScheduleCopy.commandStatus}
+        </h2>
+        <p className={styles.live} aria-live="polite" aria-atomic="true">
+          {message || commandError}
+        </p>
 
-      {document.state === "read-only" ? (
-        <StatusRail icon={<LockKey />} title={phase4ScheduleCopy.readOnly} body={phase4ScheduleCopy.readOnlyBody} />
-      ) : null}
-      {expired ? (
-        <StatusRail
-          icon={<Clock />}
-          title={phase4ScheduleCopy.expired}
-          body={phase4ScheduleCopy.expiredBody}
-          tone="danger"
-        />
-      ) : null}
-      {document.currentRevisionInputState === phase4ScheduleMachine.staleInputState ? (
-        <StatusRail
-          testId={phase4ScheduleMachine.staleScheduleWarningTestId}
-          icon={<Warning />}
-          title={phase4ScheduleCopy.inputsChanged}
-          body={phase4ScheduleCopy.scheduleInputsChangedGuidance}
-          tone="warning"
-        />
-      ) : null}
-      {document.currentRevisionInputState === phase4ScheduleMachine.unknownInputState ? (
-        <StatusRail
-          testId={phase4ScheduleMachine.unknownScheduleWarningTestId}
-          icon={<Warning />}
-          title={phase4ScheduleCopy.freshnessUnverified}
-          body={phase4ScheduleCopy.scheduleFreshnessUnverifiedGuidance}
-          tone="warning"
-        />
-      ) : null}
-      {document.warnings.map((warning) => (
-        <StatusRail
-          key={`${warning.code}-${warning.message}`}
-          icon={<Warning />}
-          title={warning.code === "expired" ? phase4ScheduleCopy.expired : phase4ScheduleCopy.expiry}
-          body={warning.message}
-          tone={warning.code === "expired" ? "danger" : "warning"}
-        />
-      ))}
-      {commandError ? (
-        <div className={styles.commandError} role="alert">
-          <ShieldWarning aria-hidden="true" />
-          {commandError}
-        </div>
-      ) : null}
-
-      {job?.status === "no_solution" ? (
-        <NoSolutionOfficialDiagnostics
-          competitionId={document.competitionId}
-          matches={document.matches}
-          diagnostics={diagnosticsState.kind === "ready" ? diagnosticsState.diagnostics : null}
-          loading={diagnosticsState.kind === "loading"}
-          error={diagnosticsState.kind === "error"}
-        />
-      ) : null}
-
-      <section className={styles.commandBar} aria-labelledby="strategy-title">
-        <div className={styles.strategy}>
-          <p id="strategy-title">{phase4ScheduleCopy.strategy}</p>
-          <div role="radiogroup" aria-labelledby="strategy-title">
-            {(
-              [
-                phase4ScheduleMachine.fastest,
-                phase4ScheduleMachine.balanced,
-                phase4ScheduleMachine.restFocused,
-              ] as const
-            ).map((value) => (
-              <button
-                key={value}
-                type="button"
-                role="radio"
-                aria-checked={objective === value}
-                disabled={disabled || Boolean(job && activeStatuses.has(job.status))}
-                onClick={() => setObjective(value)}
-              >
-                {value === "fastest" ? <Timer /> : value === "rest_focused" ? <HourglassMedium /> : <ArrowsLeftRight />}
-                {objectiveLabel(value)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <QualityOverview option={currentOption ?? options.find((option) => option.objective === objective) ?? null} />
-        <div className={styles.headerActions}>
-          <Link href={`/organiser/competitions/${document.competitionId}/schedule/compare`}>
-            {phase4ScheduleCopy.compare}
-          </Link>
-          <button
-            type="button"
-            onClick={() => void publish()}
-            disabled={
-              !document.canPublish ||
-              document.currentRevisionInputState !== phase4ScheduleMachine.currentInputState ||
-              disabled
-            }
-          >
-            {busy === phase4ScheduleMachine.publishAction ? phase4ScheduleCopy.publishing : phase4ScheduleCopy.publish}
-          </button>
-        </div>
-      </section>
-
-      {options.length ? (
-        <OptionComparison
-          options={options}
-          currentRevision={document.currentRevision?.revision ?? null}
-          onAccept={acceptOption}
-          disabled={disabled}
-        />
-      ) : null}
-
-      {document.currentRevision && document.state === "ready" ? (
-        <ScheduleDelayPanel
-          revision={document.currentRevision}
-          areas={document.areas}
-          timeZone={document.timeZone}
-          disabled={disabled}
-          onDelayed={(revision, delayedCount) => {
-            setDocument((current) => ({
-              ...withRevision(current, revision),
-              canPublish: current.canEdit && revision.status === "ready_for_review",
-            }));
-            setMessage(phase4ScheduleCopy.delayed(delayedCount));
-            focusStatusHeading();
-          }}
-        />
-      ) : null}
-
-      {document.currentRevision ? (
-        <div className={styles.planner}>
-          <UnscheduledTray document={document} onSelect={setSelectedMatchId} selectedMatchId={selectedMatchId} />
-          <Timeline document={document} selectedMatchId={selectedMatchId} onSelect={setSelectedMatchId} />
-          <MatchInspector
-            document={document}
-            match={selectedMatch}
-            locked={Boolean(selectedLock)}
-            onToggleLock={toggleLock}
-            disabled={disabled || !assignment}
-            officials={officials}
+        {document.state === "read-only" ? (
+          <StatusRail icon={<LockKey />} title={phase4ScheduleCopy.readOnly} body={phase4ScheduleCopy.readOnlyBody} />
+        ) : null}
+        {expired ? (
+          <StatusRail
+            icon={<Clock />}
+            title={phase4ScheduleCopy.expired}
+            body={phase4ScheduleCopy.expiredBody}
+            tone="danger"
           />
-        </div>
-      ) : (
-        <ScheduleEmpty objective={objective} disabled={disabled} busy={busy === "generate"} onGenerate={generate} />
-      )}
+        ) : null}
+        {document.currentRevisionInputState === phase4ScheduleMachine.staleInputState ? (
+          <StatusRail
+            testId={phase4ScheduleMachine.staleScheduleWarningTestId}
+            icon={<Warning />}
+            title={phase4ScheduleCopy.inputsChanged}
+            body={phase4ScheduleCopy.scheduleInputsChangedGuidance}
+            tone="warning"
+          />
+        ) : null}
+        {document.currentRevisionInputState === phase4ScheduleMachine.unknownInputState ? (
+          <StatusRail
+            testId={phase4ScheduleMachine.unknownScheduleWarningTestId}
+            icon={<Warning />}
+            title={phase4ScheduleCopy.freshnessUnverified}
+            body={phase4ScheduleCopy.scheduleFreshnessUnverifiedGuidance}
+            tone="warning"
+          />
+        ) : null}
+        {document.warnings.map((warning) => (
+          <StatusRail
+            key={`${warning.code}-${warning.message}`}
+            icon={<Warning />}
+            title={warning.code === "expired" ? phase4ScheduleCopy.expired : phase4ScheduleCopy.expiry}
+            body={warning.message}
+            tone={warning.code === "expired" ? "danger" : "warning"}
+          />
+        ))}
+        {commandError ? (
+          <div className={styles.commandError} role="alert">
+            <ShieldWarning aria-hidden="true" />
+            {commandError}
+          </div>
+        ) : null}
 
-      <JobRail
-        job={job}
-        disabled={disabled}
-        busy={busy}
-        onGenerate={generate}
-        onContinue={continueOptimising}
-        onCancel={cancelJob}
-        onAccept={acceptOption}
-        objective={objective}
-      />
-    </div>
+        {job?.status === "no_solution" ? (
+          <NoSolutionOfficialDiagnostics
+            competitionId={document.competitionId}
+            matches={document.matches}
+            diagnostics={diagnosticsState.kind === "ready" ? diagnosticsState.diagnostics : null}
+            loading={diagnosticsState.kind === "loading"}
+            error={diagnosticsState.kind === "error"}
+          />
+        ) : null}
+
+        <section className={styles.commandBar} aria-labelledby="strategy-title">
+          <div className={styles.strategy}>
+            <p id="strategy-title">{phase4ScheduleCopy.strategy}</p>
+            <div role="radiogroup" aria-labelledby="strategy-title">
+              {(
+                [
+                  phase4ScheduleMachine.fastest,
+                  phase4ScheduleMachine.balanced,
+                  phase4ScheduleMachine.restFocused,
+                ] as const
+              ).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={objective === value}
+                  disabled={disabled || Boolean(job && activeStatuses.has(job.status))}
+                  onClick={() => setObjective(value)}
+                >
+                  {value === "fastest" ? (
+                    <Timer />
+                  ) : value === "rest_focused" ? (
+                    <HourglassMedium />
+                  ) : (
+                    <ArrowsLeftRight />
+                  )}
+                  {objectiveLabel(value)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <QualityOverview option={currentOption ?? options.find((option) => option.objective === objective) ?? null} />
+          <div className={styles.headerActions}>
+            <Link href={`/organiser/competitions/${document.competitionId}/schedule/compare`}>
+              {phase4ScheduleCopy.compare}
+            </Link>
+            <button
+              type="button"
+              onClick={() => void publish()}
+              disabled={
+                !document.canPublish ||
+                document.currentRevisionInputState !== phase4ScheduleMachine.currentInputState ||
+                disabled
+              }
+            >
+              {busy === phase4ScheduleMachine.publishAction
+                ? phase4ScheduleCopy.publishing
+                : phase4ScheduleCopy.publish}
+            </button>
+          </div>
+        </section>
+
+        {options.length ? (
+          <OptionComparison
+            options={options}
+            currentRevision={document.currentRevision?.revision ?? null}
+            onAccept={acceptOption}
+            disabled={disabled}
+          />
+        ) : null}
+
+        {document.currentRevision && document.state === "ready" ? (
+          <ScheduleDelayPanel
+            revision={document.currentRevision}
+            areas={document.areas}
+            timeZone={document.timeZone}
+            disabled={disabled}
+            onDelayed={(revision, delayedCount) => {
+              setDocument((current) => ({
+                ...withRevision(current, revision),
+                canPublish: current.canEdit && revision.status === "ready_for_review",
+              }));
+              setMessage(phase4ScheduleCopy.delayed(delayedCount));
+              focusStatusHeading();
+            }}
+          />
+        ) : null}
+
+        {document.currentRevision ? (
+          <div className={styles.planner}>
+            <UnscheduledTray document={document} onSelect={setSelectedMatchId} selectedMatchId={selectedMatchId} />
+            <Timeline document={document} selectedMatchId={selectedMatchId} onSelect={setSelectedMatchId} />
+            <MatchInspector
+              document={document}
+              match={selectedMatch}
+              locked={Boolean(selectedLock)}
+              onToggleLock={toggleLock}
+              disabled={disabled || !assignment}
+              officials={officials}
+            />
+          </div>
+        ) : (
+          <ScheduleEmpty objective={objective} disabled={disabled} busy={busy === "generate"} onGenerate={generate} />
+        )}
+
+        <JobRail
+          job={job}
+          disabled={disabled}
+          busy={busy}
+          onGenerate={generate}
+          onContinue={continueOptimising}
+          onCancel={cancelJob}
+          onAccept={acceptOption}
+          objective={objective}
+        />
+      </div>
+    </PlaceholderNamesContext.Provider>
   );
 }
 
@@ -738,7 +765,7 @@ function UnscheduledTray({
                 <span>{match.roundLabel}</span>
                 <strong>{match.code}</strong>
                 <small>
-                  {match.homeLabel} {phase4ScheduleCopy.versus} {match.awayLabel}
+                  <TeamName label={match.homeLabel} /> {phase4ScheduleCopy.versus} <TeamName label={match.awayLabel} />
                 </small>
               </button>
             </li>
@@ -861,7 +888,8 @@ function Timeline({
                           {match.code} · {match.roundLabel}
                         </strong>
                         <small>
-                          {match.homeLabel} {phase4ScheduleCopy.versus} {match.awayLabel}
+                          <TeamName label={match.homeLabel} /> {phase4ScheduleCopy.versus}{" "}
+                          <TeamName label={match.awayLabel} />
                         </small>
                         {conflict || locked ? (
                           <small className={styles.semanticStatus} aria-hidden="true">
@@ -939,9 +967,9 @@ function MatchInspector({
             <div>
               <dt>{phase4ScheduleCopy.teams}</dt>
               <dd>
-                {match.homeLabel}
+                <TeamName label={match.homeLabel} />
                 <br />
-                {match.awayLabel}
+                <TeamName label={match.awayLabel} />
               </dd>
             </div>
             <div>

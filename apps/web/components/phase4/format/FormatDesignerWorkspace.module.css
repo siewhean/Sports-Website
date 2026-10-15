@@ -143,7 +143,7 @@
   background: transparent;
 }
 .iconCommand {
-  width: 44px;
+  width: var(--touch-target-min);
   padding: 0 !important;
   background: #222522;
 }
@@ -364,13 +364,14 @@
 .stageNode[data-selected="true"] .nodePort {
   border-color: var(--signal-strong);
   background: var(--signal);
+  color: var(--signal-ink);
 }
 .zoomControls {
   position: sticky;
   top: calc(100% - 110px);
   left: 16px;
   display: grid;
-  width: 44px;
+  width: var(--touch-target-min);
   margin: 16px;
   border: 1px solid var(--hairline);
   background: var(--surface);
@@ -406,8 +407,8 @@
 .inspector > header button {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: var(--touch-target-min);
+  height: var(--touch-target-min);
   border: 0;
   background: transparent;
   color: #b8bcb8;
@@ -679,8 +680,8 @@
 .dialog header button {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: var(--touch-target-min);
+  height: var(--touch-target-min);
   border: 0;
   background: transparent;
 }

@@ -164,6 +164,7 @@
 .p2-organiser__topbar {
   display: grid;
   grid-template-columns: minmax(150px, 1fr) auto minmax(150px, 1fr);
+  column-gap: 16px;
   align-items: center;
   min-height: 76px;
   padding: 0 clamp(18px, 3vw, 44px);
@@ -196,12 +197,16 @@
 .p2-context {
   display: grid;
   justify-items: center;
+  min-width: 0;
+  max-width: min(46ch, 40vw);
   line-height: 1.25;
+  text-align: center;
 }
 
 .p2-context > span {
   font-size: 0.86rem;
   font-weight: 650;
+  overflow-wrap: anywhere;
 }
 
 .p2-context small,
@@ -425,6 +430,7 @@
   height: 7px;
   border-radius: 50%;
   background: var(--signal-strong);
+  color: var(--signal-ink);
 }
 
 .p2-live-result__meta {
@@ -829,6 +835,7 @@
   height: 100%;
   border-radius: inherit;
   background: var(--signal);
+  color: var(--signal-ink);
 }
 
 .p2-format {
@@ -863,6 +870,7 @@
   margin-bottom: 30px;
   border-radius: 50%;
   background: var(--signal);
+  color: var(--signal-ink);
 }
 
 .p2-stage h2 {
@@ -1125,8 +1133,8 @@
 
 .p5-access-dialog header button {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: var(--touch-target-min);
+  height: var(--touch-target-min);
   place-items: center;
   border: 0;
   background: transparent;
@@ -2310,6 +2318,7 @@ body:has(.p2-score-receipt) {
   height: 7px;
   border-radius: 50%;
   background: var(--signal-strong);
+  color: var(--signal-ink);
 }
 
 .p2-public__nav {
@@ -2389,6 +2398,7 @@ body:has(.p2-score-receipt) {
   height: 8px;
   border-radius: 50%;
   background: var(--signal);
+  color: var(--signal-ink);
 }
 
 .p2-public-score > header > strong {
@@ -4336,4 +4346,98 @@ svg {
   .consent-reopen {
     border: 1px solid CanvasText;
   }
+}
+
+/*
+ * InfoTip (@matchday/ui/react). A 48px hit area around an 18px (i) glyph that
+ * discloses a secondary explanation. The negative block margin keeps label rows
+ * compact while the tap target stays at --touch-target-min.
+ */
+.md-infotip {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  vertical-align: middle;
+  font-size: 0.85rem;
+  font-weight: 450;
+  letter-spacing: normal;
+  line-height: 1.45;
+  text-transform: none;
+}
+
+.md-infotip__button {
+  display: inline-grid;
+  place-items: center;
+  width: var(--touch-target-min);
+  height: var(--touch-target-min);
+  margin: -12px -12px -12px -10px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.md-infotip__button:hover,
+.md-infotip[data-open] .md-infotip__button {
+  color: var(--ink);
+}
+
+.md-infotip__button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: -9px;
+}
+
+.md-infotip__panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: -8px;
+  width: max-content;
+  max-width: min(20rem, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: 0 14px 36px rgb(0 0 0 / 18%);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  font-weight: 450;
+  line-height: 1.45;
+  text-align: start;
+  white-space: normal;
+  transform: translateX(var(--infotip-shift, 0px));
+}
+
+.md-infotip__panel[hidden] {
+  display: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .md-infotip[data-open] .md-infotip__panel {
+    animation: md-infotip-in 140ms var(--ease-out);
+  }
+}
+
+@keyframes md-infotip-in {
+  from {
+    opacity: 0;
+    transform: translate(var(--infotip-shift, 0px), -4px);
+  }
+}
+
+@media (forced-colors: active) {
+  .md-infotip__panel {
+    border: 1px solid CanvasText;
+  }
+}
+
+/* Label followed by an InfoTip, for forms without their own label row. */
+.md-label-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
 }

@@ -86,7 +86,7 @@
 }
 
 .cardButton:focus-visible {
-  outline: var(--focus-ring-width) solid #2563eb;
+  outline: var(--focus-ring-width) solid var(--focus);
   outline-offset: var(--focus-ring-offset);
 }
 
@@ -366,7 +366,7 @@
 }
 
 .input:focus {
-  outline: var(--focus-ring-width) solid #2563eb;
+  outline: var(--focus-ring-width) solid var(--focus);
   border-color: #2563eb;
 }
 
@@ -613,7 +613,7 @@
 }
 
 .select:focus {
-  outline: var(--focus-ring-width) solid #2563eb;
+  outline: var(--focus-ring-width) solid var(--focus);
   border-color: #2563eb;
 }
 
