@@ -143,17 +143,17 @@ Event-day control room meets modern sports editorial: calm graphite and warm neu
 
 ### 5.2 Production platform work completed since September
 
-| Area            | Done                                                                                                                                                           |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Readiness fixes | Week-1 (PR #71) and week-2 (PR #72) hardening from the full audit, including the redesign                                                                      |
-| Hosting         | Render removed; OCI US West VM with blue/green deploys; Vercel production branch `main`, region `sfo1`; arm64 image builds (PR #82, #83)                       |
-| Infrastructure  | Boot volume grown to 100 GB; legacy C5 services removed; Caddy 2.11 pinned with drift guard (PR #93)                                                           |
-| Backups         | Nightly encrypted backup to OCI Object Storage; restore drill passes; quarterly drill scheduled (PR #88)                                                       |
-| Email           | Resend domain verified; reply-to support (PR #92); delivery confirmed to inbox                                                                                 |
-| Error tracking  | Sentry web and API projects live                                                                                                                               |
-| Payments        | Stripe test-mode account with webhook events configured                                                                                                        |
-| Dependencies    | Dependabot batch merged (PR #88); major Node updates ignored by policy                                                                                         |
-| Production      | `https://matchday.poladex.shop/api/v1/meta/build` reported `git_sha` `8f38feb0` (built 11 Oct 2026) on 15 Oct 2026; #103, #111, #112 and #116 not yet deployed |
+| Area            | Done                                                                                                                                                                                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Readiness fixes | Week-1 (PR #71) and week-2 (PR #72) hardening from the full audit, including the redesign                                                                                                                                                                         |
+| Hosting         | Render removed; OCI US West VM with blue/green deploys; Vercel production branch `main`, region `sfo1`; arm64 image builds (PR #82, #83)                                                                                                                          |
+| Infrastructure  | Boot volume grown to 100 GB; legacy C5 services removed; Caddy 2.11 pinned with drift guard (PR #93)                                                                                                                                                              |
+| Backups         | Nightly encrypted backup to OCI Object Storage; restore drill passes; quarterly drill scheduled (PR #88)                                                                                                                                                          |
+| Email           | Resend domain verified; reply-to support (PR #92); delivery confirmed to inbox                                                                                                                                                                                    |
+| Error tracking  | Sentry web and API projects live                                                                                                                                                                                                                                  |
+| Payments        | Stripe test-mode account with webhook events configured                                                                                                                                                                                                           |
+| Dependencies    | Dependabot batch merged (PR #88); major Node updates ignored by policy                                                                                                                                                                                            |
+| Production      | `cbcefa91` live: `https://matchday.poladex.shop/api/v1/meta/build` reported `git_sha` `cbcefa91a3c07be27b3e1eb6b0180e6b901f9f75` (built 15 Oct 2026 05:48 UTC), which includes #103, #111 (`cf751896`), #112 (`6a0220eb`), #116 and #118; migrations through 0074 |
 
 ### 5.3 Mock-tournament simulation (11 October 2026)
 
@@ -210,7 +210,7 @@ The platform is production ready when all of the following hold for one exact Gi
 
 | Track | Goal                                           | Depends on   | Target window       | Checkpoint         | Status (15 Oct, late)                                                     |
 | ----- | ---------------------------------------------- | ------------ | ------------------- | ------------------ | ------------------------------------------------------------------------- |
-| R1    | Correctness baseline and repeatable simulation | —            | 12–19 Oct 2026      | CP1                | Done except CP1 box 4 (3 of 4)                                            |
+| R1    | Correctness baseline and repeatable simulation | —            | 12–19 Oct 2026      | CP1                | Done — CP1 4 of 4 (box 4 via #117)                                        |
 | R2    | Competition-day robustness                     | R1           | 19 Oct – 2 Nov 2026 | CP2                | Merged — #103 (+ IDOR fix #116); CP2 2 of 5 (boxes 1, 2, 5 partial)       |
 | R3    | Scheduler speed and quality                    | R1           | 12 Oct – 9 Nov 2026 | CP3                | Merged — #99, #100, #102; CP3 3 of 4 (box 4 partial)                      |
 | R4    | AI: real provider or honest removal            | R3           | 2–23 Nov 2026       | CP4                | Merged — #111; CP4 complete (3 of 3, AI box N/A)                          |
@@ -223,7 +223,7 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 
 **Next actions (15 Oct 2026)**
 
-1. Deploy current `main` to production (another operator is deploying; production served `8f38feb0`, which predates #103, when this was written — see §5.2).
+1. Production runs `cbcefa91` (deployed 15 Oct 2026; see §5.2). Deploy again after #115 only if runtime code changes (it is docs plus legal copy).
 2. Close the CP2 gaps: assert in scenario 7 that undisplaced matches keep their times (or make the API re-plan use the minimal-change mode that the benchmark proves); assert the public version token changes after a delay; add Mailpit delivery for the schedule-published email and a production test-competition run (R2.7).
 3. CP3 box 4: add official-overlap and court/team overlap checks to every simulation scenario.
 4. Finish #113 (R6) and merge #115 (R7 runbooks; the break-glass drill, live purchase, MFA and repository privacy remain owner actions).
@@ -250,7 +250,7 @@ Target windows are planning estimates. A checkpoint moves only when its evidence
 - [x] PRs #97, #98, #99 merged; `main` green on all required checks. Evidence: https://github.com/siewhean/Sports-Website/pull/97, https://github.com/siewhean/Sports-Website/pull/98, https://github.com/siewhean/Sports-Website/pull/99 (merged 12 Oct 2026); latest `main` CI run https://github.com/siewhean/Sports-Website/actions/runs/38268394882 succeeded (all jobs green; visual-baselines skipped by design).
 - [x] `pnpm simulate:tournament` completes all nine scenarios locally and in CI with zero 5xx responses. Evidence: local 14 Oct 2026 fast 2,991 req / 66 s and full 7,216 req / 87 s, 0 5xx; CI PR run https://github.com/siewhean/Sports-Website/actions/runs/38557380027 (fast), dispatch https://github.com/siewhean/Sports-Website/actions/runs/38556014556 (full).
 - [x] Groups → knockout → final advancement verified for championship-focus, full-placement and compact-knockout templates in all five sports (scenario 1, full profile: every match final in `/current`, bracket resolved). Evidence: dispatch run https://github.com/siewhean/Sports-Website/actions/runs/38556014556. The `championEntryId: null` bracket defect found here was fixed by PR #109 (merged 14 Oct 2026; `main` CI https://github.com/siewhean/Sports-Website/actions/runs/38572843275).
-- [ ] A fresh clone boots against a fresh database using only `.env.example` values. Partial: CI copies `.env.example` to `.env`, migrates a fresh DB and runs `parseConfig` (APP_ENV=local) on it; an actual API process boot is not yet exercised.
+- [x] A fresh clone boots against a fresh database using only `.env.example` values. Evidence: https://github.com/siewhean/Sports-Website/pull/117 (merged 15 Oct 2026, `ce5d08a7`); CI step "Fresh boot check (API + web from .env.example only)" boots the real API and web on a freshly migrated DB (health/ready 200, public API 200, web `/` 200): https://github.com/siewhean/Sports-Website/actions/runs/38681028139/job/116247608893.
 
 ---
 
