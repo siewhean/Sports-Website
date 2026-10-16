@@ -30,9 +30,12 @@ test("settings header reports document truth and scope links expose the current 
   await page.goto("/organiser/competitions/singapore-open/settings");
   await dismissConsent(page);
   await expect(page.getByRole("heading", { level: 1, name: "Competition settings" })).toBeVisible();
-  await expect(
-    page.getByText("Set the versioned competition baseline, then review any division-specific overrides."),
-  ).toBeVisible();
+  // The page description lives behind the heading's (i) (D13).
+  const intro = page.getByText("Set the versioned competition baseline, then review any division-specific overrides.");
+  await expect(intro).toBeHidden();
+  await page.getByRole("button", { name: "More about competition settings" }).click();
+  await expect(intro).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(page.getByText("Saved revision 4")).toBeVisible();
   await expect(page.getByText("Draft synced 18 seconds ago")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Competition", exact: true })).toHaveAttribute("aria-current", "page");

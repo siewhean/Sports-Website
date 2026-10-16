@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { opaqueId, translate as t } from "@matchday/ui";
+import { messages, opaqueId, translate as t } from "@matchday/ui";
+import { InfoTip } from "@matchday/ui/react";
 import {
   ArrowRight,
   CalendarDots,
@@ -160,8 +161,15 @@ export function OrganiserWorkspace({
             <header className="p2-page-heading">
               <div>
                 <p className="p2-eyebrow">{pageEyebrow ?? competition.division.name}</p>
-                <h1>{meta.title}</h1>
-                <p>{meta.intro}</p>
+                {/* D13: the page description sits behind an (i) so the heading stays one line. */}
+                <div className="md-label-row md-label-row--heading">
+                  <h1>{meta.title}</h1>
+                  {meta.intro ? (
+                    <InfoTip label={`${messages.organiser.moreAbout} ${meta.title.toLowerCase()}`}>
+                      {meta.intro}
+                    </InfoTip>
+                  ) : null}
+                </div>
               </div>
               {sectionAction !== undefined ? (
                 sectionAction

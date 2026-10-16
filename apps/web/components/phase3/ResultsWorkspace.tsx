@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { messages } from "@matchday/ui";
+import { InfoTip } from "@matchday/ui/react";
 import {
   ArrowClockwise,
   ArrowsDownUp,
@@ -177,8 +179,12 @@ export function ResultsWorkspace({
             <p>
               {sportName} · {document.divisionName}
             </p>
-            <h2>{phase3ResultsCopy.calculatedTables}</h2>
-            <span>{phase3ResultsCopy.calculatedTablesBody}</span>
+            <div className="md-label-row md-label-row--heading">
+              <h2>{phase3ResultsCopy.calculatedTables}</h2>
+              <InfoTip label={`${messages.organiser.moreAbout} ${phase3ResultsCopy.calculatedTables.toLowerCase()}`}>
+                {phase3ResultsCopy.calculatedTablesBody}
+              </InfoTip>
+            </div>
           </div>
           <button
             className={styles.recalculate}
@@ -350,7 +356,12 @@ export function ResultsWorkspace({
           <CheckCircle weight="fill" aria-hidden="true" />
           <span>{phase3ResultsCopy.sourceOwned}</span>
         </div>
-        <h2>{phase3ResultsCopy.evidence}</h2>
+        <div className="md-label-row md-label-row--heading">
+          <h2>{phase3ResultsCopy.evidence}</h2>
+          <InfoTip label={`${messages.organiser.moreAbout} ${phase3ResultsCopy.evidence.toLowerCase()}`}>
+            {phase3ResultsCopy.evidenceBody}
+          </InfoTip>
+        </div>
         <dl>
           <div>
             <dt>{phase3ResultsCopy.resultVersion}</dt>
@@ -377,7 +388,6 @@ export function ResultsWorkspace({
             <dd>{formatResultsTimestamp(snapshot.createdAt)}</dd>
           </div>
         </dl>
-        <p className={styles.evidenceNote}>{phase3ResultsCopy.evidenceBody}</p>
       </aside>
     </div>
   );

@@ -431,8 +431,12 @@ function BasicsStep({
       <section className={styles.aiBrief} aria-labelledby="brief-title">
         <MagicWand aria-hidden="true" />
         <div>
-          <h2 id="brief-title">{t("prototype.456041ec5dc4")}</h2>
-          <p>{t("prototype.629dbc233357")}</p>
+          <div className="md-label-row md-label-row--heading">
+            <h2 id="brief-title">{t("prototype.456041ec5dc4")}</h2>
+            <InfoTip label={`${copy.moreAbout} ${t("prototype.900b492a66b7").toLowerCase()}`}>
+              {t("prototype.629dbc233357")} {t("prototype.ec2e24035d4e")}
+            </InfoTip>
+          </div>
           <label>
             <span>{t("prototype.900b492a66b7")}</span>
             <textarea
@@ -441,7 +445,6 @@ function BasicsStep({
               disabled={disabled}
               rows={4}
             />
-            <small>{t("prototype.ec2e24035d4e")}</small>
           </label>
           <button type="button" onClick={onConvert} disabled={disabled || !brief.trim()}>
             <Sparkle aria-hidden="true" /> {t("prototype.cc5c27199110")}

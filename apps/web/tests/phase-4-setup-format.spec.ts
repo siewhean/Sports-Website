@@ -29,7 +29,7 @@ test("assisted setup renders authoritative capacity and preserves text on AI fal
     });
   });
   await page.goto("/organiser/competitions/singapore-open/setup?step=basics");
-  const brief = page.getByLabel("Competition brief");
+  const brief = page.getByRole("textbox", { name: "Competition brief", exact: true });
   await brief.fill("Sixteen canoe polo teams over two days at OCBC Aquatic Centre.");
   await page.getByRole("button", { name: "Convert to fields" }).click();
   await expect(brief).toHaveValue("Sixteen canoe polo teams over two days at OCBC Aquatic Centre.");

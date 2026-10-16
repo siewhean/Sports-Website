@@ -15,15 +15,15 @@ const competitionId = "4dc85811-e715-40f4-8609-2523f7516e5a";
 
 async function fillCompetition(page: Page) {
   await page.getByLabel("Competition name").fill("National Open");
-  await expect(page.getByLabel("Public address")).toHaveValue("national-open");
+  await expect(page.getByLabel("Public address", { exact: true })).toHaveValue("national-open");
   await page.getByLabel("Sport").selectOption("badminton");
   await page.getByRole("button", { name: "Continue" }).click();
-  await page.getByLabel("Venue name").fill("National Hall");
+  await page.getByLabel("Venue name", { exact: true }).fill("National Hall");
   await page.getByLabel("Address", { exact: true }).fill("1 Arena Road");
   await page.getByLabel("City or locality (optional)").fill("Singapore");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByLabel("Start date").fill("2027-05-01");
-  await page.getByLabel("End date").fill("2027-05-02");
+  await page.getByLabel("End date", { exact: true }).fill("2027-05-02");
 }
 
 test.beforeEach(async ({ page }) => installConsoleGuard(page));
@@ -346,7 +346,7 @@ test("step changes settle heading focus before the next field accepts immediate 
   });
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Venue", exact: true })).toBeVisible();
-  const venue = page.getByLabel("Venue name");
+  const venue = page.getByLabel("Venue name", { exact: true });
   await venue.focus();
   const focusState = await page.evaluate(() => Reflect.get(window, "flushDeferredFocus")());
   await testInfo.attach("step-focus-interleaving", {

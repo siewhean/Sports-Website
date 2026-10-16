@@ -69,7 +69,7 @@ export const messages = {
     journeys: "Choose what to do",
     theme: "Appearance",
     themeNext: "Next option",
-    themes: { system: "System", light: "Light", dark: "Dark" },
+    themes: { system: "Same as device", light: "Light", dark: "Dark" },
     setup: "Create competition",
     signIn: "Sign in",
     menu: "Primary navigation",
@@ -131,6 +131,8 @@ export const messages = {
     title: "Competition Control Room",
     subtitle: "Your entire event. One workspace.",
     navLabel: "Organiser workspace",
+    /** Prefix for an InfoTip button label: "More about <heading or field>". */
+    moreAbout: "More about",
     sections: ["Overview", "Entries", "Format", "Schedule", "Operations", "Publish"],
     liveStatus: "Workspace ready",
     summaryTitle: "Start with the competition, not the spreadsheet.",

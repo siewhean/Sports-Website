@@ -162,24 +162,24 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
 
   // Step 0: Name, Public address, Sport
   await page.getByLabel("Competition name").fill("Phase 4 Browser Verified Cup");
-  await page.getByLabel("Public address").fill(slug);
+  await page.getByLabel("Public address", { exact: true }).fill(slug);
   await page.getByLabel("Sport", { exact: true }).selectOption("canoe_polo");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Venue", exact: true })).toBeVisible();
 
   // Step 1: Venue, Address, Locality, Country
-  await page.getByLabel("Venue name").fill("Real E2E Arena");
+  await page.getByLabel("Venue name", { exact: true }).fill("Real E2E Arena");
   await page.getByLabel("Address", { exact: true }).fill("4 Integration Road");
   await page.getByLabel("City or locality (optional)").fill("Singapore");
-  await page.getByLabel("Country code").fill("SG");
+  await page.getByLabel("Country code", { exact: true }).fill("SG");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Dates and time" })).toBeVisible();
 
   // Step 2: Dates, Timezone, Locale + submit
   await page.getByLabel("Start date").fill("2027-08-01");
-  await page.getByLabel("End date").fill("2027-08-02");
-  await page.getByLabel("Time zone").fill("Asia/Singapore");
-  await page.getByLabel("Locale").fill("en-SG");
+  await page.getByLabel("End date", { exact: true }).fill("2027-08-02");
+  await page.getByLabel("Time zone", { exact: true }).fill("Asia/Singapore");
+  await page.getByLabel("Locale", { exact: true }).fill("en-SG");
   const creationResponse = await submitAndWait(
     page,
     page.getByRole("button", { name: "Create competition" }),
