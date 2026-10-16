@@ -134,7 +134,7 @@
 }
 
 .slotSummary > div:last-child strong {
-  color: var(--success-ink);
+  color: var(--signal-text);
 }
 
 .boundary,
@@ -154,7 +154,7 @@
 
 .boundary,
 .error {
-  border-color: #bc8d82;
+  border-color: var(--danger-line);
   color: var(--danger-ink);
 }
 
@@ -206,8 +206,8 @@
   height: 2.7rem;
   place-items: center;
   border-radius: 50%;
-  background: #89ad00;
-  color: var(--ink);
+  background: var(--signal-bright);
+  color: var(--signal-bright-ink);
   font:
     700 1rem/1 var(--font-geist-mono),
     monospace;
@@ -256,7 +256,7 @@
 
 .dayChoices label:has(input:checked),
 .choices label:has(input:checked) {
-  box-shadow: inset 3px 0 #83a700;
+  box-shadow: inset 3px 0 var(--signal);
 }
 
 .dayChoices input,
@@ -355,11 +355,11 @@
 }
 
 .consequences .valid {
-  border: 1px solid #a8bf42;
+  border: 1px solid var(--signal-line);
   border-radius: 0.45rem;
-  background: var(--success-surface);
+  background: var(--signal-surface);
   padding-inline: 0.8rem;
-  color: var(--success-ink);
+  color: var(--ink);
 }
 
 .validating {
@@ -375,7 +375,7 @@
   width: 2.5rem;
   height: 0.35rem;
   border-radius: 1rem;
-  background: linear-gradient(90deg, var(--surface-subtle) 20%, #89ad00 50%, var(--surface-subtle) 80%);
+  background: linear-gradient(90deg, var(--surface-subtle) 20%, var(--signal) 50%, var(--surface-subtle) 80%);
   background-size: 200% 100%;
   animation: move-check 1.1s ease-in-out infinite;
 }
@@ -415,7 +415,7 @@
 }
 
 .actions button {
-  border-color: #759400;
+  border-color: var(--signal-strong);
   background: var(--signal);
   color: var(--signal-ink);
 }

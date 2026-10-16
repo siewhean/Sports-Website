@@ -207,7 +207,7 @@
 }
 
 .row[data-status="completed"] .status > span {
-  background: var(--success);
+  background: var(--ink-muted);
 }
 
 .destination {

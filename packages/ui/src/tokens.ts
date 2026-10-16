@@ -1,24 +1,69 @@
+/**
+ * The only colour literals in MATCHDAY (owner decision D12), mirrored from the --palette-* tokens in
+ * apps/web/app/globals.css and scripts/palette/approved-palette.json: black/white base plus four accents,
+ * lime = actions, red = errors/urgent, blue = info/live, amber = warnings.
+ */
+export const palette = {
+  black: "#111513",
+  white: "#ffffff",
+  lime: "#b7dc22",
+  red: "#d4443c",
+  blue: "#4f6fd6",
+  amber: "#e9a410",
+} as const;
+
+export type PaletteColour = keyof typeof palette;
+
+/**
+ * Hex equivalent of CSS `color-mix(in srgb, a weight%, b)` for contexts that cannot read CSS tokens (Open Graph
+ * images, the web manifest, theme-color meta). `weight` is 0..100, the share of `a`.
+ */
+export function mixPalette(a: PaletteColour, weight: number, b: PaletteColour): string {
+  const channels = (hex: string) => [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
+  const share = Math.min(100, Math.max(0, weight)) / 100;
+  const from = channels(palette[a]);
+  const to = channels(palette[b]);
+  return `#${from
+    .map((channel, index) =>
+      Math.round(channel * share + (to[index] ?? 0) * (1 - share))
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+/** Resolved values of the main theme tokens; apps/web/tests/unit/token-contrast.test.ts keeps them equal to the CSS. */
 export const designTokens = {
   color: {
-    canvas: "#f7f6f0",
-    surface: "#ffffff",
-    surfaceSubtle: "#efeee8",
-    ink: "#171918",
-    muted: "#646863",
-    hairline: "#d3d4ce",
-    signal: "#b7dc22",
-    focus: "#5876d8",
-    danger: "#c74a43",
+    canvas: mixPalette("black", 3, "white"),
+    surface: palette.white,
+    surfaceSubtle: mixPalette("black", 6, "white"),
+    ink: palette.black,
+    muted: mixPalette("black", 72, "white"),
+    hairline: mixPalette("black", 16, "white"),
+    signal: mixPalette("lime", 45, "black"),
+    focus: mixPalette("blue", 85, "black"),
+    danger: mixPalette("red", 82, "black"),
+    warning: palette.amber,
+    info: mixPalette("blue", 85, "black"),
   },
   darkColor: {
-    canvas: "#111513",
-    surface: "#1b211e",
-    surfaceSubtle: "#242b26",
-    ink: "#f0f3ed",
-    muted: "#bbc5ba",
-    hairline: "#4b594e",
-    signal: "#b7dc22",
-    focus: "#9db2ff",
+    canvas: palette.black,
+    surface: mixPalette("white", 6, "black"),
+    surfaceSubtle: mixPalette("white", 10, "black"),
+    ink: mixPalette("white", 94, "black"),
+    muted: mixPalette("white", 72, "black"),
+    hairline: mixPalette("white", 22, "black"),
+    signal: palette.lime,
+    focus: palette.lime,
+    danger: mixPalette("red", 60, "white"),
+    warning: palette.amber,
+    info: mixPalette("blue", 55, "white"),
+  },
+  /** Browser chrome colour (theme-color meta, manifest) per theme: the page canvas. */
+  themeColor: {
+    dark: palette.black,
+    light: mixPalette("black", 3, "white"),
   },
   layout: {
     contentMax: 1280,

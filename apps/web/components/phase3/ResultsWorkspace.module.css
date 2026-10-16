@@ -56,7 +56,7 @@
 .stale,
 .commandError {
   color: var(--danger-ink);
-  border-color: #bc8f82;
+  border-color: var(--danger-line);
 }
 
 .commandError {
@@ -109,9 +109,9 @@
   min-height: var(--touch-target-min);
   border: 1px solid var(--line-strong);
   border-radius: 0.45rem;
-  background: #20211f;
+  background: var(--inverse-surface);
   padding: 0.65rem 1rem;
-  color: #fffef9;
+  color: var(--inverse-ink);
   font:
     650 0.82rem/1.1 var(--font-geist-sans),
     sans-serif;
@@ -244,7 +244,7 @@
   font-family: var(--font-geist-sans), sans-serif;
   font-weight: 650;
   text-decoration: underline;
-  text-decoration-color: #a9bd43;
+  text-decoration-color: var(--signal);
   text-underline-offset: 4px;
 }
 
@@ -332,7 +332,7 @@
 .decisionColumns li svg {
   flex: 0 0 1.15rem;
   margin-top: 0.05rem;
-  color: var(--success-ink);
+  color: var(--signal-text);
 }
 
 .decisionColumns li span,
@@ -349,7 +349,7 @@
 }
 
 .hasConflict {
-  border-top-color: #8b3025 !important;
+  border-top-color: var(--danger) !important;
 }
 
 .hasConflict li svg {
@@ -425,8 +425,8 @@
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
-  background: #20211f;
-  color: #fffef9;
+  background: var(--inverse-surface);
+  color: var(--inverse-ink);
 }
 
 .matchPicker {
@@ -449,7 +449,7 @@
   width: 100%;
   min-height: var(--touch-target-min);
   box-sizing: border-box;
-  border: 1px solid #85877f;
+  border: 1px solid var(--field-border);
   border-radius: 0.35rem;
   background: var(--field-bg);
   padding: 0.65rem 0.75rem;
@@ -562,7 +562,7 @@
 
 .conflictLoadError {
   padding: 0.9rem 0;
-  border-top: 1px solid #bc8f82;
+  border-top: 1px solid var(--danger-line);
 }
 
 .conflictLoadError p {
@@ -596,7 +596,7 @@
   gap: 0.85rem;
   margin: 0;
   padding: 1rem;
-  border: 1px solid #bc8f82;
+  border: 1px solid var(--danger-line);
   border-radius: 0.75rem;
 }
 
@@ -636,7 +636,7 @@
   gap: 0.8rem;
   align-items: start;
   padding: 1rem 0;
-  border-top: 1px solid #bc8f82;
+  border-top: 1px solid var(--danger-line);
 }
 
 .criticalConflicts li > svg {
@@ -658,7 +658,7 @@
 }
 
 .operationDialog::backdrop {
-  background: rgb(23 24 22 / 58%);
+  background: var(--scrim);
 }
 
 .operationDialog form {
@@ -711,7 +711,7 @@
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  color: var(--success-ink);
+  color: var(--signal-text);
   font-size: 0.76rem;
   font-weight: 700;
 }
@@ -831,7 +831,7 @@
 
 @media (hover: hover) and (pointer: fine) {
   .recalculate:hover:not(:disabled) {
-    background: #363832;
+    background: color-mix(in srgb, var(--inverse-surface) 85%, var(--inverse-ink));
   }
 }
 

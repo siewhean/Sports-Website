@@ -156,6 +156,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // .github/workflows/dependency-audit.yml workflow instead of blocking every push.
       runCommand("3  Format check", "pnpm format:check");
       runCommand("4  Lint", "pnpm lint");
+      // Redesign Phase 1 (D12): only the six approved colour literals; the self-test proves a fifth colour fails.
+      runCommand("4b Palette lint", "pnpm check:palette && pnpm test:check:palette", { expectTests: true });
       runCommand("5  Type-check", "pnpm typecheck");
       runCommand("6  Unit tests (all packages)", "pnpm test:unit", { expectTests: true });
       runCommand("7  Gate C evidence seals", "pnpm test:seal:gate-c && pnpm test:evidence:gate-c", {

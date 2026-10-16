@@ -63,7 +63,7 @@
 .dangerButton {
   border-color: var(--danger);
   background: var(--danger);
-  color: #fff;
+  color: var(--danger-on-fill);
 }
 .dangerButton:disabled {
   opacity: 0.5;
@@ -85,7 +85,7 @@
   color: var(--ink);
 }
 .dialog::backdrop {
-  background: rgb(0 0 0 / 55%);
+  background: var(--scrim);
 }
 .dialogBody {
   display: grid;

@@ -22,7 +22,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { hueChroma, parseHex } from "./palette/colour.mjs";
-import { extractRules, customProperties, resolveThemes, DARK_SELECTOR_PREFIX } from "./palette/tokens.mjs";
+import { extractRules, customProperties, resolveThemes, tokenBlocks, DARK_SELECTOR_PREFIX } from "./palette/tokens.mjs";
 
 const TOKEN_CSS = "apps/web/app/globals.css";
 const TOKEN_FILES = new Set(["packages/ui/src/tokens.ts"]);
@@ -118,6 +118,7 @@ function namedColoursIn(value, allowSystemColours) {
     .replace(/var\([^)]*\)/gi, " ")
     .replace(/--[\w-]+/g, " ")
     .replace(/url\([^)]*\)/gi, " ")
+    .replace(/\$\{[^}]*\}/g, " ")
     .toLowerCase();
   return (cleaned.match(/[a-z]+/g) ?? []).filter(
     (word) => NAMED_COLOURS.has(word) || (!allowSystemColours && SYSTEM_COLOURS.has(word)),
@@ -280,6 +281,51 @@ export function checkPalette({ root }) {
   const files = [];
   for (const scanRoot of SCAN_ROOTS) walk(root, scanRoot, files);
 
+  // WebKit (Safari 26 / Playwright WebKit 26.5) crashes the page when a color-mix() has two operands that are
+  // themselves color-mix() values, on content inserted after load. Token mixes only use --palette-* operands, so
+  // outside the token block a color-mix may use at most one token that resolves to a color-mix in either theme.
+  const tokenSource = existsSync(path.join(root, TOKEN_CSS)) ? readFileSync(path.join(root, TOKEN_CSS), "utf8") : "";
+  const blocks = tokenBlocks(tokenSource);
+  const themeMaps = [blocks.light, new Map([...blocks.light, ...blocks.dark])];
+  const isMixToken = (map, name, seen = new Set()) => {
+    const value = map.get(name);
+    if (!value || seen.has(name)) return false;
+    if (/^color-mix\(/i.test(value)) return true;
+    const alias = /^var\((--[a-z0-9-]+)\)$/i.exec(value);
+    return alias ? isMixToken(map, alias[1], new Set(seen).add(name)) : false;
+  };
+  const tokenRuleRanges = extractRules(tokenSource)
+    .filter(
+      (rule) =>
+        (rule.media === null && (rule.selector === ":root" || rule.selector.startsWith(DARK_SELECTOR_PREFIX))) ||
+        (rule.media && /prefers-color-scheme:\s*dark/.test(rule.media) && rule.selector.startsWith(":root:not(")),
+    )
+    .map((rule) => [rule.start, rule.start + rule.body.length]);
+  const nestedMixes = (text, file) => {
+    const found = [];
+    for (const match of text.matchAll(/color-mix\(/gi)) {
+      if (file === TOKEN_CSS && tokenRuleRanges.some(([start, end]) => match.index >= start && match.index < end)) {
+        continue;
+      }
+      let depth = 0;
+      let cursor = match.index + "color-mix".length;
+      do {
+        if (text[cursor] === "(") depth += 1;
+        else if (text[cursor] === ")") depth -= 1;
+        cursor += 1;
+      } while (depth > 0 && cursor < text.length);
+      const expression = text.slice(match.index, cursor);
+      const inner = expression.slice("color-mix(".length);
+      const literalMixes = (inner.match(/color-mix\(/gi) ?? []).length;
+      const operands = [...inner.matchAll(/var\((--[a-z0-9-]+)/gi)].map((operand) => operand[1]);
+      const worst = Math.max(
+        ...themeMaps.map((map) => literalMixes + operands.filter((name) => isMixToken(map, name)).length),
+      );
+      if (worst >= 2) found.push({ index: match.index, expression });
+    }
+    return found;
+  };
+
   for (const file of files) {
     const raw = readFileSync(path.join(root, file), "utf8");
     const extension = path.extname(file);
@@ -315,6 +361,11 @@ export function checkPalette({ root }) {
         for (const name of namedColoursIn(match[2], inForcedColours)) {
           flag(match.index, name, `named colour "${name}"; use a token`);
         }
+      }
+    }
+    if (extension === ".css" || extension === ".tsx" || extension === ".ts") {
+      for (const { index, expression } of nestedMixes(text, file)) {
+        flag(index, expression, "color-mix of two mixed tokens crashes WebKit; use a token from the token block");
       }
     }
     for (const match of text.matchAll(REMOVED_TOKEN_USE)) {

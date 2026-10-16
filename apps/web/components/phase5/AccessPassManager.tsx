@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { Check, Clock, Copy, DownloadSimple, Printer, QrCode, ShieldWarning, X } from "@phosphor-icons/react";
 import { toDataURL, toString as qrToString } from "qrcode";
-import { messages, translate as t } from "@matchday/ui";
+import { messages, palette, translate as t } from "@matchday/ui";
 import type { CompetitionView, MatchView } from "@/lib/phase2";
 import { LatestRequestFence } from "@/lib/latest-request";
 import {
@@ -194,7 +194,7 @@ export function AccessPassManager({
       errorCorrectionLevel: gateCAccessMachine.qrCorrectionLevel,
       margin: 3,
       width: 320,
-      color: { dark: "#101b19", light: "#ffffff" },
+      color: { dark: palette.black, light: palette.white },
     }).then((value) => {
       if (active) setQrDataUrl(value);
     });
@@ -288,7 +288,7 @@ export function AccessPassManager({
       type: "svg",
       errorCorrectionLevel: gateCAccessMachine.qrCorrectionLevel,
       margin: 3,
-      color: { dark: "#101b19", light: "#ffffff" },
+      color: { dark: palette.black, light: palette.white },
     });
     const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
     const anchor = document.createElement(gateCAccessMachine.anchor);

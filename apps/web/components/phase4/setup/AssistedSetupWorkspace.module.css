@@ -144,7 +144,7 @@
 }
 .milestone > ol > li[data-complete="true"] button > span:first-child {
   border-color: var(--signal-strong);
-  color: var(--success-ink);
+  color: var(--signal-text);
 }
 .stepRail button:disabled {
   /* Steps not reached yet stay readable (AA) rather than fading to an illegible grey. */
@@ -261,7 +261,7 @@
 }
 .issueSummary {
   display: block;
-  border-color: #e7b448;
+  border-color: var(--warning-line);
   background: var(--warning-surface);
 }
 .issueSummary ul {
@@ -287,7 +287,7 @@
 .aiBrief > svg {
   width: 24px;
   height: 24px;
-  color: var(--success-ink);
+  color: var(--signal-text);
 }
 .aiBrief h2 {
   margin: 0;
@@ -444,7 +444,7 @@
 }
 .summaryRail > strong {
   display: block;
-  color: var(--success-ink);
+  color: var(--signal-text);
   font-family: var(--font-mono);
   font-size: 3.7rem;
   font-weight: 450;
@@ -480,7 +480,7 @@
   align-items: center;
   gap: 8px;
   min-height: var(--touch-target-min);
-  color: var(--success-ink);
+  color: var(--signal-text);
   font-size: 0.78rem;
   font-weight: 650;
   text-decoration: underline;
@@ -651,7 +651,7 @@
 }
 .review li[data-ready="true"] > button > span:first-child {
   border-color: var(--signal-strong);
-  color: var(--success-ink);
+  color: var(--signal-text);
 }
 .review li svg {
   width: 16px;
