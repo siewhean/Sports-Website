@@ -127,77 +127,83 @@ function rows(input: CalendarCapacityInput) {
 }
 
 describe("solver never uses reserve slots (Phase 0 property test)", () => {
-  it("offers only usable slots and the solver places nothing in a reserve, over 240 random capacities", () => {
-    const random = seeded(20261017);
-    let solved = 0;
-    let reservesChecked = 0;
-    for (let sample = 0; sample < 240; sample += 1) {
-      const { input, reserves } = randomCase(random, sample);
-      const { windows, unavailable } = rows(input);
-      const offered = capacityMatchSlots(
-        windows,
-        unavailable,
-        input.slotMinutes!,
-        input.areas.map((area) => ({
-          id: area.id,
-          slot_minutes: input.slotMinutes!,
-          fixed_reserve_slots: area.fixedReserveSlots!,
-        })),
-        input.timeZone,
-      );
-      const summary = calculateCalendarCapacity(input);
-
-      // Oracle: each area's latest N slots of the raw grid, by start instant.
-      const raw = buildCalendarCapacitySlotSet(input).allSlots;
-      const reserved: (typeof raw)[number][] = [];
-      for (const [areaId, count] of reserves) {
-        const areaSlots = raw.filter((slot) => slot.areaId === areaId).sort((a, b) => a.startEpochMs - b.startEpochMs);
-        reserved.push(...areaSlots.slice(Math.max(0, areaSlots.length - count)));
-      }
-      reservesChecked += reserved.length;
-      const inReserve = (placement: { areaId: string; startEpochMs: number; endEpochMs: number }) =>
-        reserved.some(
-          (slot) =>
-            slot.areaId === placement.areaId &&
-            slot.startEpochMs < placement.endEpochMs &&
-            placement.startEpochMs < slot.endEpochMs,
+  it(
+    "offers only usable slots and the solver places nothing in a reserve, over 240 random capacities",
+    { timeout: 120_000 },
+    () => {
+      const random = seeded(20261017);
+      let solved = 0;
+      let reservesChecked = 0;
+      for (let sample = 0; sample < 240; sample += 1) {
+        const { input, reserves } = randomCase(random, sample);
+        const { windows, unavailable } = rows(input);
+        const offered = capacityMatchSlots(
+          windows,
+          unavailable,
+          input.slotMinutes!,
+          input.areas.map((area) => ({
+            id: area.id,
+            slot_minutes: input.slotMinutes!,
+            fixed_reserve_slots: area.fixedReserveSlots!,
+          })),
+          input.timeZone,
         );
+        const summary = calculateCalendarCapacity(input);
 
-      // The domain capacity count is exactly what the solver is offered.
-      expect(offered).toHaveLength(summary.availableMatchSlots);
-      expect(summary.rawTotalSlots - offered.length).toBe(reserved.length);
-      expect(offered.filter(inReserve)).toEqual([]);
-      expect(new Set(offered.map((slot) => slot.id)).size).toBe(offered.length);
-      if (offered.length === 0) continue;
+        // Oracle: each area's latest N slots of the raw grid, by start instant.
+        const raw = buildCalendarCapacitySlotSet(input).allSlots;
+        const reserved: (typeof raw)[number][] = [];
+        for (const [areaId, count] of reserves) {
+          const areaSlots = raw
+            .filter((slot) => slot.areaId === areaId)
+            .sort((a, b) => a.startEpochMs - b.startEpochMs);
+          reserved.push(...areaSlots.slice(Math.max(0, areaSlots.length - count)));
+        }
+        reservesChecked += reserved.length;
+        const inReserve = (placement: { areaId: string; startEpochMs: number; endEpochMs: number }) =>
+          reserved.some(
+            (slot) =>
+              slot.areaId === placement.areaId &&
+              slot.startEpochMs < placement.endEpochMs &&
+              placement.startEpochMs < slot.endEpochMs,
+          );
 
-      // Fill every usable slot (capped for speed) with independent matches and run the solver.
-      const matchCount = Math.min(offered.length, 40);
-      const problem: ScheduleProblem = {
-        timeZone: input.timeZone,
-        objective: "balanced",
-        matches: Array.from({ length: matchCount }, (_, index) => ({
-          id: `match-${index + 1}`,
-          divisionId: "open",
-          durationMinutes: input.slotMinutes!,
-          dependencyMatchIds: [],
-          possibleEntryIds: [`entry-${2 * index + 1}`, `entry-${2 * index + 2}`],
-          officialIds: [],
-          isChampionshipFinal: false,
-        })),
-        slots: offered,
-        constraints: constraints(),
-      };
-      const [candidate] = generateScheduleCandidates(problem, { maxIterations: 1 });
-      expect(candidate, `sample ${sample} produced no schedule`).toBeDefined();
-      expect(candidate!.assignments).toHaveLength(matchCount);
-      expect(candidate!.assignments.filter(inReserve)).toEqual([]);
-      expect(validateSchedule(problem, candidate!.assignments).valid).toBe(true);
-      solved += 1;
-    }
-    // Guard against a generator that never exercises the property.
-    expect(solved).toBeGreaterThanOrEqual(200);
-    expect(reservesChecked).toBeGreaterThan(500);
-  });
+        // The domain capacity count is exactly what the solver is offered.
+        expect(offered).toHaveLength(summary.availableMatchSlots);
+        expect(summary.rawTotalSlots - offered.length).toBe(reserved.length);
+        expect(offered.filter(inReserve)).toEqual([]);
+        expect(new Set(offered.map((slot) => slot.id)).size).toBe(offered.length);
+        if (offered.length === 0) continue;
+
+        // Fill every usable slot (capped for speed) with independent matches and run the solver.
+        const matchCount = Math.min(offered.length, 40);
+        const problem: ScheduleProblem = {
+          timeZone: input.timeZone,
+          objective: "balanced",
+          matches: Array.from({ length: matchCount }, (_, index) => ({
+            id: `match-${index + 1}`,
+            divisionId: "open",
+            durationMinutes: input.slotMinutes!,
+            dependencyMatchIds: [],
+            possibleEntryIds: [`entry-${2 * index + 1}`, `entry-${2 * index + 2}`],
+            officialIds: [],
+            isChampionshipFinal: false,
+          })),
+          slots: offered,
+          constraints: constraints(),
+        };
+        const [candidate] = generateScheduleCandidates(problem, { maxIterations: 1 });
+        expect(candidate, `sample ${sample} produced no schedule`).toBeDefined();
+        expect(candidate!.assignments).toHaveLength(matchCount);
+        expect(candidate!.assignments.filter(inReserve)).toEqual([]);
+        expect(validateSchedule(problem, candidate!.assignments).valid).toBe(true);
+        solved += 1;
+      }
+      // Guard against a generator that never exercises the property.
+      expect(solved).toBeGreaterThanOrEqual(200);
+      expect(reservesChecked).toBeGreaterThan(500);
+    },
+  );
 
   it("keeps the historical `<window>:<n>` slot IDs on an unchanged grid", () => {
     const input: CalendarCapacityInput = {

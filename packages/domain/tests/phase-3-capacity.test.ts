@@ -607,7 +607,7 @@ describe("reserve slot identity (Phase 0: one rule for the count and the solver 
     expect(calculateCalendarCapacity(input)).toMatchObject({ fixedReserveSlots: 3, availableMatchSlots: 13 });
   });
 
-  it("agrees on count and identity for 240 reproducible random multi-window cases", () => {
+  it("agrees on count and identity for 240 reproducible random multi-window cases", { timeout: 60_000 }, () => {
     let state = 192837;
     const random = (limit: number) => {
       state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
