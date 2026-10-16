@@ -31,6 +31,7 @@ import {
   objectiveLabel,
   phase4ScheduleCopy,
   phase4ScheduleMachine,
+  placementWarningMatchLabels,
   scheduleConflictForMatch,
   parseScheduleJobDiagnostics,
   parseScheduleJobEnvelope,
@@ -486,6 +487,29 @@ export function ScheduleWorkspace({
           title={warning.code === "expired" ? phase4ScheduleCopy.expired : phase4ScheduleCopy.expiry}
           body={warning.message}
           tone={warning.code === "expired" ? "danger" : "warning"}
+        />
+      ))}
+      {(document.currentRevision?.placementWarnings ?? []).map((warning) => (
+        <StatusRail
+          key={warning.code}
+          testId={
+            warning.code === "FIXED_OUTSIDE_CAPACITY"
+              ? phase4ScheduleMachine.fixedOutsideCapacityWarningTestId
+              : phase4ScheduleMachine.startedWithoutPlacementWarningTestId
+          }
+          icon={<Warning />}
+          title={
+            warning.code === "FIXED_OUTSIDE_CAPACITY"
+              ? phase4ScheduleCopy.fixedOutsideCapacityTitle
+              : phase4ScheduleCopy.startedWithoutPlacementTitle
+          }
+          body={interpolate(
+            warning.code === "FIXED_OUTSIDE_CAPACITY"
+              ? phase4ScheduleCopy.fixedOutsideCapacityBody
+              : phase4ScheduleCopy.startedWithoutPlacementBody,
+            { matches: placementWarningMatchLabels(document, warning.matchIds) },
+          )}
+          tone="warning"
         />
       ))}
       {commandError ? (

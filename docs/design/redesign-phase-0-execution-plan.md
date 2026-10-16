@@ -1,7 +1,42 @@
 # MATCHDAY — reviewed execution plan for phases 0 and 1
 
-Status: **Phase 0 pre-implementation plan. Source implementation has not started.**
+Status: **Phase 0 implemented on `redesign/p0-scheduling-safety` (17 October 2026); daily buffers split out.**
 Reviewed 16 October 2026. The complete 674-line `IMPLEMENTATION_PLAN.md` was read, including later phases, checkpoints and owner decisions. Its newer decisions govern over conflicting examples in `PLAN.md`.
+
+## Scope decision, 17 October 2026 (owner)
+
+Phase 0 stays a **small safety fix**. Everything below that concerns per-court-per-day buffers (the
+`daily_reserve_slots` migration, `CapacityEditor` controls and copy, `reserveOverflows`, the
+`phase4_setup_seed_values` / `phase3_capacity_totals` rewrite and scenario 10's daily part) moved to
+the separate branch `feat/daily-court-reserves`, based on this branch, and **needs owner approval**
+before merge. The "Phase 0 — scheduling safety and daily buffers" section is kept as the original
+review record; read its daily-buffer steps as belonging to that follow-up PR.
+
+What Phase 0 delivers, and the rules it fixes in code:
+
+- **Started/finished matches never move.** `in_progress`, `final` and `corrected` matches (walkovers
+  and forfeits persist as `final`) are fixed at their placement in the latest **published** revision
+  during regeneration (reasons `started` / `finished`). If capacity no longer offers that slot, the
+  placement is kept as a `historical:<match id>` slot outside the grid (`FIXED_OUTSIDE_CAPACITY`
+  warning). Move validation and committed moves return `409 MATCH_NOT_MOVABLE`; delays skip such
+  matches; accept, ready, publish and delay re-check placements under match-row locks.
+- **Started without a published placement** (scoring began before any publication) does not block
+  regeneration: the match is planned like any other and the revision reports
+  `STARTED_WITHOUT_PLACEMENT` for the organiser to check. It cannot be left out of the plan because
+  the authoritative job-snapshot guard (0027) requires every format match and its dependency edges.
+  Once published, that placement is fixed like any other.
+- **Baseline = latest published revision.** `loadPreviousRevisionBaseline` has one caller; no draft
+  helper is needed.
+- **Reserve rule (one rule everywhere).** Each area reserves its own latest
+  `min(fixed_reserve_slots, slots on that area)` slots, ordered by start instant across the whole
+  competition (not per day); with no per-area setting the legacy aggregate reserves the latest slots
+  overall. `buildCalendarCapacitySlotSet` implements it; the capacity summary, SQL
+  `phase3_available_match_slots` and the solver slot builder (`apps/api/src/phase-4-capacity-slots.ts`)
+  agree, and the solver is never offered reserve slots.
+- **Migration 0075** (function-only, no table or row changes): the job-snapshot validator accepts
+  reasons `started`/`finished` (0066 body, search-path safe), and the 0027 input guard accepts a
+  `historical:` slot only when it is exactly that started/finished match's published placement. The
+  daily-buffer migration is renumbered to 0076 on the follow-up branch.
 
 ## Verified baseline and working boundary
 
@@ -119,4 +154,4 @@ Specific rollout text governs the generic flag checklist: Phase 0 safety correct
 
 ## Current status
 
-Owner authorized implementation on 16 October 2026. This document is published before Phase 0 code, for independent draft-PR plan review. The release-candidate checkout is preserved. No source implementation or live action has been performed at this plan commit.
+Owner authorized implementation on 16 October 2026. This document was first published before Phase 0 code, for independent draft-PR plan review. Phase 0 code, tests and evidence now live on PR #122 (see its checkpoint table); the daily-buffer feature is a separate PR from `feat/daily-court-reserves` awaiting owner approval. No live or production action has been performed.

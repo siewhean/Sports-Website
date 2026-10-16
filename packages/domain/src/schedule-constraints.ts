@@ -50,7 +50,7 @@ export type SchedulingMatch = {
   officialIds: readonly string[];
   isChampionshipFinal: boolean;
   fixedAssignment?: {
-    reason: "locked" | "published_history";
+    reason: "locked" | "published_history" | "started" | "finished";
     areaId: string;
     slotId: string;
     startEpochMs: number;
@@ -406,6 +406,9 @@ function validateProblem(problem: ScheduleProblem): void {
     for (const entryId of match.possibleEntryIds) possibleEntryIds.add(entryId);
     for (const officialId of match.officialIds) assignedOfficialIds.add(officialId);
     if (match.fixedAssignment) {
+      if (!["locked", "published_history", "started", "finished"].includes(match.fixedAssignment.reason)) {
+        throw new Error(`Fixed match ${match.id} has an unsupported reason`);
+      }
       if (!match.fixedAssignment.areaId.trim() || !match.fixedAssignment.slotId.trim()) {
         throw new Error(`Fixed match ${match.id} requires stable area and slot IDs`);
       }
@@ -630,6 +633,15 @@ export function validateSchedule(
       });
     }
     const slot = slots.get(assignment.slotId);
+    const historicalOwner = assignment.slotId.startsWith("historical:") ? assignment.slotId.slice(11) : null;
+    if (historicalOwner !== null && historicalOwner !== assignment.matchId) {
+      violations.push({
+        code: "fixed_match_moved",
+        severity: "hard",
+        matchIds: [assignment.matchId, historicalOwner],
+        message: `Slot ${assignment.slotId} is reserved for immutable match ${historicalOwner}`,
+      });
+    }
     if (!slot) {
       violations.push({
         code: "unknown_slot",
@@ -1538,6 +1550,7 @@ class MatchPlacement {
     const { problem, match, state } = this;
     const { constraints } = problem;
     if (slot.endEpochMs - slot.startEpochMs !== match.durationMinutes * MINUTE_MS) return false;
+    if (slot.id.startsWith("historical:") && slot.id !== `historical:${match.id}`) return false;
     const fixed = match.fixedAssignment;
     if (
       fixed &&

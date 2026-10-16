@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCapacitySlots,
   buildCalendarCapacitySlots,
+  buildCalendarCapacitySlotSet,
   calculateContinuousCapacity,
   calculateCalendarCapacity,
   CANOE_POLO_RECOMMENDED_SLOT_MINUTES,
@@ -528,4 +529,129 @@ describe("Phase 3 capacity domain (CAP-001-CAP-009)", () => {
       }
     },
   );
+});
+
+describe("reserve slot identity (Phase 0: one rule for the count and the solver grid)", () => {
+  const twoDays = (reserves: Record<string, number | undefined>): CalendarCapacityInput => ({
+    timeZone: "Asia/Singapore",
+    slotMinutes: 30,
+    areas: Object.entries(reserves).map(([id, fixedReserveSlots], index) => ({
+      id,
+      name: `Court ${id}`,
+      sortOrder: index,
+      ...(fixedReserveSlots === undefined ? {} : { fixedReserveSlots }),
+    })),
+    availability: Object.keys(reserves).flatMap((areaId) =>
+      ["2027-01-01", "2027-01-02"].flatMap((date) => [
+        { id: `${areaId}-${date}-am`, areaId, date, startTime: "09:00", endTime: "10:00" },
+        { id: `${areaId}-${date}-pm`, areaId, date, startTime: "14:00", endTime: "15:00" },
+      ]),
+    ),
+  });
+
+  it.each([
+    { label: "zero reserves", reserves: { a: 0, b: 0 }, expected: { a: [], b: [] } },
+    {
+      label: "one reserve on one area",
+      reserves: { a: 1, b: 0 },
+      expected: { a: ["2027-01-02T06:30:00.000Z"], b: [] },
+    },
+    {
+      // The rule is per area across the whole competition, not per day: three reserves on
+      // area a are the last three of its eight slots, two of them on day 2 afternoon and one
+      // from day 2 morning.
+      label: "n reserves across days and areas",
+      reserves: { a: 3, b: 2 },
+      expected: {
+        a: ["2027-01-02T01:30:00.000Z", "2027-01-02T06:00:00.000Z", "2027-01-02T06:30:00.000Z"],
+        b: ["2027-01-02T06:00:00.000Z", "2027-01-02T06:30:00.000Z"],
+      },
+    },
+  ])("reserves each area's latest slots: $label", ({ reserves, expected }) => {
+    const input = twoDays(reserves);
+    const grid = buildCalendarCapacitySlotSet(input);
+    const summary = calculateCalendarCapacity(input);
+    expect(grid.allSlots).toHaveLength(16);
+    for (const [areaId, starts] of Object.entries(expected)) {
+      expect(grid.reserveSlots.filter((slot) => slot.areaId === areaId).map((slot) => slot.startIso)).toEqual(starts);
+    }
+    const reserveCount = Object.values(expected).flat().length;
+    expect(summary).toMatchObject({
+      rawTotalSlots: 16,
+      fixedReserveSlots: reserveCount,
+      availableMatchSlots: 16 - reserveCount,
+    });
+    expect(grid.usableSlots).toHaveLength(summary.availableMatchSlots);
+    expect(buildCalendarCapacitySlots(input)).toEqual(grid.usableSlots);
+  });
+
+  it("caps an over-reserved small area at its own slots without consuming another area", () => {
+    const input = twoDays({ a: 99, b: 1 });
+    const grid = buildCalendarCapacitySlotSet(input);
+    expect(grid.reserveSlots.filter((slot) => slot.areaId === "a")).toHaveLength(8);
+    expect(grid.reserveSlots.filter((slot) => slot.areaId === "b")).toHaveLength(1);
+    // The configured total is reported as requested, but only real slots are reserved.
+    expect(calculateCalendarCapacity(input)).toMatchObject({ fixedReserveSlots: 100, availableMatchSlots: 7 });
+    expect(grid.requestedReserveSlots).toBe(100);
+  });
+
+  it("keeps the legacy aggregate reserve when no area carries its own setting", () => {
+    const input = { ...twoDays({ a: undefined, b: undefined }), fixedReserveSlots: 3 };
+    const grid = buildCalendarCapacitySlotSet(input);
+    // Latest three slots overall: day 2 14:30 on both courts, then 14:00 on court b.
+    expect(grid.reserveSlots.map((slot) => `${slot.areaId}@${slot.startIso}`).sort()).toEqual([
+      "a@2027-01-02T06:30:00.000Z",
+      "b@2027-01-02T06:00:00.000Z",
+      "b@2027-01-02T06:30:00.000Z",
+    ]);
+    expect(calculateCalendarCapacity(input)).toMatchObject({ fixedReserveSlots: 3, availableMatchSlots: 13 });
+  });
+
+  it("agrees on count and identity for 240 reproducible random multi-window cases", () => {
+    let state = 192837;
+    const random = (limit: number) => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state % limit;
+    };
+    for (let sample = 0; sample < 240; sample += 1) {
+      const dates = ["2027-01-01", "2027-01-02", "2027-01-03"].slice(0, 1 + random(3));
+      const areaIds = ["a", "b", "c"].slice(0, 1 + random(3));
+      const input: CalendarCapacityInput = {
+        timeZone: ["Asia/Singapore", "Europe/London", "America/New_York"][sample % 3]!,
+        slotMinutes: [15, 30, 45][sample % 3]!,
+        areas: areaIds.map((id) => ({ id, name: id, fixedReserveSlots: random(12) })),
+        availability: areaIds.flatMap((areaId) =>
+          dates.flatMap((date) => [
+            { id: `${areaId}-${date}-am`, areaId, date, startTime: "08:00", endTime: "11:00" },
+            { id: `${areaId}-${date}-pm`, areaId, date, startTime: "13:00", endTime: "17:00" },
+          ]),
+        ),
+        unavailable: areaIds.flatMap((areaId) =>
+          dates.map((date) => ({
+            id: `${areaId}-${date}-closed`,
+            areaId,
+            date,
+            startTime: "09:00",
+            endTime: `09:${["15", "30", "45"][random(3)]}`,
+          })),
+        ),
+      };
+      const grid = buildCalendarCapacitySlotSet(input);
+      const summary = calculateCalendarCapacity(input);
+      expect(summary.rawTotalSlots).toBe(grid.allSlots.length);
+      expect(summary.availableMatchSlots).toBe(grid.usableSlots.length);
+      expect(new Set([...grid.usableSlots, ...grid.reserveSlots].map((slot) => slot.id)).size).toBe(
+        grid.allSlots.length,
+      );
+      for (const area of input.areas) {
+        const areaSlots = [...grid.allSlots]
+          .filter((slot) => slot.areaId === area.id)
+          .sort((left, right) => left.startEpochMs - right.startEpochMs);
+        const latest = areaSlots.slice(Math.max(0, areaSlots.length - area.fixedReserveSlots!)).map((slot) => slot.id);
+        expect(grid.reserveSlots.filter((slot) => slot.areaId === area.id).map((slot) => slot.id)).toEqual(latest);
+        const rawSlots = summary.areas.find((item) => item.areaId === area.id)!.rawSlots;
+        expect(latest).toHaveLength(Math.min(rawSlots, area.fixedReserveSlots!));
+      }
+    }
+  });
 });

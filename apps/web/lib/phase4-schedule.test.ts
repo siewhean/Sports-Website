@@ -11,6 +11,8 @@ import {
   parseSchedulePublishResponse,
   parseScheduleRevisionComparison,
   parseScheduleRevisionView,
+  phase4ScheduleCopy,
+  placementWarningMatchLabels,
   selectComparableScheduleOptions,
   scheduleConflictForMatch,
   type ScheduleDocument,
@@ -106,6 +108,67 @@ describe("phase 4 schedule boundary parsers", () => {
         true,
       )?.assignments,
     ).toHaveLength(1);
+  });
+
+  it("parses Phase 0 revision details: placement warnings, published slot IDs and real fixed flags", () => {
+    const historical = {
+      ...assignment,
+      match_id: "match-started",
+      interval_id: "match-started",
+      slot_id: `published:match-started:${assignment.start_epoch_ms}`,
+      fixed: true,
+    };
+    const detail = {
+      ...revision,
+      assignment_hash: "c".repeat(64),
+      quality,
+      assignments: [assignment, historical],
+      placement_warnings: [
+        { code: "FIXED_OUTSIDE_CAPACITY", match_ids: ["match-started"], message: "kept" },
+        { code: "STARTED_WITHOUT_PLACEMENT", match_ids: ["match-unplaced"], message: "left out" },
+        { code: "SOME_FUTURE_WARNING", match_ids: ["match-1"], message: "ignored by this client" },
+      ],
+    };
+    const parsed = parseScheduleRevisionView(detail, true);
+    expect(parsed?.assignments.map((value) => [value.slotId, value.fixed])).toEqual([
+      ["slot-1", false],
+      [historical.slot_id, true],
+    ]);
+    expect(parsed?.placementWarnings).toEqual([
+      { code: "FIXED_OUTSIDE_CAPACITY", matchIds: ["match-started"] },
+      { code: "STARTED_WITHOUT_PLACEMENT", matchIds: ["match-unplaced"] },
+    ]);
+    // Publication and comparison envelopes reuse the same detail parser.
+    expect(
+      parseSchedulePublishResponse({
+        ...detail,
+        status: "published",
+        published_at: "2026-07-20T04:25:00.000Z",
+        idempotent_replay: false,
+        schedule_version: 2,
+      })?.placementWarnings,
+    ).toHaveLength(2);
+    // An older API without the field still parses, with no warnings attached.
+    expect(
+      parseScheduleRevisionView({ ...revision, assignment_hash: null, quality: null, assignments: [] }, true)
+        ?.placementWarnings,
+    ).toBeUndefined();
+    // Malformed warnings are rejected like any other malformed nested data.
+    expect(
+      parseScheduleRevisionView({ ...detail, placement_warnings: [{ code: "FIXED_OUTSIDE_CAPACITY" }] }, true),
+    ).toBeNull();
+    expect(parseScheduleRevisionView({ ...detail, placement_warnings: "none" }, true)).toBeNull();
+    // Summary rows never carry detail-only fields.
+    expect(parseScheduleRevisionView({ ...revision, placement_warnings: [] })).toBeNull();
+  });
+
+  it("labels placement-warning matches by code", () => {
+    const document = {
+      matches: [{ id: "match-started", code: "QF1" }],
+    } as unknown as ScheduleDocument;
+    const labels = placementWarningMatchLabels(document, ["match-started", "match-gone"]);
+    expect(labels).toBe(`QF1, ${phase4ScheduleCopy.anAffectedMatch}`);
+    expect(labels).not.toContain("match-gone");
   });
 
   it("accepts the exact publication envelope and rejects extra publication fields", () => {
