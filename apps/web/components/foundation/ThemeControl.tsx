@@ -3,46 +3,46 @@
 import { useEffect, useState } from "react";
 import { Monitor, Moon, Sun } from "@phosphor-icons/react";
 import { messages, opaqueId } from "@matchday/ui";
+import {
+  DEFAULT_THEME,
+  THEME_STORAGE_KEY,
+  nextThemePreference,
+  parseThemePreference,
+  type ThemePreference,
+} from "@/lib/theme";
 
-type Theme = "system" | "light" | "dark";
-const themes: Theme[] = [opaqueId("system"), opaqueId("light"), opaqueId("dark")];
-const storageKey = "matchday-theme";
-
+/**
+ * Cycles Dark (default) → Light → Same as device. The choice is applied to <html data-theme> immediately and
+ * saved to localStorage, which the pre-paint script in app/layout.tsx reads on the next load (no flash).
+ */
 export function ThemeControl() {
-  const [theme, setTheme] = useState<Theme>(opaqueId("system"));
+  // The server always renders the default; the real choice is read after hydration so markup matches.
+  const [theme, setTheme] = useState<ThemePreference>(DEFAULT_THEME);
 
   useEffect(() => {
     let mounted = true;
-    try {
-      const saved = window.localStorage.getItem(storageKey);
-      if (saved === opaqueId("light") || saved === opaqueId("dark")) {
-        queueMicrotask(() => {
-          if (mounted) setTheme(saved);
-        });
-      }
-    } catch {
-      // The system preference remains usable when storage is unavailable.
-    }
+    const current = parseThemePreference(document.documentElement.dataset.theme);
+    queueMicrotask(() => {
+      if (mounted) setTheme(current);
+    });
     return () => {
       mounted = false;
     };
   }, []);
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
-
-  const nextTheme = themes[(themes.indexOf(theme) + 1) % themes.length];
+  const nextTheme = nextThemePreference(theme);
   return (
     <button
       className="theme-control"
       type="button"
+      data-theme-preference={theme}
       onClick={() => {
         setTheme(nextTheme);
+        document.documentElement.dataset.theme = nextTheme;
         try {
-          window.localStorage.setItem(storageKey, nextTheme);
+          window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
         } catch {
-          // Visual preference still changes for this visit.
+          // Storage can be unavailable (private mode); the choice still applies for this visit.
         }
       }}
       aria-label={`${messages.navigation.theme}: ${messages.navigation.themes[theme]}. ${messages.navigation.themeNext}: ${messages.navigation.themes[nextTheme]}`}
