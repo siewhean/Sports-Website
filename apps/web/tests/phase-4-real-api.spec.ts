@@ -163,7 +163,7 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   // Step 0: Name, Public address, Sport
   await page.getByLabel("Competition name").fill("Phase 4 Browser Verified Cup");
   await page.getByLabel("Public address").fill(slug);
-  await page.getByLabel("Sport").selectOption("canoe_polo");
+  await page.getByLabel("Sport", { exact: true }).selectOption("canoe_polo");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Venue", exact: true })).toBeVisible();
 
@@ -247,7 +247,7 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await page.waitForLoadState("load");
   await expect(page.getByTestId("phase4-assisted-setup")).toBeVisible();
   await expect(page.getByLabel("Competition name")).toHaveValue("Phase 4 Browser Verified Cup");
-  await expect(page.getByLabel("Sport")).toHaveValue("canoe_polo");
+  await expect(page.getByLabel("Sport", { exact: true })).toHaveValue("canoe_polo");
   const currentSetupStep = page.getByTestId("phase4-assisted-setup").locator("li[data-current='true'] > button strong");
   for (const next of [
     { label: "capacity", step: "capacity" },

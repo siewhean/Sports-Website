@@ -195,7 +195,7 @@ test("officials roster supports view, create, edit, archive and restore flows", 
   });
 
   await page.getByRole("button", { name: "Archive official" }).last().click();
-  expect(archivedOfficial).toBe(true);
+  await expect.poll(() => archivedOfficial).toBe(true);
 
   // Both schedule invalidation and reconciliation notice must be visible simultaneously
   await expect(page.getByText("This official was assigned to a match.")).toBeVisible();

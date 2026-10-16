@@ -95,7 +95,7 @@ test("browser owns the simple V1 organiser journey", async ({ page, context }, t
   await expect(page.getByLabel("Organisation", { exact: true })).toHaveCount(0);
   await page.getByLabel("Competition name").fill("V1 Browser Cup");
   await page.getByLabel("Public address").fill(slug);
-  await page.getByLabel("Sport").selectOption("canoe_polo");
+  await page.getByLabel("Sport", { exact: true }).selectOption("canoe_polo");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Venue", exact: true })).toBeVisible();
   await page.getByLabel("Venue name").fill("V1 Arena");
