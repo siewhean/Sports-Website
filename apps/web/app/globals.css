@@ -15,55 +15,85 @@
   size-adjust: 106.28%;
 }
 
+/*
+ * Colour tokens (owner decision D12). The six --palette-* values are the ONLY colour literals in the app:
+ * black background / white text (swapped in the light theme) plus four accents, each with one job:
+ *   lime  = actions        red   = errors and urgent
+ *   blue  = info and live  amber = warnings
+ * Every other colour (greys, tints, text variants, lines) is a color-mix() of a palette value with the theme's
+ * base background or ink, so no fifth colour can appear. scripts/check-palette.mjs enforces this (it fails on any
+ * other literal anywhere in the app) and apps/web/tests/unit/token-contrast.test.ts proves every text, control and
+ * focus pair meets WCAG 2.2 AA in both themes. Keep packages/ui/src/tokens.ts in sync (the test checks it).
+ *
+ * Rules the tokens encode:
+ * - Lime is never text, a border or an icon on a light background: in the light theme --signal / --signal-text are
+ *   a dark green mixed from lime and ink, and lime itself is only a fill under dark text (--signal-bright).
+ * - Amber is never text: use --warning-ink. --warning is a fill or a decorative line.
+ * - --hairline is decorative only (dividers). Controls use --field-border (>= 3:1 in both themes).
+ * - Dark is the default theme (see app/layout.tsx); this :root block is the light theme and the shared base.
+ */
 :root {
-  --canvas: #f7f6f0;
-  --surface: #ffffff;
-  --surface-subtle: #efeee8;
-  --ink: #171918;
-  --ink-muted: #5f635e;
-  --hairline: #d3d4ce;
-  --signal: #b7dc22;
-  --signal-strong: #97bc0d;
-  --signal-ink: #12150b;
-  --warning: #e9a410;
-  --danger: #c74a43;
-  --success: #6d9414;
-  --focus: #5876d8;
-  --line-strong: #202320;
+  --palette-black: #111513;
+  --palette-white: #ffffff;
+  --palette-lime: #b7dc22;
+  --palette-red: #d4443c;
+  --palette-blue: #4f6fd6;
+  --palette-amber: #e9a410;
 
-  /*
-   * Form, callout and status tokens. Every text pair here meets WCAG AA
-   * (4.5:1 text, 3:1 field borders) against --surface, --canvas and its own
-   * tinted surface in both themes. Components must use these instead of
-   * hard-coded light-theme hex values so dark mode never renders white-on-white.
-   */
-  --field-bg: #ffffff;
-  --field-ink: var(--ink);
-  --field-border: #858a83;
-  --field-border-hover: #5f635e;
-  --field-placeholder: #6b6f69;
-  --field-disabled-bg: #efeee8;
-  --field-disabled-ink: #5f635e;
-  --field-accent: #4f6f0c;
-  --danger-ink: #a83a33;
-  --danger-surface: #fdf0ee;
-  --danger-line: #e2a49e;
-  --warning-ink: #855600;
-  --warning-surface: #fff7e0;
-  --warning-line: #d9a93a;
-  --success-ink: #4f6f0c;
-  --success-surface: #f1f6e3;
-  --success-line: #a8c46a;
-  --info-ink: #2a52b8;
-  --info-surface: #eef2fd;
-  --info-line: #a9b9ec;
+  --canvas: color-mix(in srgb, var(--palette-black) 3%, var(--palette-white));
+  --surface: var(--palette-white);
+  --surface-subtle: color-mix(in srgb, var(--palette-black) 6%, var(--palette-white));
+  --surface-hover: color-mix(in srgb, var(--palette-black) 10%, var(--palette-white));
+  --ink: var(--palette-black);
+  --ink-muted: color-mix(in srgb, var(--palette-black) 72%, var(--palette-white));
+  --hairline: color-mix(in srgb, var(--palette-black) 16%, var(--palette-white));
+  --line-strong: color-mix(in srgb, var(--palette-black) 90%, var(--palette-white));
+  --inverse-surface: var(--palette-black);
+  --inverse-ink: var(--palette-white);
+
+  --signal: color-mix(in srgb, var(--palette-lime) 45%, var(--palette-black));
+  --signal-strong: color-mix(in srgb, var(--palette-lime) 35%, var(--palette-black));
+  --signal-ink: var(--palette-white);
+  --signal-text: color-mix(in srgb, var(--palette-lime) 45%, var(--palette-black));
+  --signal-bright: var(--palette-lime);
+  --signal-bright-ink: var(--palette-black);
+  --signal-surface: color-mix(in srgb, var(--palette-lime) 18%, var(--palette-white));
+  --signal-line: color-mix(in srgb, var(--palette-lime) 60%, var(--palette-black));
+
+  --focus: color-mix(in srgb, var(--palette-blue) 85%, var(--palette-black));
+
+  --danger: color-mix(in srgb, var(--palette-red) 82%, var(--palette-black));
+  --danger-ink: color-mix(in srgb, var(--palette-red) 78%, var(--palette-black));
+  --danger-on-fill: var(--palette-white);
+  --danger-surface: color-mix(in srgb, var(--palette-red) 8%, var(--palette-white));
+  --danger-line: color-mix(in srgb, var(--palette-red) 50%, var(--palette-white));
+
+  --warning: var(--palette-amber);
+  --warning-ink: color-mix(in srgb, var(--palette-amber) 50%, var(--palette-black));
+  --warning-on-fill: var(--palette-black);
+  --warning-surface: color-mix(in srgb, var(--palette-amber) 12%, var(--palette-white));
+  --warning-line: var(--palette-amber);
+
+  --info: color-mix(in srgb, var(--palette-blue) 85%, var(--palette-black));
+  --info-ink: color-mix(in srgb, var(--palette-blue) 75%, var(--palette-black));
+  --info-on-fill: var(--palette-white);
+  --info-surface: color-mix(in srgb, var(--palette-blue) 8%, var(--palette-white));
+  --info-line: color-mix(in srgb, var(--palette-blue) 45%, var(--palette-white));
+
+  --field-bg: var(--palette-white);
+  --field-ink: var(--palette-black);
+  --field-border: color-mix(in srgb, var(--palette-black) 55%, var(--palette-white));
+  --field-border-hover: color-mix(in srgb, var(--palette-black) 70%, var(--palette-white));
+  --field-placeholder: color-mix(in srgb, var(--palette-black) 64%, var(--palette-white));
+  --field-disabled-bg: color-mix(in srgb, var(--palette-black) 6%, var(--palette-white));
+  --field-disabled-ink: color-mix(in srgb, var(--palette-black) 66%, var(--palette-white));
+  --field-accent: color-mix(in srgb, var(--palette-lime) 45%, var(--palette-black));
+
+  --scrim: color-mix(in srgb, var(--palette-black) 55%, transparent);
+  --shadow-color: color-mix(in srgb, var(--palette-black) 12%, transparent);
+  --shadow-soft: 0 24px 70px color-mix(in srgb, var(--palette-black) 8%, transparent);
   color-scheme: light;
-  --event-canvas: #0d1010;
-  --event-surface: #171a19;
-  --event-line: #4a4f4d;
-  --team-blue: #2364d9;
-  --team-gold: #dea700;
-  --shadow-soft: 0 24px 70px rgb(26 28 24 / 8%);
+
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-state: cubic-bezier(0.32, 0.72, 0, 1);
   --font-sans:
@@ -80,76 +110,128 @@
   --focus-ring-offset: 2px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --canvas: #111513;
-    --surface: #1b211e;
-    --surface-subtle: #242b26;
-    --ink: #f0f3ed;
-    --ink-muted: #bbc5ba;
-    --hairline: #4b594e;
-    --focus: #9db2ff;
-    --line-strong: #c9d1c8;
-    --field-bg: #151a17;
-    --field-border: #7a877c;
-    --field-border-hover: #a3ada2;
-    --field-placeholder: #98a397;
-    --field-disabled-bg: #222823;
-    --field-disabled-ink: #a3ada2;
-    --field-accent: #b7dc22;
-    --danger-ink: #ff9a90;
-    --danger-surface: #2e1a18;
-    --danger-line: #8a3a33;
-    --warning-ink: #f2c35b;
-    --warning-surface: #2b2514;
-    --warning-line: #8a6a1c;
-    --success-ink: #c4e86d;
-    --success-surface: #1e2814;
-    --success-line: #4f6a1c;
-    --info-ink: #b4c4ff;
-    --info-surface: #1a2033;
-    --info-line: #3c4a78;
-    color-scheme: dark;
-  }
-}
-
 /*
- * Explicit dark theme, also applied to always-dark event-day surfaces (phone
- * scorer) so their fields and native controls use dark tokens in light mode.
+ * Dark theme (the default). Declared in full twice: for an explicit choice / always-dark event-day surfaces, and
+ * for "Same as device" on a dark device. Nested scopes (.theme-dark, phone scorer) need every token redeclared,
+ * because a token computed on :root is inherited as a value, not re-evaluated. check-palette verifies both copies
+ * are identical and complete.
  */
 :root[data-theme="dark"],
 .theme-dark,
 .p2-score-access,
 .p2-score,
 .p2-score-receipt {
-  --canvas: #111513;
-  --surface: #1b211e;
-  --surface-subtle: #242b26;
-  --ink: #f0f3ed;
-  --ink-muted: #bbc5ba;
-  --hairline: #4b594e;
-  --focus: #9db2ff;
-  --line-strong: #c9d1c8;
-  --field-bg: #151a17;
-  --field-border: #7a877c;
-  --field-border-hover: #a3ada2;
-  --field-placeholder: #98a397;
-  --field-disabled-bg: #222823;
-  --field-disabled-ink: #a3ada2;
-  --field-accent: #b7dc22;
-  --danger-ink: #ff9a90;
-  --danger-surface: #2e1a18;
-  --danger-line: #8a3a33;
-  --warning-ink: #f2c35b;
-  --warning-surface: #2b2514;
-  --warning-line: #8a6a1c;
-  --success-ink: #c4e86d;
-  --success-surface: #1e2814;
-  --success-line: #4f6a1c;
-  --info-ink: #b4c4ff;
-  --info-surface: #1a2033;
-  --info-line: #3c4a78;
+  --canvas: var(--palette-black);
+  --surface: color-mix(in srgb, var(--palette-white) 6%, var(--palette-black));
+  --surface-subtle: color-mix(in srgb, var(--palette-white) 10%, var(--palette-black));
+  --surface-hover: color-mix(in srgb, var(--palette-white) 15%, var(--palette-black));
+  --ink: color-mix(in srgb, var(--palette-white) 94%, var(--palette-black));
+  --ink-muted: color-mix(in srgb, var(--palette-white) 72%, var(--palette-black));
+  --hairline: color-mix(in srgb, var(--palette-white) 22%, var(--palette-black));
+  --line-strong: color-mix(in srgb, var(--palette-white) 78%, var(--palette-black));
+  --inverse-surface: color-mix(in srgb, var(--palette-white) 94%, var(--palette-black));
+  --inverse-ink: var(--palette-black);
+
+  --signal: var(--palette-lime);
+  --signal-strong: color-mix(in srgb, var(--palette-lime) 85%, var(--palette-white));
+  --signal-ink: var(--palette-black);
+  --signal-text: var(--palette-lime);
+  --signal-bright: var(--palette-lime);
+  --signal-bright-ink: var(--palette-black);
+  --signal-surface: color-mix(in srgb, var(--palette-lime) 14%, var(--palette-black));
+  --signal-line: color-mix(in srgb, var(--palette-lime) 50%, var(--palette-black));
+
+  --focus: var(--palette-lime);
+
+  --danger: color-mix(in srgb, var(--palette-red) 60%, var(--palette-white));
+  --danger-ink: color-mix(in srgb, var(--palette-red) 60%, var(--palette-white));
+  --danger-on-fill: var(--palette-black);
+  --danger-surface: color-mix(in srgb, var(--palette-red) 16%, var(--palette-black));
+  --danger-line: color-mix(in srgb, var(--palette-red) 55%, var(--palette-black));
+
+  --warning: var(--palette-amber);
+  --warning-ink: color-mix(in srgb, var(--palette-amber) 75%, var(--palette-white));
+  --warning-on-fill: var(--palette-black);
+  --warning-surface: color-mix(in srgb, var(--palette-amber) 12%, var(--palette-black));
+  --warning-line: color-mix(in srgb, var(--palette-amber) 50%, var(--palette-black));
+
+  --info: color-mix(in srgb, var(--palette-blue) 55%, var(--palette-white));
+  --info-ink: color-mix(in srgb, var(--palette-blue) 55%, var(--palette-white));
+  --info-on-fill: var(--palette-black);
+  --info-surface: color-mix(in srgb, var(--palette-blue) 16%, var(--palette-black));
+  --info-line: color-mix(in srgb, var(--palette-blue) 55%, var(--palette-black));
+
+  --field-bg: color-mix(in srgb, var(--palette-white) 3%, var(--palette-black));
+  --field-ink: color-mix(in srgb, var(--palette-white) 94%, var(--palette-black));
+  --field-border: color-mix(in srgb, var(--palette-white) 50%, var(--palette-black));
+  --field-border-hover: color-mix(in srgb, var(--palette-white) 65%, var(--palette-black));
+  --field-placeholder: color-mix(in srgb, var(--palette-white) 58%, var(--palette-black));
+  --field-disabled-bg: color-mix(in srgb, var(--palette-white) 12%, var(--palette-black));
+  --field-disabled-ink: color-mix(in srgb, var(--palette-white) 62%, var(--palette-black));
+  --field-accent: var(--palette-lime);
+
+  --scrim: color-mix(in srgb, var(--palette-black) 72%, transparent);
+  --shadow-color: color-mix(in srgb, var(--palette-black) 40%, transparent);
+  --shadow-soft: 0 24px 70px color-mix(in srgb, var(--palette-black) 40%, transparent);
   color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: var(--palette-black);
+    --surface: color-mix(in srgb, var(--palette-white) 6%, var(--palette-black));
+    --surface-subtle: color-mix(in srgb, var(--palette-white) 10%, var(--palette-black));
+    --surface-hover: color-mix(in srgb, var(--palette-white) 15%, var(--palette-black));
+    --ink: color-mix(in srgb, var(--palette-white) 94%, var(--palette-black));
+    --ink-muted: color-mix(in srgb, var(--palette-white) 72%, var(--palette-black));
+    --hairline: color-mix(in srgb, var(--palette-white) 22%, var(--palette-black));
+    --line-strong: color-mix(in srgb, var(--palette-white) 78%, var(--palette-black));
+    --inverse-surface: color-mix(in srgb, var(--palette-white) 94%, var(--palette-black));
+    --inverse-ink: var(--palette-black);
+
+    --signal: var(--palette-lime);
+    --signal-strong: color-mix(in srgb, var(--palette-lime) 85%, var(--palette-white));
+    --signal-ink: var(--palette-black);
+    --signal-text: var(--palette-lime);
+    --signal-bright: var(--palette-lime);
+    --signal-bright-ink: var(--palette-black);
+    --signal-surface: color-mix(in srgb, var(--palette-lime) 14%, var(--palette-black));
+    --signal-line: color-mix(in srgb, var(--palette-lime) 50%, var(--palette-black));
+
+    --focus: var(--palette-lime);
+
+    --danger: color-mix(in srgb, var(--palette-red) 60%, var(--palette-white));
+    --danger-ink: color-mix(in srgb, var(--palette-red) 60%, var(--palette-white));
+    --danger-on-fill: var(--palette-black);
+    --danger-surface: color-mix(in srgb, var(--palette-red) 16%, var(--palette-black));
+    --danger-line: color-mix(in srgb, var(--palette-red) 55%, var(--palette-black));
+
+    --warning: var(--palette-amber);
+    --warning-ink: color-mix(in srgb, var(--palette-amber) 75%, var(--palette-white));
+    --warning-on-fill: var(--palette-black);
+    --warning-surface: color-mix(in srgb, var(--palette-amber) 12%, var(--palette-black));
+    --warning-line: color-mix(in srgb, var(--palette-amber) 50%, var(--palette-black));
+
+    --info: color-mix(in srgb, var(--palette-blue) 55%, var(--palette-white));
+    --info-ink: color-mix(in srgb, var(--palette-blue) 55%, var(--palette-white));
+    --info-on-fill: var(--palette-black);
+    --info-surface: color-mix(in srgb, var(--palette-blue) 16%, var(--palette-black));
+    --info-line: color-mix(in srgb, var(--palette-blue) 55%, var(--palette-black));
+
+    --field-bg: color-mix(in srgb, var(--palette-white) 3%, var(--palette-black));
+    --field-ink: color-mix(in srgb, var(--palette-white) 94%, var(--palette-black));
+    --field-border: color-mix(in srgb, var(--palette-white) 50%, var(--palette-black));
+    --field-border-hover: color-mix(in srgb, var(--palette-white) 65%, var(--palette-black));
+    --field-placeholder: color-mix(in srgb, var(--palette-white) 58%, var(--palette-black));
+    --field-disabled-bg: color-mix(in srgb, var(--palette-white) 12%, var(--palette-black));
+    --field-disabled-ink: color-mix(in srgb, var(--palette-white) 62%, var(--palette-black));
+    --field-accent: var(--palette-lime);
+
+    --scrim: color-mix(in srgb, var(--palette-black) 72%, transparent);
+    --shadow-color: color-mix(in srgb, var(--palette-black) 40%, transparent);
+    --shadow-soft: 0 24px 70px color-mix(in srgb, var(--palette-black) 40%, transparent);
+    color-scheme: dark;
+  }
 }
 
 /* Organiser and public surfaces */

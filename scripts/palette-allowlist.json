@@ -1,0 +1,4 @@
+{
+  "$comment": "Reviewed exceptions to scripts/check-palette.mjs. Each entry needs file, literal and a reason; unused entries fail the check. Empty by default.",
+  "entries": []
+}
