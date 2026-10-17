@@ -17,6 +17,6 @@
     "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
-    "bullmq": "5.80.5"
+    "bullmq": "6.3.15"
   }
 }
