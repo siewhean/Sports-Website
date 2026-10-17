@@ -77,11 +77,11 @@ async function publishDivisionFormat(page: Page, competitionId: string, division
   await page.getByRole("button", { name: "Validate graph" }).click();
   await expect(page.getByText(/Format valid\. \d+ matches can be materialised\./)).toBeVisible();
   await submitAndWait(page, page.getByRole("button", { name: "Save", exact: true }), "PUT", "/format-builder");
-  await expect(page.getByText(/Draft revision \d+ saved\./)).toBeVisible();
+  await expect(page.getByText(/Draft version \d+ saved\./)).toBeVisible();
   await submitAndWait(page, page.getByRole("button", { name: "Materialise" }), "POST", "/materialise");
   await expect(page.getByText(/materialised/i)).toBeVisible();
   await submitAndWait(page, page.getByRole("button", { name: "Publish format" }), "POST", "/publish");
-  await expect(page.getByText("Format published. It is now available to deterministic scheduling.")).toBeVisible();
+  await expect(page.getByText("Format published. It is now available to the scheduler.")).toBeVisible();
 }
 
 async function generateObjective(page: Page, objective: "Fastest" | "Balanced" | "Rest-focused") {
@@ -376,8 +376,8 @@ test("browser owns the complete Gate B organiser journey", async ({ page, contex
   await page.getByRole("button", { name: "Confirm move" }).click();
   const moved = (await moveRequest).postDataJSON() as JourneyResult["moved"];
   await page.waitForURL(new RegExp(`/organiser/competitions/${competitionId}/schedule`));
-  await page.getByRole("link", { name: "Compare revisions" }).click();
-  await expect(page.getByRole("heading", { name: /Compare revisions/i })).toBeVisible();
+  await page.getByRole("link", { name: "Compare versions" }).click();
+  await expect(page.getByRole("heading", { name: /Compare versions/i })).toBeVisible();
   await page.goBack();
   await submitAndWait(page, page.getByRole("button", { name: "Publish schedule" }), "POST", "/publish");
 

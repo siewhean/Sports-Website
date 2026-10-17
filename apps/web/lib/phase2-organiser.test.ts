@@ -215,7 +215,7 @@ describe("organiser competition workspace mapping", () => {
       },
     ]);
     expect(view.formatSummary).toEqual([
-      ["Format revision", "3"],
+      ["Format version", "3"],
       ["Groups", "1"],
       ["Matches", "2"],
       ["Knockout stages", "—"],

@@ -16,7 +16,7 @@ test("an unavailable settings service never reports simulated success", async ({
   await expect(page.getByText("The authenticated settings command failed. No success was recorded.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy previous" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Save as my default" })).toBeDisabled();
-  await expect(page.getByText("Settings saved as a new revision.")).toHaveCount(0);
+  await expect(page.getByText("Settings saved as a new version.")).toHaveCount(0);
 });
 
 test("division settings are honestly unavailable until their endpoint exists", async ({ page }) => {
@@ -36,7 +36,7 @@ test("settings header reports document truth and scope links expose the current 
   await page.getByRole("button", { name: "More about competition settings" }).click();
   await expect(intro).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByText("Saved revision 4")).toBeVisible();
+  await expect(page.getByText("Saved version 4")).toBeVisible();
   await expect(page.getByText("Draft synced 18 seconds ago")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Competition", exact: true })).toHaveAttribute("aria-current", "page");
 

@@ -19,7 +19,7 @@ test("canonical routes expose the complete 14-step competition slice", async ({ 
     ["/organiser/competitions/singapore-open/format", "Competition format", "Group A"],
     ["/organiser/competitions/singapore-open/format", "Competition format", "Semifinals"],
     ["/organiser/competitions/singapore-open/schedule", "Schedule", "Playing-area timeline"],
-    ["/organiser/competitions/singapore-open/publish", "Publication", "Published revision 4"],
+    ["/organiser/competitions/singapore-open/publish", "Publication", "Published version 4"],
     ["/organiser/competitions/singapore-open/access", "Scoring access", "Match-scoped passes"],
     ["/score", "Use the match-specific code from the organiser.", "Validate access"],
     ["/competitions/singapore-open", "Singapore Open 2026", "Latest results"],

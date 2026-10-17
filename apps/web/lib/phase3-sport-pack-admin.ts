@@ -378,7 +378,7 @@ export const phase3AdminCopy = {
   revokedTitle: "Administrator access was revoked",
   revokedBody: "This session no longer has platform-administrator authority.",
   conflictTitle: "Sport-pack version changed",
-  conflictBody: "Reload the current revision before activating it.",
+  conflictBody: "Reload the current version before activating it.",
   revision: "Revision",
   definitionHash: "Definition hash",
   versionPlaceholder: "1.1.0",

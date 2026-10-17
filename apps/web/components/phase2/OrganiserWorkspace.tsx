@@ -23,7 +23,19 @@ import {
 } from "@/lib/phase2";
 import { SurfaceStatePanel } from "./SurfaceState";
 import { AccessPassManager } from "@/components/phase5/AccessPassManager";
+import { AccountMenu } from "@/components/foundation/AccountMenu";
 import { IdentityStatus } from "@/components/foundation/IdentityStatus";
+import { NotificationBell } from "@/components/foundation/NotificationBell";
+import {
+  modeHref,
+  modeOfTab,
+  organiserBasePath,
+  organiserTabs,
+  sectionTabs,
+  type OrganiserMode,
+  type OrganiserTab,
+} from "@/lib/organiser-navigation";
+import { organiserRedesignShellEnabled } from "@/lib/organiser-shell.server";
 
 function sectionMeta(competition: CompetitionView, section: OrganiserSection): { title: string; intro: string } {
   const shared: Record<OrganiserSection, { title: string; intro: string }> = {
@@ -70,7 +82,7 @@ function navigation(competition: CompetitionView) {
   });
 }
 
-export function OrganiserWorkspace({
+export async function OrganiserWorkspace({
   competition = phase2Competition,
   section = phase2Machine.controlRoom,
   state = phase2Machine.ready,
@@ -83,6 +95,8 @@ export function OrganiserWorkspace({
   syncState,
   layoutMode = opaqueId("default"),
   accessApiEnabled = false,
+  tab,
+  shell,
 }: {
   competition?: CompetitionView;
   section?: OrganiserSection;
@@ -96,13 +110,18 @@ export function OrganiserWorkspace({
   syncState?: "saved" | "local" | "unavailable" | "offline" | "conflict" | "read-only";
   layoutMode?: "default" | "setup" | "format";
   accessApiEnabled?: boolean;
+  /** Redesign shell only: the highlighted tab when it is not the section's own (Live pages, Activity in Live). */
+  tab?: OrganiserTab;
+  /** Forces a shell; by default the `organiser.redesign-shell` flag decides. */
+  shell?: "classic" | "redesign";
 }) {
+  const redesign = shell ? shell === "redesign" : await organiserRedesignShellEnabled();
   const fallbackMeta = sectionMeta(competition, section);
   const meta = {
     title: pageTitle ?? fallbackMeta.title,
     intro: pageIntro ?? fallbackMeta.intro,
   };
-  const organiserBase = `/organiser/competitions/${competition.id}`;
+  const organiserBase = organiserBasePath(competition.id);
   const content =
     state === "ready" ? (
       (sectionContent ?? (
@@ -111,6 +130,53 @@ export function OrganiserWorkspace({
     ) : (
       <SurfaceStatePanel state={state} />
     );
+
+  const heading =
+    layoutMode === "default" ? (
+      <header className="p2-page-heading">
+        <div>
+          <p className="p2-eyebrow">{pageEyebrow ?? competition.division.name}</p>
+          {/* D13: the page description sits behind an (i) so the heading stays one line. */}
+          <div className="md-label-row md-label-row--heading">
+            <h1>{meta.title}</h1>
+            {meta.intro ? (
+              <InfoTip label={`${messages.organiser.moreAbout} ${meta.title.toLowerCase()}`}>{meta.intro}</InfoTip>
+            ) : null}
+          </div>
+        </div>
+        {sectionAction !== undefined ? (
+          sectionAction
+        ) : section === "control-room" ? (
+          <Link className="p2-button p2-button--signal" href={`${organiserBase}/publish`}>
+            {phase2Copy.openPublic}
+            <span aria-hidden="true">
+              <ArrowRight />
+            </span>
+          </Link>
+        ) : (
+          <button className="p2-button p2-button--dark" type="button">
+            {phase2Copy.save}
+          </button>
+        )}
+      </header>
+    ) : null;
+
+  if (redesign) {
+    const activeTab = tab ?? sectionTabs[section];
+    return (
+      <RedesignShell
+        competition={competition}
+        mode={modeOfTab(activeTab)}
+        activeTab={activeTab}
+        layoutMode={layoutMode}
+        syncLabel={syncLabel}
+        syncState={syncState}
+      >
+        {heading}
+        {content}
+      </RedesignShell>
+    );
+  }
 
   return (
     <div className={`p2-organiser p2-organiser--${layoutMode}`}>
@@ -157,39 +223,95 @@ export function OrganiserWorkspace({
           <Link href="/">{phase2Copy.backHome}</Link>
         </nav>
         <main className="p2-organiser__main" id="p2-workspace" tabIndex={-1}>
-          {layoutMode === "default" ? (
-            <header className="p2-page-heading">
-              <div>
-                <p className="p2-eyebrow">{pageEyebrow ?? competition.division.name}</p>
-                {/* D13: the page description sits behind an (i) so the heading stays one line. */}
-                <div className="md-label-row md-label-row--heading">
-                  <h1>{meta.title}</h1>
-                  {meta.intro ? (
-                    <InfoTip label={`${messages.organiser.moreAbout} ${meta.title.toLowerCase()}`}>
-                      {meta.intro}
-                    </InfoTip>
-                  ) : null}
-                </div>
-              </div>
-              {sectionAction !== undefined ? (
-                sectionAction
-              ) : section === "control-room" ? (
-                <Link className="p2-button p2-button--signal" href={`${organiserBase}/publish`}>
-                  {phase2Copy.openPublic}
-                  <span aria-hidden="true">
-                    <ArrowRight />
-                  </span>
-                </Link>
-              ) : (
-                <button className="p2-button p2-button--dark" type="button">
-                  {phase2Copy.save}
-                </button>
-              )}
-            </header>
-          ) : null}
+          {heading}
           {content}
         </main>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Redesign Phase 2 shell (D8): a header with the Setup / Live switch, notifications and the account menu, then
+ * the tabs of the current area. Live is marked by a lime rule and a "Live mode" label, never colour alone.
+ */
+function RedesignShell({
+  competition,
+  mode,
+  activeTab,
+  layoutMode,
+  syncLabel,
+  syncState,
+  children,
+}: {
+  competition: CompetitionView;
+  mode: OrganiserMode;
+  activeTab: OrganiserTab;
+  layoutMode: "default" | "setup" | "format";
+  syncLabel: string | undefined;
+  syncState: string | undefined;
+  children: ReactNode;
+}) {
+  const shellCopy = messages.organiserShell;
+  const live = mode === "live";
+  return (
+    <div
+      className={`p2-organiser p2-organiser--${layoutMode} p2-shell${live ? " p2-shell--live" : ""}`}
+      data-organiser-mode={mode}
+    >
+      <a className="skip-link" href="#p2-workspace">
+        {phase2Copy.skip}
+      </a>
+      {layoutMode !== "format" ? (
+        <header className="p2-shell__bar">
+          <Link className="p2-wordmark" href="/">
+            <span aria-hidden="true">{phase2Copy.logoMark}</span>
+            <span className="p2-shell__brand">{phase2Copy.brand}</span>
+          </Link>
+          <div className="p2-context">
+            <span>{competition.name}</span>
+            <small>{competition.dateLabel}</small>
+          </div>
+          <nav className="p2-mode" aria-label={shellCopy.modeLabel}>
+            <Link href={modeHref(competition.id, "setup")} aria-current={live ? undefined : "true"}>
+              {shellCopy.setup}
+            </Link>
+            <Link href={modeHref(competition.id, "live")} aria-current={live ? "true" : undefined}>
+              <span className="p2-mode__dot" aria-hidden="true" />
+              {shellCopy.live}
+            </Link>
+          </nav>
+          {live ? <span className="p2-shell__live-label">{shellCopy.liveBadge}</span> : null}
+          <div className="p2-shell__tools">
+            {syncLabel ? (
+              <p className="p2-sync" data-sync-state={syncState}>
+                <span aria-hidden="true" />
+                {syncLabel}
+              </p>
+            ) : null}
+            <NotificationBell />
+            <AccountMenu />
+          </div>
+        </header>
+      ) : null}
+      <nav
+        className="p2-organiser__nav p2-subnav"
+        aria-label={live ? shellCopy.liveNav : shellCopy.setupNav}
+        data-organiser-mode={mode}
+      >
+        <ul>
+          {organiserTabs(competition, mode).map((item) => (
+            <li key={item.id}>
+              <Link href={item.href} aria-current={item.id === activeTab ? "page" : undefined}>
+                {item.label}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </nav>
+      <main className="p2-organiser__main p2-shell__main" id="p2-workspace" tabIndex={-1}>
+        {children}
+      </main>
     </div>
   );
 }

@@ -13,7 +13,7 @@ test("hydrated capacity reports server-owned status and edits the lossless sourc
   await expect(page.getByRole("button", { name: "Save capacity" })).toBeDisabled();
   await page.getByLabel("Area name").fill("Pool Alpha");
   await expect(page.getByRole("button", { name: "Save capacity" })).toBeEnabled();
-  await expect(page.getByText("Capacity revision")).toBeVisible();
+  await expect(page.getByText("Capacity version")).toBeVisible();
 });
 
 test("capacity loading preview is guarded", async ({ page }) => {

@@ -261,7 +261,7 @@ export function Inspector({
         <Trash /> {t("prototype.1c2a084f678e")}
       </button>
       <p>
-        <Info /> {t("prototype.425ac6236004")}
+        <Info /> {t("prototype.cef86b5e0e57")}
       </p>
     </div>
   );
