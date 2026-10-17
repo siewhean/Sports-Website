@@ -142,6 +142,8 @@ export type PlayingArea = {
   sortOrder?: number;
   /** Latest local slots on this area are kept empty for operational recovery. */
   fixedReserveSlots?: number;
+  /** NULL/omitted keeps the per-area rule above; an object reserves independently per local start date. */
+  dailyReserveSlots?: Readonly<Record<string, number>> | null;
 };
 
 export type DailyCapacityWindow = {
@@ -213,6 +215,15 @@ export type CalendarCapacitySummary = {
   status: CapacityStatus;
   intervals: readonly CalendarCapacityIntervalSummary[];
   areas: readonly PlayingAreaCapacitySummary[];
+  /** Requested reserves that exceed the slots that exist (per area, or per area and day). */
+  reserveOverflows: readonly CapacityReserveOverflow[];
+};
+
+export type CapacityReserveOverflow = {
+  areaId: string | null;
+  date: string | null;
+  requestedSlots: number;
+  availableSlots: number;
 };
 
 export type CalendarCapacitySlot = {
@@ -278,6 +289,15 @@ function validateAreas(areas: readonly PlayingArea[]): PlayingArea[] {
       }
       if (area.fixedReserveSlots !== undefined) {
         assertNonNegativeInteger(area.fixedReserveSlots, `Playing area ${area.id} fixed reserve slots`);
+      }
+      if (area.dailyReserveSlots != null) {
+        if (typeof area.dailyReserveSlots !== "object" || Array.isArray(area.dailyReserveSlots)) {
+          throw new Error(`Playing area ${area.id} daily reserve slots must be a date map`);
+        }
+        for (const [date, count] of Object.entries(area.dailyReserveSlots)) {
+          parseDate(date, `Playing area ${area.id} reserve date`);
+          assertNonNegativeInteger(count, `Playing area ${area.id} reserve slots on ${date}`);
+        }
       }
       return { ...area, id, name: area.name.trim() };
     })
@@ -430,7 +450,7 @@ function buildCalendarModel(input: CalendarCapacityInput): {
 
 export function calculateCalendarCapacity(input: CalendarCapacityInput): CalendarCapacitySummary {
   const model = buildCalendarModel(input);
-  const slotSet = calendarSlotSet(model);
+  const slotSet = calendarSlotSet(model, input.timeZone);
   const rawTotalSlots = slotSet.allSlots.length;
   const fixedReserveSlots = slotSet.requestedReserveSlots;
   const availableMatchSlots = slotSet.usableSlots.length;
@@ -463,6 +483,7 @@ export function calculateCalendarCapacity(input: CalendarCapacityInput): Calenda
     status,
     intervals: model.intervals,
     areas,
+    reserveOverflows: slotSet.reserveOverflows,
   };
 }
 
@@ -493,7 +514,10 @@ export function resolveCalendarCapacityWindows(input: CalendarCapacityInput): Re
  * operational recovery (`reserveSlots`) and the slots the solver may use (`usableSlots`).
  *
  * Reserve rule (one rule for the capacity count, SQL `phase3_available_match_slots` and the solver):
- * - When any area carries `fixedReserveSlots`, each area reserves its own latest
+ * - An area with `dailyReserveSlots` (an object) reserves, for each listed competition-local date,
+ *   its latest `min(count, slots starting that date)` slots; unlisted dates reserve none and the
+ *   area's `fixedReserveSlots` is ignored.
+ * - Otherwise, when any area carries `fixedReserveSlots`, each area reserves its own latest
  *   `min(fixedReserveSlots, slots on that area)` slots, ordered by start instant across the whole
  *   competition (not per day). An over-reserved small area never consumes another area's slots.
  * - Otherwise the legacy aggregate `input.fixedReserveSlots` reserves the latest slots overall.
@@ -507,9 +531,10 @@ export type CalendarCapacitySlotSet = {
   reserveSlots: readonly CalendarCapacitySlot[];
   usableSlots: CalendarCapacitySlot[];
   requestedReserveSlots: number;
+  reserveOverflows: readonly CapacityReserveOverflow[];
 };
 
-function calendarSlotSet(model: ReturnType<typeof buildCalendarModel>): CalendarCapacitySlotSet {
+function calendarSlotSet(model: ReturnType<typeof buildCalendarModel>, timeZone: string): CalendarCapacitySlotSet {
   const slots: CalendarCapacitySlot[] = [];
   for (const interval of model.intervals) {
     for (let index = 0; index < interval.slots; index += 1) {
@@ -529,20 +554,47 @@ function calendarSlotSet(model: ReturnType<typeof buildCalendarModel>): Calendar
   // Intervals are ordered by start instant, so each candidate list below is chronological and
   // "latest N" is its tail.
   const reserved = new Set<string>();
+  const reserveOverflows: CapacityReserveOverflow[] = [];
   let requestedReserveSlots = 0;
-  const reserve = (candidates: readonly CalendarCapacitySlot[], count: number) => {
+  const reserve = (
+    candidates: readonly CalendarCapacitySlot[],
+    count: number,
+    areaId: string | null,
+    date: string | null,
+  ) => {
     requestedReserveSlots += count;
+    if (count > candidates.length) {
+      reserveOverflows.push({ areaId, date, requestedSlots: count, availableSlots: candidates.length });
+    }
     for (const slot of candidates.slice(Math.max(0, candidates.length - count))) reserved.add(slot.id);
   };
-  if (model.areas.some((area) => area.fixedReserveSlots !== undefined)) {
+  if (model.areas.some((area) => area.fixedReserveSlots !== undefined || area.dailyReserveSlots != null)) {
+    const localDate = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
     for (const area of model.areas) {
-      reserve(
-        slots.filter((slot) => slot.areaId === area.id),
-        area.fixedReserveSlots ?? 0,
-      );
+      const areaSlots = slots.filter((slot) => slot.areaId === area.id);
+      if (area.dailyReserveSlots != null) {
+        // Group once by competition-local start date; each listed date is then a map lookup.
+        const byDate = new Map<string, CalendarCapacitySlot[]>();
+        for (const slot of areaSlots) {
+          const date = localDate.format(slot.startEpochMs);
+          const list = byDate.get(date);
+          if (list) list.push(slot);
+          else byDate.set(date, [slot]);
+        }
+        for (const [date, count] of Object.entries(area.dailyReserveSlots).sort(([a], [b]) => a.localeCompare(b))) {
+          reserve(byDate.get(date) ?? [], count, area.id, date);
+        }
+      } else {
+        reserve(areaSlots, area.fixedReserveSlots ?? 0, area.id, null);
+      }
     }
   } else {
-    reserve(slots, model.legacyReserveSlots);
+    reserve(slots, model.legacyReserveSlots, null, null);
   }
   return {
     intervals: model.intervals,
@@ -550,12 +602,13 @@ function calendarSlotSet(model: ReturnType<typeof buildCalendarModel>): Calendar
     reserveSlots: slots.filter((slot) => reserved.has(slot.id)),
     usableSlots: slots.filter((slot) => !reserved.has(slot.id)),
     requestedReserveSlots,
+    reserveOverflows,
   };
 }
 
 /** Canonical full/reserve/usable grids; see {@link CalendarCapacitySlotSet} for the reserve rule. */
 export function buildCalendarCapacitySlotSet(input: CalendarCapacityInput): CalendarCapacitySlotSet {
-  return calendarSlotSet(buildCalendarModel(input));
+  return calendarSlotSet(buildCalendarModel(input), input.timeZone);
 }
 
 export function buildCalendarCapacitySlots(input: CalendarCapacityInput): CalendarCapacitySlot[] {

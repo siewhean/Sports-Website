@@ -3,12 +3,12 @@
  *
  * Implements deliverables R1.2 and R1.4 from docs/EXECUTION_ROADMAP.md:
  * - Creates organisations, competitions, entries, formats, and officials entirely through the API.
- * - Executes mock-tournament scenarios 1-10 across all five supported sports.
+ * - Executes mock-tournament scenarios 1-11 across all five supported sports.
  * - Enforces zero-5xx budget check and fails on any unexpected 4xx response.
  * - Supports fast and full profiles.
  *
  * Usage:
- *   pnpm simulate:tournament [--profile=fast|full] [--scenario=1..10]
+ *   pnpm simulate:tournament [--profile=fast|full] [--scenario=1..11]
  */
 
 import { randomUUID } from "node:crypto";
@@ -2435,6 +2435,158 @@ async function runScenario10(ctx: SimContext): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario 11: Independent buffers per court/local day and public schedule isolation.
+async function runScenario11(ctx: SimContext): Promise<void> {
+  const { comp, division } = await createStandardTournament(ctx, "badminton", "s11-daily-buffers");
+  const template = createDefaultFormatTemplates(8).find((item) => item.strategy === "compact_knockout")!;
+  await materializeAndPublishFormat(ctx, comp.id, division.id, template.graph);
+  const before = await publishedPlacements(ctx, comp.id);
+  const publicBefore = await ctx.request({ method: "GET", url: `/api/v1/public/competitions/${comp.slug}/current` });
+  type CapacityArea = {
+    id: string;
+    name: string;
+    slot_minutes: number;
+    fixed_reserve_slots: number;
+    daily_reserve_slots: Record<string, number> | null;
+    availability: Array<{ id: string; date: string; start_time: string; end_time: string; cross_midnight: boolean }>;
+  };
+  type Capacity = {
+    revision: number;
+    timezone: string;
+    areas: CapacityArea[];
+    effective: { rawTotalSlots: number; fixedReserveSlots: number; availableMatchSlots: number };
+  };
+  const initial = (
+    await ctx.request({ method: "GET", url: `/api/v1/competitions/${comp.id}/capacity` })
+  ).json<Capacity>();
+  const counts = [
+    { "2027-04-01": 0, "2027-04-02": 1 },
+    { "2027-04-01": 2, "2027-04-02": 3 },
+  ];
+  const saveAreas = initial.areas.map((area, index) => ({
+    id: area.id,
+    name: area.name,
+    slot_minutes: area.slot_minutes,
+    fixed_reserve_slots: 7,
+    daily_reserve_slots: counts[index]!,
+    availability: area.availability.map((window) => ({
+      id: window.id,
+      date: window.date,
+      start_time: window.start_time,
+      end_time: window.end_time,
+      cross_midnight: window.cross_midnight,
+    })),
+  }));
+  await ctx.request({
+    method: "PUT",
+    url: `/api/v1/competitions/${comp.id}/capacity`,
+    payload: { revision: initial.revision, areas: saveAreas },
+  });
+  const loaded = (
+    await ctx.request({ method: "GET", url: `/api/v1/competitions/${comp.id}/capacity` })
+  ).json<Capacity>();
+  for (const area of loaded.areas) {
+    const expected = saveAreas.find((item) => item.id === area.id)!.daily_reserve_slots;
+    if (
+      !area.daily_reserve_slots ||
+      Object.entries(expected).some(([date, count]) => area.daily_reserve_slots![date] !== count)
+    ) {
+      throw new Error(`Scenario 11 daily buffer counts did not survive reload on ${area.name}`);
+    }
+  }
+  assertSamePlacements(before, await publishedPlacements(ctx, comp.id), "Scenario 11 capacity save");
+  const publicAfter = await ctx.request({ method: "GET", url: `/api/v1/public/competitions/${comp.slug}/current` });
+  if (
+    JSON.stringify(publicBefore.json<{ schedule: unknown }>().schedule) !==
+    JSON.stringify(publicAfter.json<{ schedule: unknown }>().schedule)
+  ) {
+    throw new Error("Scenario 11 capacity save changed the public schedule before publication");
+  }
+  const grid = buildCalendarCapacitySlotSet({
+    timeZone: loaded.timezone,
+    slotMinutes: 60,
+    areas: loaded.areas.map((area) => ({
+      id: area.id,
+      name: area.name,
+      fixedReserveSlots: area.fixed_reserve_slots,
+      dailyReserveSlots: area.daily_reserve_slots,
+    })),
+    availability: loaded.areas.flatMap((area) =>
+      area.availability.map((window) => ({
+        id: window.id,
+        areaId: area.id,
+        date: window.date,
+        startTime: window.start_time,
+        endTime: window.end_time,
+        crossMidnight: window.cross_midnight,
+      })),
+    ),
+  });
+  const sqlCapacity = await ctx.sql<
+    { available: number }[]
+  >`SELECT phase3_available_match_slots(${comp.id}::uuid) AS available`;
+  if (
+    grid.allSlots.length !== 48 ||
+    grid.reserveSlots.length !== 6 ||
+    grid.usableSlots.length !== 42 ||
+    loaded.effective.rawTotalSlots !== 48 ||
+    loaded.effective.fixedReserveSlots !== 6 ||
+    loaded.effective.availableMatchSlots !== 42 ||
+    Number(sqlCapacity[0]?.available) !== 42
+  ) {
+    throw new Error(
+      `Scenario 11 SQL/domain/API capacity mismatch: ${JSON.stringify({ effective: loaded.effective, sqlCapacity, all: grid.allSlots.length, reserve: grid.reserveSlots.length, usable: grid.usableSlots.length })}`,
+    );
+  }
+  const dateFormatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: loaded.timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  for (const area of loaded.areas)
+    for (const [date, count] of Object.entries(area.daily_reserve_slots!)) {
+      const reserved = grid.reserveSlots.filter(
+        (slot) => slot.areaId === area.id && dateFormatter.format(slot.startEpochMs) === date,
+      );
+      if (reserved.length !== count)
+        throw new Error(`Scenario 11 reserve leakage across court/day: ${area.name} ${date}`);
+    }
+  const next = await generateAndPublishScheduleViaJob(ctx, comp.id);
+  const detail = (await ctx.request({ method: "GET", url: `/api/v1/schedule-revisions/${next.revisionId}` })).json<{
+    assignments: PublishedPlacement[];
+  }>();
+  for (const assignment of detail.assignments) {
+    if (
+      grid.reserveSlots.some(
+        (slot) =>
+          slot.areaId === assignment.area_id &&
+          slot.startEpochMs < assignment.end_epoch_ms &&
+          assignment.start_epoch_ms < slot.endEpochMs,
+      )
+    ) {
+      throw new Error(`Scenario 11 solver consumed buffer space for ${assignment.match_id}`);
+    }
+  }
+  // A legacy client omitting the new property must retain explicitly saved per-day settings.
+  const legacyAreas = saveAreas.map(({ daily_reserve_slots: _daily, ...area }) => area);
+  await ctx.request({
+    method: "PUT",
+    url: `/api/v1/competitions/${comp.id}/capacity`,
+    payload: { revision: loaded.revision, areas: legacyAreas },
+  });
+  const legacyReload = (
+    await ctx.request({ method: "GET", url: `/api/v1/competitions/${comp.id}/capacity` })
+  ).json<Capacity>();
+  if (
+    legacyReload.effective.availableMatchSlots !== 42 ||
+    legacyReload.areas.some((area) => !area.daily_reserve_slots)
+  ) {
+    throw new Error("Scenario 11 old-client save discarded daily buffer configuration");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main Harness Runner
 // ---------------------------------------------------------------------------
 async function main() {
@@ -2443,8 +2595,8 @@ async function main() {
   const profile: Profile = profileArg === "full" ? "full" : "fast";
   const scenarioArg = args.find((a) => a.startsWith("--scenario="))?.split("=")[1];
   const targetScenario = scenarioArg ? Number(scenarioArg) : null;
-  if (targetScenario !== null && (!Number.isInteger(targetScenario) || targetScenario < 1 || targetScenario > 10)) {
-    throw new Error("--scenario must be an integer from 1 to 10");
+  if (targetScenario !== null && (!Number.isInteger(targetScenario) || targetScenario < 1 || targetScenario > 11)) {
+    throw new Error("--scenario must be an integer from 1 to 11");
   }
 
   console.log(`\n${col.cyan("====================================================================")}`);
@@ -2612,6 +2764,7 @@ async function main() {
     { number: 8, name: "Walkovers & withdrawals in standings", fn: runScenario8 },
     { number: 9, name: "AI proposal validation & quotas", fn: runScenario9 },
     { number: 10, name: "Reserve slots stay empty", fn: runScenario10 },
+    { number: 11, name: "Independent court/day buffer slots", fn: runScenario11 },
   ];
 
   const results: ScenarioResult[] = [];

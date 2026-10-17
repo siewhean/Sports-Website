@@ -85,6 +85,7 @@ export type Phase3CapacityReplaceInput = {
     sortOrder?: number;
     slotMinutes: number;
     fixedReserveSlots?: number;
+    dailyReserveSlots?: Record<string, number> | null;
     availability: Phase3CapacityWindowInput[];
     unavailable?: Phase3CapacityWindowInput[];
   }>;
@@ -102,6 +103,7 @@ export type Phase3CapacityResponse = {
     sort_order: number;
     slot_minutes: number;
     fixed_reserve_slots: number;
+    daily_reserve_slots: Record<string, number> | null;
     /** Open matches in published/ready-for-review schedules that use this area. */
     scheduled_match_count: number;
     /** Dropped from the last capacity save but kept because scheduled matches still use it. */
@@ -2629,10 +2631,11 @@ export class Phase3Runtime {
           "All playing areas must use one competition slot duration",
         );
       }
-      const existingAreas = await tx.unsafe<{ id: string; name: string }>(
-        `SELECT id, name FROM playing_areas WHERE competition_id=$1`,
-        [competitionId],
-      );
+      const existingAreas = await tx.unsafe<{
+        id: string;
+        name: string;
+        daily_reserve_slots: Record<string, number> | null;
+      }>(`SELECT id, name, daily_reserve_slots FROM playing_areas WHERE competition_id=$1`, [competitionId]);
       const existingWindowIds = new Set(
         (
           await tx.unsafe<{ id: string }>(
@@ -2678,7 +2681,15 @@ export class Phase3Runtime {
           id = unclaimedByName.get(nameKey) ?? randomUUID();
           unclaimedByName.delete(nameKey);
         }
-        return { ...area, id, sortOrder: area.sortOrder ?? index };
+        return {
+          ...area,
+          id,
+          sortOrder: area.sortOrder ?? index,
+          dailyReserveSlots:
+            area.dailyReserveSlots === undefined
+              ? (existingAreas.find((existing) => existing.id === id)?.daily_reserve_slots ?? null)
+              : area.dailyReserveSlots,
+        };
       });
 
       const availability = preparedAreas.flatMap((area) =>
@@ -2703,6 +2714,30 @@ export class Phase3Runtime {
       if (new Set(identifiers).size !== identifiers.length) {
         throw new ApiError(422, ErrorCode.CAPACITY_ID_DUPLICATE, "Capacity resource identifiers must be unique");
       }
+      // Cheap bounds first, before any calendar computation: every window and every daily reserve
+      // date must fall inside the competition's dates. This also bounds a daily reserve map to at
+      // most one key per competition day, so an oversized map never reaches the slot builder.
+      const outsideCompetitionDates = [...availability, ...unavailable].some((window) => {
+        const endDate = window.crossMidnight ? new Date(`${window.date}T00:00:00.000Z`) : null;
+        if (endDate) endDate.setUTCDate(endDate.getUTCDate() + 1);
+        const resolvedEndDate = endDate?.toISOString().slice(0, 10) ?? window.date;
+        return window.date < full.starts_on || resolvedEndDate > full.ends_on;
+      });
+      if (outsideCompetitionDates) {
+        throw new ApiError(422, ErrorCode.CAPACITY_INVALID, "Capacity windows must stay within competition dates");
+      }
+      const outsideReserveArea = preparedAreas.find((area) =>
+        Object.keys(area.dailyReserveSlots ?? {}).some(
+          (date) => !/^\d{4}-\d{2}-\d{2}$/.test(date) || date < full.starts_on || date > full.ends_on,
+        ),
+      );
+      if (outsideReserveArea) {
+        throw new ApiError(
+          422,
+          ErrorCode.CAPACITY_INVALID,
+          `daily_reserve_slots for ${outsideReserveArea.name.trim()} must only use competition dates`,
+        );
+      }
       const domainInput = {
         timeZone: timezone,
         areas: preparedAreas.map((area) => ({
@@ -2710,6 +2745,7 @@ export class Phase3Runtime {
           name: area.name,
           sortOrder: area.sortOrder,
           fixedReserveSlots: area.fixedReserveSlots ?? 0,
+          dailyReserveSlots: area.dailyReserveSlots,
         })),
         availability,
         unavailable,
@@ -2726,15 +2762,6 @@ export class Phase3Runtime {
           error instanceof Error ? error.message : "Capacity input is invalid",
         );
       }
-      const outsideCompetitionDates = [...availability, ...unavailable].some((window) => {
-        const endDate = window.crossMidnight ? new Date(`${window.date}T00:00:00.000Z`) : null;
-        if (endDate) endDate.setUTCDate(endDate.getUTCDate() + 1);
-        const resolvedEndDate = endDate?.toISOString().slice(0, 10) ?? window.date;
-        return window.date < full.starts_on || resolvedEndDate > full.ends_on;
-      });
-      if (outsideCompetitionDates) {
-        throw new ApiError(422, ErrorCode.CAPACITY_INVALID, "Capacity windows must stay within competition dates");
-      }
       await tx.unsafe(`DELETE FROM competition_availability_windows WHERE competition_id=$1`, [competitionId]);
       await tx.unsafe(`DELETE FROM playing_area_unavailable_intervals WHERE competition_id=$1`, [competitionId]);
 
@@ -2742,16 +2769,25 @@ export class Phase3Runtime {
         // Defence in depth: the conflict update is restricted to this competition's own row, so even
         // an id that slipped past the ownership filter above can never rewrite another tenant's court.
         const written = await tx.unsafe<{ id: string }>(
-          `INSERT INTO playing_areas (id,competition_id,name,sort_order,slot_minutes,fixed_reserve_slots)
-           VALUES ($1,$2,$3,$4,$5,$6)
+          `INSERT INTO playing_areas (id,competition_id,name,sort_order,slot_minutes,fixed_reserve_slots,daily_reserve_slots)
+           VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
            ON CONFLICT (id) DO UPDATE SET
              name=EXCLUDED.name,
              sort_order=EXCLUDED.sort_order,
              slot_minutes=EXCLUDED.slot_minutes,
-             fixed_reserve_slots=EXCLUDED.fixed_reserve_slots
+             fixed_reserve_slots=EXCLUDED.fixed_reserve_slots,
+             daily_reserve_slots=EXCLUDED.daily_reserve_slots
            WHERE playing_areas.competition_id=EXCLUDED.competition_id
            RETURNING id`,
-          [area.id, competitionId, area.name.trim(), area.sortOrder, area.slotMinutes, area.fixedReserveSlots ?? 0],
+          [
+            area.id,
+            competitionId,
+            area.name.trim(),
+            area.sortOrder,
+            area.slotMinutes,
+            area.fixedReserveSlots ?? 0,
+            area.dailyReserveSlots,
+          ],
         );
         if (written.length !== 1) {
           throw new ApiError(422, ErrorCode.CAPACITY_INVALID, "Capacity input is invalid");
@@ -3109,13 +3145,14 @@ export class Phase3Runtime {
       sort_order: number;
       slot_minutes: number;
       fixed_reserve_slots: number;
+      daily_reserve_slots: Record<string, number> | null;
       scheduled_match_count: number;
       retained: boolean;
     }>(
       // Every area is listed. An area dropped from the last capacity save is kept (not deleted)
       // while scheduled matches still reference it; it has no availability and is flagged
       // `retained` with its open scheduled-match count so the organiser can re-plan those matches.
-      `SELECT pa.id,pa.name,pa.sort_order,COALESCE(pa.slot_minutes,30)::int AS slot_minutes,pa.fixed_reserve_slots,
+      `SELECT pa.id,pa.name,pa.sort_order,COALESCE(pa.slot_minutes,30)::int AS slot_minutes,pa.fixed_reserve_slots,pa.daily_reserve_slots,
          (SELECT count(*)::int FROM scheduled_matches sm
             JOIN schedule_revisions sr ON sr.id=sm.schedule_revision_id
             JOIN matches m ON m.id=sm.match_id
@@ -3191,6 +3228,7 @@ export class Phase3Runtime {
         name: area.name,
         sortOrder: area.sort_order,
         fixedReserveSlots: area.fixed_reserve_slots,
+        dailyReserveSlots: area.daily_reserve_slots,
       })),
       requiredMatchSlots: await this.requiredFormatSlots(database, competitionId),
     });
@@ -3207,6 +3245,7 @@ export class Phase3Runtime {
         sort_order: area.sort_order,
         slot_minutes: area.slot_minutes,
         fixed_reserve_slots: area.fixed_reserve_slots,
+        daily_reserve_slots: area.daily_reserve_slots,
         scheduled_match_count: area.scheduled_match_count,
         retained: area.retained,
         availability: available
