@@ -148,14 +148,7 @@ export function CompetitionCreateForm({
   const [announcement, setAnnouncement] = useState("");
   const [activeStep, setActiveStep] = useState(0);
   const [slugEdited, setSlugEdited] = useState(loadSlugEdited);
-  const [days, setDays] = useState<DaySchedule[]>(() => [
-    {
-      date: "2027-05-01",
-      opens: "09:00",
-      closes: "18:00",
-      breaks: [],
-    },
-  ]);
+  const [days, setDays] = useState<DaySchedule[]>([]);
   const [divisionName, setDivisionName] = useState<string>(messages.organiserCreate.defaultDivision);
   const [teamCount, setTeamCount] = useState<number>(8);
   const formRef = useRef<HTMLFormElement>(null);
@@ -369,6 +362,19 @@ export function CompetitionCreateForm({
       return;
     }
 
+    const startsOn = draft.starts_on || days[0]?.date;
+    const endsOn = draft.ends_on || days[days.length - 1]?.date;
+    if (!startsOn || !endsOn || days.length === 0) {
+      setFieldErrors({
+        [phase3CompetitionCreateMachine.fields.startsOn]: fieldErrorMessage(
+          phase3CompetitionCreateMachine.fields.startsOn,
+        ),
+      });
+      setCommandError(messages.organiserCreate.validationSummary);
+      requestAnimationFrame(() => focusField(phase3CompetitionCreateMachine.fields.startsOn));
+      return;
+    }
+
     setBusy(true);
     setCommandError("");
     setAnnouncement(messages.organiserCreate.saving);
@@ -409,17 +415,7 @@ export function CompetitionCreateForm({
         });
       }
 
-      const daysPayload =
-        days.length > 0
-          ? days
-          : [
-              {
-                date: draft.starts_on || "2027-05-01",
-                opens: "09:00",
-                closes: "18:00",
-                breaks: [],
-              },
-            ];
+      const daysPayload = days;
 
       const divName = divisionName.trim() || "Open";
       const shortCode = generateDivisionShortCode(divName, new Set());
@@ -431,8 +427,6 @@ export function CompetitionCreateForm({
         },
       ];
 
-      const startsOn = draft.starts_on || daysPayload[0]!.date;
-      const endsOn = draft.ends_on || daysPayload[daysPayload.length - 1]!.date;
       const slug = draft.slug || slugify(draft.name);
 
       const response = await fetch("/api/phase3/competitions", {
@@ -442,8 +436,8 @@ export function CompetitionCreateForm({
           ...draft,
           organisation_id: organisationId,
           slug,
-          venue: draft.venue.trim() || "Main Venue",
-          address: draft.address.trim() || "Main Venue",
+          venue: draft.venue.trim(),
+          address: draft.address.trim(),
           starts_on: startsOn,
           ends_on: endsOn,
           days: daysPayload,
@@ -673,13 +667,23 @@ export function CompetitionCreateForm({
           <DayHoursEditor
             days={days}
             onChange={setDays}
-            startDate={draft.starts_on || (days[0]?.date ?? "2027-05-01")}
-            endDate={draft.ends_on || (days[days.length - 1]?.date ?? "2027-05-01")}
+            startDate={draft.starts_on || (days[0]?.date ?? "")}
+            endDate={draft.ends_on || (days[days.length - 1]?.date ?? "")}
             onRangeChange={(start, end) => {
               update(phase3CompetitionCreateMachine.fields.startsOn, start);
               update(phase3CompetitionCreateMachine.fields.endsOn, end);
             }}
           />
+          {fieldErrors.starts_on ? (
+            <p id={`${phase3CompetitionCreateMachine.fields.startsOn}-error`} className={styles.error}>
+              {fieldErrors.starts_on}
+            </p>
+          ) : null}
+          {fieldErrors.ends_on ? (
+            <p id={`${phase3CompetitionCreateMachine.fields.endsOn}-error`} className={styles.error}>
+              {fieldErrors.ends_on}
+            </p>
+          ) : null}
 
           <details className={styles.venueDetails}>
             <summary>{messages.organiserCreate.guidedVenueDetails}</summary>

@@ -17,6 +17,8 @@ import {
   materialiseFiveSportScoreEvent,
   parseFiveSportScoreCommand,
   reduceFiveSportScoreEvents,
+  generateDivisionShortCode,
+  placeholderLabel,
   type AppliedSportAction,
   type FiveSportScoreCommand,
   type FiveSportScoreEvent,
@@ -1252,9 +1254,10 @@ export class Phase2Runtime {
       );
       if ((existing[0]?.count ?? 0) >= 1)
         throw new ApiError(409, ErrorCode.SLICE_DIVISION_LIMIT, "This slice supports one division");
-      const rows = await tx.unsafe<{ id: string }>(
-        `INSERT INTO divisions (competition_id, name, team_limit) VALUES ($1,$2,$3) RETURNING id`,
-        [competitionId, input.name.trim(), input.teamLimit],
+      const shortCode = generateDivisionShortCode(input.name.trim(), []);
+      const rows = await tx.unsafe<{ id: string; short_code: string | null }>(
+        `INSERT INTO divisions (competition_id, name, short_code, team_limit) VALUES ($1,$2,$3,$4) RETURNING id, short_code`,
+        [competitionId, input.name.trim(), shortCode, input.teamLimit],
       );
       const division = required(rows, "Division was not created");
       await this.evidence(tx, {
@@ -1266,7 +1269,7 @@ export class Phase2Runtime {
         targetId: division.id,
         after: input,
       });
-      return { id: division.id, name: input.name.trim(), team_limit: input.teamLimit };
+      return { id: division.id, name: input.name.trim(), short_code: division.short_code, team_limit: input.teamLimit };
     });
   }
 
@@ -5537,8 +5540,8 @@ export class Phase2Runtime {
       );
     }
     const publicCompetitionStatus = competition.status;
-    const divisions = await tx.unsafe<{ id: string; name: string }>(
-      `SELECT id,name FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`,
+    const divisions = await tx.unsafe<{ id: string; name: string; short_code: string | null }>(
+      `SELECT id,name,short_code FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`,
       [competitionId],
     );
     required(divisions, "Division not found");
@@ -5553,6 +5556,10 @@ export class Phase2Runtime {
             away_entry_id: string | null;
             home_name: string | null;
             away_name: string | null;
+            home_entry_type: string | null;
+            away_entry_type: string | null;
+            home_seed: number | null;
+            away_seed: number | null;
             starts_at: Date | string;
             ends_at: Date | string;
             area_id: string;
@@ -5560,6 +5567,8 @@ export class Phase2Runtime {
           }>(
             `SELECT m.id,m.division_id,m.code,m.stage,sm.home_entry_id,sm.away_entry_id,
                   home.name AS home_name,away.name AS away_name,
+                  home.entry_type AS home_entry_type,away.entry_type AS away_entry_type,
+                  home.seed AS home_seed,away.seed AS away_seed,
                   sm.starts_at,sm.ends_at,pa.id AS area_id,pa.name AS area_name
            FROM competition_publications cp
            JOIN scheduled_matches sm ON sm.schedule_revision_id=cp.published_schedule_revision_id
@@ -5581,6 +5590,10 @@ export class Phase2Runtime {
             away_entry_id: string;
             home_name: string;
             away_name: string;
+            home_entry_type: string | null;
+            away_entry_type: string | null;
+            home_seed: number | null;
+            away_seed: number | null;
             home_score: number;
             away_score: number;
             state: "final" | "corrected";
@@ -5589,6 +5602,8 @@ export class Phase2Runtime {
           }>(
             `SELECT DISTINCT ON (m.id) m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
                   home.name AS home_name,away.name AS away_name,
+                  home.entry_type AS home_entry_type,away.entry_type AS away_entry_type,
+                  home.seed AS home_seed,away.seed AS away_seed,
                   s.home_score,s.away_score,s.state,s.created_at,s.snapshot
            FROM matches m JOIN match_result_snapshots s ON s.match_id=m.id
            JOIN division_entries home ON home.id=m.home_entry_id
@@ -5599,73 +5614,6 @@ export class Phase2Runtime {
             [competitionId, resultVersion],
           )
         : [];
-    const persistedPublicResults: Array<PublicMatchResult & { division_id: string }> = results.map((match) => ({
-      division_id: match.division_id,
-      id: match.id,
-      code: match.code,
-      stage: match.stage,
-      home: { id: match.home_entry_id, name: match.home_name },
-      away: { id: match.away_entry_id, name: match.away_name },
-      home_score: match.home_score,
-      away_score: match.away_score,
-      state: match.state,
-      updated_at: serializedDate(match.created_at),
-      ...publicScoreDetails(match.snapshot, true),
-    }));
-    const liveCutoff = liveMatchStaleCutoff(this.now(), this.liveMatchStaleAfterMs);
-    const liveMatches = await tx.unsafe<{
-      id: string;
-      division_id: string;
-      code: string;
-      stage: string;
-      home_entry_id: string;
-      away_entry_id: string;
-      home_name: string;
-      away_name: string;
-      stream_updated_at: Date | string;
-    }>(
-      `SELECT m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
-              home.name AS home_name,away.name AS away_name,stream.updated_at AS stream_updated_at
-       FROM matches m
-       JOIN match_score_streams stream ON stream.match_id=m.id
-       JOIN division_entries home ON home.id=m.home_entry_id
-       JOIN division_entries away ON away.id=m.away_entry_id
-       WHERE m.competition_id=$1 AND m.state='in_progress'
-         AND (stream.updated_at > $2 OR m.id = ANY($3::uuid[]))
-       ORDER BY m.id`,
-      // A live match abandoned without scoring activity must not stay "LIVE"
-      // for spectators. It is not finalised: it simply drops out of the live
-      // results (fixture shows as scheduled, any earlier confirmed result is
-      // kept) and reappears as soon as scoring resumes.
-      [competitionId, liveCutoff, [...(options.liveScores?.keys() ?? [])]],
-    );
-    const liveResults: Array<PublicMatchResult & { division_id: string }> = [];
-    const liveVersions = new Map<string, number>();
-    for (const match of liveMatches) {
-      const knownScore = options.liveScores?.get(match.id);
-      const canonical = await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true });
-      liveVersions.set(match.id, Number(canonical.aggregateVersion));
-      const homeScore = knownScore !== undefined ? knownScore.home : canonical.state.score.home;
-      const awayScore = knownScore !== undefined ? knownScore.away : canonical.state.score.away;
-      liveResults.push({
-        division_id: match.division_id,
-        id: match.id,
-        code: match.code,
-        stage: match.stage,
-        home: { id: match.home_entry_id, name: match.home_name },
-        away: { id: match.away_entry_id, name: match.away_name },
-        home_score: homeScore,
-        away_score: awayScore,
-        state: "in_progress",
-        updated_at: serializedDate(match.stream_updated_at),
-        ...publicScoreDetails(canonical.state),
-      });
-    }
-    const liveMatchIds = new Set(liveResults.map((result) => result.id));
-    const projectionResults = [
-      ...persistedPublicResults.filter((result) => !liveMatchIds.has(result.id)),
-      ...liveResults,
-    ];
     const standings =
       resultVersion > 0
         ? await tx.unsafe<{ division_id: string; standings: unknown; explanation: unknown }>(
@@ -5728,6 +5676,145 @@ export class Phase2Runtime {
         .filter((group) => group.entry_ids.length > 0);
       groupsByDivision.set(divisionId, groups);
     }
+    const entryGroupMembership = new Map<string, { groupLabel: string; position: number }>();
+    for (const groups of groupsByDivision.values()) {
+      groups.forEach((group) => {
+        group.entry_ids.forEach((entryId, index) => {
+          entryGroupMembership.set(entryId, { groupLabel: group.id, position: index + 1 });
+        });
+      });
+    }
+    const divisionMap = new Map(divisions.map((d) => [d.id, d]));
+    const resolvePublicName = (
+      divisionId: string,
+      entryId: string | null,
+      name: string | null,
+      entryType: string | null,
+      seed: number | null,
+    ): string => {
+      if (!entryId) return name ?? "TBD";
+      if (entryType !== "placeholder") return name ?? "TBD";
+      const div = divisionMap.get(divisionId);
+      return placeholderLabel({
+        entry: { id: entryId, name: name ?? "", entry_type: "placeholder", seed: seed ?? null },
+        groupMembership: entryGroupMembership.get(entryId),
+        divisionShortCode: div?.short_code ?? null,
+        multiDivision: divisions.length > 1,
+        isPublic: true,
+      });
+    };
+
+    const persistedPublicResults: Array<PublicMatchResult & { division_id: string }> = results.map((match) => ({
+      division_id: match.division_id,
+      id: match.id,
+      code: match.code,
+      stage: match.stage,
+      home: {
+        id: match.home_entry_id,
+        name: resolvePublicName(
+          match.division_id,
+          match.home_entry_id,
+          match.home_name,
+          match.home_entry_type,
+          match.home_seed,
+        ),
+      },
+      away: {
+        id: match.away_entry_id,
+        name: resolvePublicName(
+          match.division_id,
+          match.away_entry_id,
+          match.away_name,
+          match.away_entry_type,
+          match.away_seed,
+        ),
+      },
+      home_score: match.home_score,
+      away_score: match.away_score,
+      state: match.state,
+      updated_at: serializedDate(match.created_at),
+      ...publicScoreDetails(match.snapshot, true),
+    }));
+
+    const liveCutoff = liveMatchStaleCutoff(this.now(), this.liveMatchStaleAfterMs);
+    const liveMatches = await tx.unsafe<{
+      id: string;
+      division_id: string;
+      code: string;
+      stage: string;
+      home_entry_id: string;
+      away_entry_id: string;
+      home_name: string;
+      away_name: string;
+      home_entry_type: string | null;
+      away_entry_type: string | null;
+      home_seed: number | null;
+      away_seed: number | null;
+      stream_updated_at: Date | string;
+    }>(
+      `SELECT m.id,m.division_id,m.code,m.stage,m.home_entry_id,m.away_entry_id,
+              home.name AS home_name,away.name AS away_name,
+              home.entry_type AS home_entry_type,away.entry_type AS away_entry_type,
+              home.seed AS home_seed,away.seed AS away_seed,
+              stream.updated_at AS stream_updated_at
+       FROM matches m
+       JOIN match_score_streams stream ON stream.match_id=m.id
+       JOIN division_entries home ON home.id=m.home_entry_id
+       JOIN division_entries away ON away.id=m.away_entry_id
+       WHERE m.competition_id=$1 AND m.state='in_progress'
+         AND (stream.updated_at > $2 OR m.id = ANY($3::uuid[]))
+       ORDER BY m.id`,
+      // A live match abandoned without scoring activity must not stay "LIVE"
+      // for spectators. It is not finalised: it simply drops out of the live
+      // results (fixture shows as scheduled, any earlier confirmed result is
+      // kept) and reappears as soon as scoring resumes.
+      [competitionId, liveCutoff, [...(options.liveScores?.keys() ?? [])]],
+    );
+    const liveResults: Array<PublicMatchResult & { division_id: string }> = [];
+    const liveVersions = new Map<string, number>();
+    for (const match of liveMatches) {
+      const knownScore = options.liveScores?.get(match.id);
+      const canonical = await this.canonicalScoreState(tx, match.id, { readOnlyLegacyProjection: true });
+      liveVersions.set(match.id, Number(canonical.aggregateVersion));
+      const homeScore = knownScore !== undefined ? knownScore.home : canonical.state.score.home;
+      const awayScore = knownScore !== undefined ? knownScore.away : canonical.state.score.away;
+      liveResults.push({
+        division_id: match.division_id,
+        id: match.id,
+        code: match.code,
+        stage: match.stage,
+        home: {
+          id: match.home_entry_id,
+          name: resolvePublicName(
+            match.division_id,
+            match.home_entry_id,
+            match.home_name,
+            match.home_entry_type,
+            match.home_seed,
+          ),
+        },
+        away: {
+          id: match.away_entry_id,
+          name: resolvePublicName(
+            match.division_id,
+            match.away_entry_id,
+            match.away_name,
+            match.away_entry_type,
+            match.away_seed,
+          ),
+        },
+        home_score: homeScore,
+        away_score: awayScore,
+        state: "in_progress",
+        updated_at: serializedDate(match.stream_updated_at),
+        ...publicScoreDetails(canonical.state),
+      });
+    }
+    const liveMatchIds = new Set(liveResults.map((result) => result.id));
+    const projectionResults = [
+      ...persistedPublicResults.filter((result) => !liveMatchIds.has(result.id)),
+      ...liveResults,
+    ];
     const bracketByDivision = new Map(bracket.map((snapshot) => [snapshot.division_id, snapshot]));
     const publicDivisions: PublicDivisionProjection[] = divisions.map((division) => {
       const publicSchedule: PublicScheduledMatch[] = schedule
@@ -5736,8 +5823,26 @@ export class Phase2Runtime {
           id: match.id,
           code: match.code,
           stage: match.stage,
-          home: { id: match.home_entry_id, name: match.home_name ?? "TBD" },
-          away: { id: match.away_entry_id, name: match.away_name ?? "TBD" },
+          home: {
+            id: match.home_entry_id,
+            name: resolvePublicName(
+              match.division_id,
+              match.home_entry_id,
+              match.home_name,
+              match.home_entry_type,
+              match.home_seed,
+            ),
+          },
+          away: {
+            id: match.away_entry_id,
+            name: resolvePublicName(
+              match.division_id,
+              match.away_entry_id,
+              match.away_name,
+              match.away_entry_type,
+              match.away_seed,
+            ),
+          },
           starts_at: serializedDate(match.starts_at),
           ends_at: serializedDate(match.ends_at),
           area: { id: match.area_id, name: match.area_name },
@@ -5896,7 +6001,7 @@ export class Phase2Runtime {
         )
       )[0] ?? null;
     const divisions = await this.sql.unsafe<Record<string, unknown>>(
-      `SELECT d.id,d.name,d.team_limit,
+      `SELECT d.id,d.name,d.short_code,d.team_limit,
               COALESCE(jsonb_agg(jsonb_build_object('id',e.id,'name',e.name,'seed',e.seed,'status',e.status,
                 'entry_type',e.entry_type,'revision',e.revision)
                 ORDER BY e.seed) FILTER (WHERE e.id IS NOT NULL),'[]'::jsonb) AS entries
@@ -5904,6 +6009,60 @@ export class Phase2Runtime {
        WHERE d.competition_id=$1 GROUP BY d.id ORDER BY d.created_at`,
       [competitionId],
     );
+    const poolMembership = await this.sql.unsafe<{ division_id: string; pool_id: string; entry_id: string }>(
+      `SELECT DISTINCT m.division_id, COALESCE(m.graph_pool_id,m.graph_stage_id) AS pool_id, entry.entry_id
+       FROM matches m
+       CROSS JOIN LATERAL (VALUES (m.home_entry_id),(m.away_entry_id)) AS entry(entry_id)
+       WHERE m.competition_id=$1 AND m.graph_purpose='pool' AND entry.entry_id IS NOT NULL
+         AND COALESCE(m.graph_pool_id,m.graph_stage_id) IS NOT NULL
+       ORDER BY m.division_id, pool_id, entry.entry_id`,
+      [competitionId],
+    );
+    const poolsByDivision = new Map<string, Map<string, string[]>>();
+    for (const row of poolMembership) {
+      const pools = poolsByDivision.get(row.division_id) ?? new Map<string, string[]>();
+      pools.set(row.pool_id, [...(pools.get(row.pool_id) ?? []), row.entry_id]);
+      poolsByDivision.set(row.division_id, pools);
+    }
+    const entryGroupMembership = new Map<string, { groupLabel: string; position: number }>();
+    for (const pools of poolsByDivision.values()) {
+      const sortedPoolIds = [...pools.keys()].sort();
+      sortedPoolIds.forEach((poolId, poolIndex) => {
+        const groupLabel =
+          String.fromCharCode(65 + (poolIndex % 26)) + (poolIndex >= 26 ? String(Math.floor(poolIndex / 26)) : "");
+        const entryIds = pools.get(poolId)!;
+        entryIds.forEach((entryId, entryIndex) => {
+          entryGroupMembership.set(entryId, { groupLabel, position: entryIndex + 1 });
+        });
+      });
+    }
+
+    const processedDivisions = divisions.map((division) => {
+      const rawEntries = Array.isArray(division.entries) ? (division.entries as Array<Record<string, unknown>>) : [];
+      const shortCode = typeof division.short_code === "string" ? division.short_code : null;
+      return {
+        ...division,
+        short_code: shortCode,
+        entries: rawEntries.map((entry, index) => {
+          if (entry.entry_type === "placeholder") {
+            const derived = placeholderLabel({
+              entry: {
+                id: String(entry.id),
+                name: String(entry.name),
+                entry_type: "placeholder",
+                seed: typeof entry.seed === "number" ? entry.seed : null,
+              },
+              groupMembership: entryGroupMembership.get(String(entry.id)),
+              divisionShortCode: shortCode,
+              multiDivision: divisions.length > 1,
+              fallbackIndex: typeof entry.seed === "number" ? entry.seed : index + 1,
+            });
+            return { ...entry, name: derived };
+          }
+          return entry;
+        }),
+      };
+    });
     const capacity = await this.sql.unsafe<Record<string, unknown>>(
       `SELECT pa.id,pa.name,pa.sort_order,
               COALESCE(jsonb_agg(jsonb_build_object('id',w.id,'starts_at',w.starts_at,'ends_at',w.ends_at)
@@ -5978,7 +6137,7 @@ export class Phase2Runtime {
     return {
       competition,
       settings,
-      divisions,
+      divisions: processedDivisions,
       capacity,
       current_format: format,
       private_schedule: privateSchedule,

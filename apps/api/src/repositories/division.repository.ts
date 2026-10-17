@@ -1,6 +1,6 @@
 import type { SqlExecutor, DivisionRecord, LockMode } from "./types.js";
 
-const DIVISION_COLUMNS = `id, competition_id, name, code, team_limit, settings_override, revision, created_at, updated_at`;
+const DIVISION_COLUMNS = `id, competition_id, name, code, short_code, team_limit, settings_override, revision, created_at, updated_at`;
 
 export class DivisionRepository {
   constructor(private readonly sql: SqlExecutor) {}

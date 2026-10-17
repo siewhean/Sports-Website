@@ -44,6 +44,8 @@ describe("division and entry commands", () => {
     ).toEqual({
       id: "division-1",
       name: "Open",
+      code: null,
+      shortCode: null,
       entryLimit: 8,
       entries: [],
     });

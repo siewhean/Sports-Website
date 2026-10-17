@@ -2,6 +2,7 @@
 
 import { type FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { placeholderLabel } from "@matchday/domain";
 import { NumberField } from "@matchday/ui/react";
 import {
   isPlaceholderEntry,
@@ -355,11 +356,24 @@ export function EntriesEditor({
                 <ol className={styles.entries}>
                   {activeEntries.map((entry) => {
                     const placeholder = isPlaceholderEntry(entry);
+                    const displayName = placeholder
+                      ? placeholderLabel({
+                          entry: {
+                            id: entry.id,
+                            name: entry.name,
+                            entry_type: phase3EntriesMachine.placeholderEntryType,
+                            seed: entry.seed,
+                          },
+                          divisionShortCode: division.shortCode ?? division.code,
+                          multiDivision: divisions.length > 1,
+                          fallbackIndex: entry.seed ?? undefined,
+                        })
+                      : entry.name;
                     return (
                       <li key={entry.id}>
                         <span>{entry.seed ?? "—"}</span>
                         <strong>
-                          {placeholder ? <span className={styles.placeholderName}>{entry.name}</span> : entry.name}
+                          {placeholder ? <span className={styles.placeholderName}>{displayName}</span> : displayName}
                           {placeholder ? (
                             <span className={styles.placeholderBadge}>{phase3EntriesCopy.unnamedBadge}</span>
                           ) : null}

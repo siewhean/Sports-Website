@@ -221,9 +221,9 @@ export function competitionCreateFieldIsValid(field: CompetitionCreateField, dra
     case "sport_code":
       return isPhase3CompetitionSport(draft.sport_code);
     case "venue":
-      return draft.venue.trim().length > 0;
+      return draft.venue.length <= 240;
     case "address":
-      return draft.address.trim().length > 0;
+      return draft.address.length <= 240;
     case "locality":
       return true;
     case "country_code":

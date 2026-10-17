@@ -3,7 +3,7 @@ import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
 import type { Phase3Actor } from "./phase-3-runtime.js";
 import { escapeCsvCell } from "./csv-escape.js";
-import { isFeatureAllowed } from "@matchday/domain";
+import { generateDivisionShortCode, isFeatureAllowed } from "@matchday/domain";
 import type { SubscriptionTier } from "@matchday/contracts";
 import { ARCHIVE_HTTPS_URL_PATTERN, ARCHIVE_LIMITS } from "./competition-archive-schema.js";
 
@@ -797,12 +797,21 @@ export class ExportRuntime {
       let totalMatches = 0;
 
       if (Array.isArray(doc.divisions)) {
+        const existingCodes = new Set<string>();
         for (const div of doc.divisions) {
           const divId = randomUUID();
+          const divName = typeof div.name === "string" ? div.name.trim() : "Division";
+          const rawDiv = div as Record<string, unknown>;
+          const rawCode = typeof rawDiv.short_code === "string" ? rawDiv.short_code.trim().toUpperCase() : null;
+          const shortCode =
+            rawCode && /^[A-Z0-9]{1,4}$/.test(rawCode) && !existingCodes.has(rawCode)
+              ? rawCode
+              : generateDivisionShortCode(divName, existingCodes);
+          existingCodes.add(shortCode);
           await tx.unsafe(
-            `INSERT INTO divisions (id, competition_id, name, team_limit)
-             VALUES ($1, $2, $3, 16)`,
-            [divId, compId, div.name.trim()],
+            `INSERT INTO divisions (id, competition_id, name, short_code, team_limit)
+             VALUES ($1, $2, $3, $4, 16)`,
+            [divId, compId, divName, shortCode],
           );
 
           const entryIdMap = new Map<string, string>();

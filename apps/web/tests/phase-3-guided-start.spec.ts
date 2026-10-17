@@ -63,11 +63,11 @@ test("guided start allows creating a competition with <= 3 inputs at 1280px desk
   await page.getByLabel("Sport", { exact: true }).selectOption("badminton");
   // 2. Competition name
   await page.getByLabel("Competition name").fill("National Open");
-  // 3. Planned teams
-  await page.getByLabel("Planned teams").fill("12");
+  // 3. Competition start date
+  await page.getByLabel("Start date").fill("2027-06-12");
 
-  // Verify match estimate preview
-  await expect(page.getByText("Estimated matches: ~18–24")).toBeVisible();
+  // Verify match estimate preview with default planned teams (8)
+  await expect(page.getByText("Estimated matches: ~12–16")).toBeVisible();
 
   // Create competition
   await page.getByRole("button", { name: "Create competition" }).click();
@@ -80,24 +80,56 @@ test("guided start allows creating a competition with <= 3 inputs at 1280px desk
     name: "National Open",
     slug: "national-open",
     sport_code: "badminton",
+    starts_on: "2027-06-12",
+    ends_on: "2027-06-12",
+    venue: "",
+    address: "",
   });
-  expect(payload.days).toBeDefined();
-  expect(Array.isArray(payload.days)).toBe(true);
+  expect(payload.days).toEqual([
+    expect.objectContaining({
+      date: "2027-06-12",
+      opens: "09:00",
+      closes: "18:00",
+    }),
+  ]);
   expect(payload.divisions).toEqual([
     expect.objectContaining({
       name: "Open",
       short_code: "O",
-      planned_entry_count: 12,
+      planned_entry_count: 8,
     }),
   ]);
 
   await expect(page).toHaveURL(new RegExp(`/organiser/competitions/${competitionId}/setup`));
 });
 
+test("guided start requires competition dates and does not silently fall back to a default date", async ({ page }) => {
+  await page.route("**/api/phase3/competitions", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    await route.abort();
+  });
+
+  await page.goto("/organiser/competitions/new");
+  await dismissConsent(page);
+
+  await page.getByLabel("Sport", { exact: true }).selectOption("badminton");
+  await page.getByLabel("Competition name").fill("Undated Open");
+
+  // Click create without choosing dates
+  await page.getByRole("button", { name: "Create competition" }).click();
+
+  await expect(page.getByText("Check the highlighted competition detail.")).toBeVisible();
+  await expect(page.getByText("Select a valid start date (YYYY-MM-DD).")).toBeVisible();
+});
+
 test("guided start allows creating a competition with <= 3 inputs at 375px mobile viewport", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 667 });
 
   let competitionCalls = 0;
+  let mobilePayload: Record<string, unknown> | null = null;
 
   await page.route("**/api/phase3/organisations/bootstrap", async (route) => {
     await route.fulfill({
@@ -118,6 +150,7 @@ test("guided start allows creating a competition with <= 3 inputs at 375px mobil
       return;
     }
     competitionCalls += 1;
+    mobilePayload = route.request().postDataJSON();
     await route.fulfill({
       status: 201,
       contentType: "application/json",
@@ -138,8 +171,8 @@ test("guided start allows creating a competition with <= 3 inputs at 375px mobil
   await page.getByLabel("Sport", { exact: true }).selectOption("volleyball");
   // 2. Competition name
   await page.getByLabel("Competition name").fill("Beach Summer Cup");
-  // 3. Planned teams
-  await page.getByLabel("Planned teams").fill("8");
+  // 3. Start date
+  await page.getByLabel("Start date").fill("2027-07-10");
 
   await expect(page.getByText("Estimated matches: ~12–16")).toBeVisible();
 
@@ -147,6 +180,13 @@ test("guided start allows creating a competition with <= 3 inputs at 375px mobil
   await page.getByRole("button", { name: "Create competition" }).click();
 
   await expect.poll(() => competitionCalls).toBe(1);
+  expect(mobilePayload).toMatchObject({
+    name: "Beach Summer Cup",
+    starts_on: "2027-07-10",
+    ends_on: "2027-07-10",
+    venue: "",
+    address: "",
+  });
   await expect(page).toHaveURL(new RegExp(`/organiser/competitions/${competitionId}/setup`));
 });
 

@@ -4,9 +4,23 @@ import { buildPlannedEntryDrafts, plannedEntryCountIssue } from "../../src/phase
 describe("planned entry drafts", () => {
   it("names placeholders after the division and seeds them from 1", () => {
     expect(buildPlannedEntryDrafts({ divisionName: " Women ", count: 3, entryLimit: 8, existing: [] })).toEqual([
-      { name: "Women 1", seed: 1 },
-      { name: "Women 2", seed: 2 },
-      { name: "Women 3", seed: 3 },
+      { name: "Team 1", seed: 1 },
+      { name: "Team 2", seed: 2 },
+      { name: "Team 3", seed: 3 },
+    ]);
+
+    expect(
+      buildPlannedEntryDrafts({
+        divisionName: "Women",
+        divisionShortCode: "W",
+        multiDivision: true,
+        count: 2,
+        entryLimit: 8,
+        existing: [],
+      }),
+    ).toEqual([
+      { name: "W-1", seed: 1 },
+      { name: "W-2", seed: 2 },
     ]);
   });
 
@@ -16,14 +30,14 @@ describe("planned entry drafts", () => {
       count: 2,
       entryLimit: 8,
       existing: [
-        { name: "open 1", seed: 1, status: "active" },
-        { name: "Open 2", seed: 3, status: "withdrawn" },
+        { name: "Team 1", seed: 1, status: "active" },
+        { name: "Team 2", seed: 3, status: "withdrawn" },
         { name: "Kayak Club", seed: 2, status: "confirmed" },
       ],
     });
     expect(drafts).toEqual([
-      { name: "Open 2", seed: 3 },
-      { name: "Open 3", seed: 4 },
+      { name: "Team 3", seed: 3 },
+      { name: "Team 4", seed: 4 },
     ]);
   });
 
@@ -35,15 +49,14 @@ describe("planned entry drafts", () => {
       existing: [{ name: "Named", seed: 2, status: "active" }],
     });
     expect(drafts).toEqual([
-      { name: "Open 1", seed: 1 },
-      { name: "Open 2", seed: null },
+      { name: "Team 1", seed: 1 },
+      { name: "Team 2", seed: null },
     ]);
   });
 
   it("keeps the ordinal visible for very long division names", () => {
     const [draft] = buildPlannedEntryDrafts({ divisionName: "x".repeat(130), count: 1, entryLimit: 8, existing: [] });
-    expect(draft?.name.length).toBe(120);
-    expect(draft?.name.endsWith(" 1")).toBe(true);
+    expect(draft?.name).toBe("Team 1");
   });
 });
 

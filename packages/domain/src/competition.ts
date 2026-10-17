@@ -44,6 +44,7 @@ export type CompetitionDivision = {
   id: string;
   name: string;
   code: string | null;
+  shortCode?: string | null;
   entries: readonly CompetitionEntryRecord[];
   createdAt: string;
   updatedAt: string;
@@ -543,7 +544,7 @@ export function markFirstMatchStarted(
 
 export function addDivision(
   competition: Competition,
-  input: { id: string; name: string; code?: string | null },
+  input: { id: string; name: string; code?: string | null; shortCode?: string | null },
   context: CommandContext,
 ): CommandResult<Competition> {
   const blocked = ensureMutable<Competition>(competition);
@@ -561,11 +562,22 @@ export function addDivision(
   ) {
     issues.push(issue("duplicate_name", "division.name", "Division name already exists"));
   }
+  const shortCode = input.shortCode?.trim().toUpperCase() || null;
+  if (shortCode) {
+    if (!/^[A-Z0-9]{1,4}$/.test(shortCode)) {
+      issues.push(
+        issue("invalid_format", "division.shortCode", "Division short code must be 1 to 4 uppercase letters or digits"),
+      );
+    } else if (competition.divisions.some((d) => d.shortCode === shortCode)) {
+      issues.push(issue("duplicate_short_code", "division.shortCode", "Division short code already exists"));
+    }
+  }
   if (issues.length) return failure("VALIDATION_ERROR", "Division is invalid", issues);
   const division: CompetitionDivision = {
     id: input.id,
     name: input.name.trim(),
     code: input.code?.trim() || null,
+    shortCode,
     entries: [],
     createdAt: context.occurredAt,
     updatedAt: context.occurredAt,
@@ -581,7 +593,7 @@ export function addDivision(
 export function updateDivision(
   competition: Competition,
   divisionId: string,
-  patch: { name?: string; code?: string | null },
+  patch: { name?: string; code?: string | null; shortCode?: string | null },
   context: CommandContext,
 ): CommandResult<Competition> {
   const blocked = ensureMutable<Competition>(competition);
@@ -598,6 +610,26 @@ export function updateDivision(
   ) {
     issues.push(issue("duplicate_name", "division.name", "Division name already exists"));
   }
+  let nextShortCode: string | null = division.shortCode ?? null;
+  if (patch.shortCode !== undefined) {
+    if (patch.shortCode === null || patch.shortCode.trim() === "") {
+      nextShortCode = null;
+    } else {
+      const trimmed = patch.shortCode.trim().toUpperCase();
+      if (!/^[A-Z0-9]{1,4}$/.test(trimmed)) {
+        issues.push(
+          issue(
+            "invalid_format",
+            "division.shortCode",
+            "Division short code must be 1 to 4 uppercase letters or digits",
+          ),
+        );
+      } else if (competition.divisions.some((d) => d.id !== divisionId && d.shortCode === trimmed)) {
+        issues.push(issue("duplicate_short_code", "division.shortCode", "Division short code already exists"));
+      }
+      nextShortCode = trimmed;
+    }
+  }
   if (issues.length) return failure("VALIDATION_ERROR", "Division is invalid", issues);
   const value = mapDivision(
     competition,
@@ -607,6 +639,7 @@ export function updateDivision(
       ...patch,
       name,
       code: patch.code === undefined ? current.code : patch.code?.trim() || null,
+      shortCode: nextShortCode,
       updatedAt: context.occurredAt,
     }),
     context.occurredAt,

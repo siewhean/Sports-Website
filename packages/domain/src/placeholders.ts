@@ -12,11 +12,11 @@ export type PlaceholderEntryInput = Readonly<{
 
 export type PlaceholderLabelOptions = Readonly<{
   entry: PlaceholderEntryInput;
-  groupMembership?: PlaceholderGroupMembership | null;
-  divisionShortCode?: string | null;
-  multiDivision?: boolean;
-  isPublic?: boolean;
-  fallbackIndex?: number;
+  groupMembership?: PlaceholderGroupMembership | null | undefined;
+  divisionShortCode?: string | null | undefined;
+  multiDivision?: boolean | undefined;
+  isPublic?: boolean | undefined;
+  fallbackIndex?: number | undefined;
 }>;
 
 /**

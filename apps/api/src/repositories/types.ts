@@ -42,6 +42,7 @@ export type DivisionRecord = {
   competition_id: string;
   name: string;
   code?: string | null;
+  short_code?: string | null;
   team_limit?: number | null;
   settings_override?: Record<string, unknown> | string | null;
   revision?: number;

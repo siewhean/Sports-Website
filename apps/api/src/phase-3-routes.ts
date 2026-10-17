@@ -513,8 +513,8 @@ export async function registerPhase3Routes(
             name: Type.String({ minLength: 1, maxLength: 160 }),
             slug: Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
             sport_code: Sport,
-            venue: Type.String({ minLength: 1 }),
-            address: Type.String({ minLength: 1 }),
+            venue: Type.Optional(Type.String({ maxLength: 240 })),
+            address: Type.Optional(Type.String({ maxLength: 240 })),
             locality: Type.Optional(Type.String()),
             country_code: Type.String({ pattern: "^[A-Z]{2}$" }),
             starts_on: Type.String({ format: "date" }),
@@ -527,7 +527,14 @@ export async function registerPhase3Routes(
           },
           { additionalProperties: false },
         ),
-        response: { 201: Generic, 400: ErrorResponse, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse },
+        response: {
+          201: Generic,
+          400: ErrorResponse,
+          401: ErrorResponse,
+          403: ErrorResponse,
+          409: ErrorResponse,
+          422: ErrorResponse,
+        },
         tags: ["phase3-competitions"],
       },
     },
@@ -540,8 +547,8 @@ export async function registerPhase3Routes(
             name: request.body.name,
             slug: request.body.slug,
             sportCode: request.body.sport_code,
-            venue: request.body.venue,
-            address: request.body.address,
+            venue: request.body.venue?.trim() ?? "",
+            address: request.body.address?.trim() ?? "",
             ...(request.body.locality ? { locality: request.body.locality } : {}),
             countryCode: request.body.country_code,
             startsOn: request.body.starts_on,
@@ -829,7 +836,13 @@ export async function registerPhase3Routes(
   app.patch<{
     Params: { competitionId: string; divisionId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
-    Body: { revision: number; name?: string; code?: string | null; entry_limit?: 8 | 12 | 16 | 24 | 48 };
+    Body: {
+      revision: number;
+      name?: string;
+      code?: string | null;
+      short_code?: string | null;
+      entry_limit?: 8 | 12 | 16 | 24 | 48;
+    };
   }>(
     "/api/v1/competitions/:competitionId/divisions/:divisionId",
     {
@@ -842,11 +855,12 @@ export async function registerPhase3Routes(
             revision: Type.Integer({ minimum: 1 }),
             name: Type.Optional(Type.String({ minLength: 1 })),
             code: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+            short_code: Type.Optional(Type.Union([Type.String(), Type.Null()])),
             entry_limit: Type.Optional(Type.Union([8, 12, 16, 24, 48].map((value) => Type.Literal(value)))),
           },
           { additionalProperties: false },
         ),
-        response: { 200: Generic, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse },
+        response: { 200: Generic, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
         tags: ["phase3-divisions"],
       },
     },
@@ -859,6 +873,7 @@ export async function registerPhase3Routes(
           revision: request.body.revision,
           ...(request.body.name ? { name: request.body.name } : {}),
           ...(request.body.code !== undefined ? { code: request.body.code } : {}),
+          ...(request.body.short_code !== undefined ? { shortCode: request.body.short_code } : {}),
           ...(request.body.entry_limit ? { entryLimit: request.body.entry_limit } : {}),
         },
         request.id,

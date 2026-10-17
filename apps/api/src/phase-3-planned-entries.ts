@@ -3,8 +3,9 @@
 // nothing else in the schema distinguishes them, so every count, cap, format
 // recommendation and schedule treats them exactly like named teams.
 
+import { placeholderLabel } from "@matchday/domain";
+
 export const PLANNED_ENTRY_COUNT_MAX = 48;
-const ENTRY_NAME_MAX_LENGTH = 120;
 
 export type PlannedEntryDraft = Readonly<{ name: string; seed: number | null }>;
 
@@ -13,21 +14,22 @@ function normaliseName(name: string): string {
 }
 
 /**
- * Builds the placeholder drafts for one planning request.
+ * Builds the placeholder drafts for one planning request per D16.
  *
- * Names follow "<Division name> N" and continue numbering past any placeholder
- * that already uses the pattern, skipping names that are already taken by an
- * active entry (case-insensitive) so the DB's active-name uniqueness index
+ * Names derive from placeholderLabel ("Team 1", "M-1"), continuing numbering
+ * past any placeholder that already uses the pattern, skipping names that are already taken
+ * by an active entry (case-insensitive) so the DB's active-name uniqueness index
  * cannot reject the batch. Seeds fill the lowest free slots within the division
  * limit, or stay null when none remain, matching how organisers seed by hand.
  */
 export function buildPlannedEntryDrafts(input: {
   divisionName: string;
+  divisionShortCode?: string | null;
+  multiDivision?: boolean;
   count: number;
   entryLimit: number;
   existing: ReadonlyArray<{ name: string; seed: number | null; status: string }>;
 }): readonly PlannedEntryDraft[] {
-  const prefix = input.divisionName.trim();
   const active = input.existing.filter((entry) => entry.status === "active" || entry.status === "confirmed");
   const takenNames = new Set(active.map((entry) => normaliseName(entry.name)));
   const takenSeeds = new Set(active.flatMap((entry) => (entry.seed === null ? [] : [entry.seed])));
@@ -36,16 +38,24 @@ export function buildPlannedEntryDrafts(input: {
   let seed = 1;
   while (drafts.length < input.count) {
     ordinal += 1;
-    const suffix = ` ${ordinal}`;
-    // Keep the ordinal visible even when a very long division name would push
-    // the label past the column limit.
-    const name = `${prefix.slice(0, ENTRY_NAME_MAX_LENGTH - suffix.length)}${suffix}`;
-    if (takenNames.has(normaliseName(name))) continue;
-    takenNames.add(normaliseName(name));
     while (seed <= input.entryLimit && takenSeeds.has(seed)) seed += 1;
     const assignedSeed = seed <= input.entryLimit ? seed : null;
     if (assignedSeed !== null) takenSeeds.add(assignedSeed);
-    drafts.push({ name, seed: assignedSeed });
+
+    const baseLabel = placeholderLabel({
+      entry: { entry_type: "placeholder", seed: assignedSeed },
+      divisionShortCode: input.divisionShortCode,
+      multiDivision: input.multiDivision,
+      fallbackIndex: ordinal,
+    });
+
+    let candidate = baseLabel;
+    let disambiguator = 2;
+    while (takenNames.has(normaliseName(candidate))) {
+      candidate = `${baseLabel} (${disambiguator++})`;
+    }
+    takenNames.add(normaliseName(candidate));
+    drafts.push({ name: candidate, seed: assignedSeed });
   }
   return drafts;
 }

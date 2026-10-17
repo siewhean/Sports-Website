@@ -66,9 +66,9 @@ describe("EntriesEditor planned teams", () => {
 
   it("marks placeholder entries as unnamed and offers a rename form", () => {
     const html = render(true);
-    const placeholder = entryItem(html, "Open 1");
+    const placeholder = entryItem(html, "Team 1");
     expect(placeholder).toContain(phase3EntriesCopy.unnamedBadge);
-    expect(html).toMatch(/<strong><span class="[^"]*">Open 1<\/span>/);
+    expect(html).toMatch(/<strong><span class="[^"]*">Team 1<\/span>/);
     expect(placeholder).toContain('name="placeholder-name"');
     expect(placeholder).toContain(phase3EntriesCopy.renameSave);
     expect(countOf(html, `>${phase3EntriesCopy.unnamedBadge}<`)).toBe(1);

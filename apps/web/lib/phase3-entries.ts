@@ -14,6 +14,8 @@ export type EntryEditorEntry = Readonly<{
 export type EntryEditorDivision = Readonly<{
   id: string;
   name: string;
+  code?: string | null;
+  shortCode?: string | null;
   entryLimit: number;
   entries: readonly EntryEditorEntry[];
 }>;
@@ -226,7 +228,9 @@ export function parseCreatedDivision(
   // Older API builds omit `entries`; treat that as "no placeholders created".
   const entries = item.entries === undefined ? [] : parseEntryList(item.entries, item.id);
   if (!entries || (expectedPlannedCount !== undefined && entries.length !== expectedPlannedCount)) return null;
-  return { id: item.id, name: item.name, entryLimit: item.team_limit, entries };
+  const code = typeof item.code === "string" ? item.code : null;
+  const shortCode = typeof item.short_code === "string" ? item.short_code : null;
+  return { id: item.id, name: item.name, code, shortCode, entryLimit: item.team_limit, entries };
 }
 
 export function parsePlannedEntries(value: unknown, expectedDivisionId: string): EntryEditorEntry[] | null {

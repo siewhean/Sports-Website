@@ -3,6 +3,7 @@ import type { Phase3SportCode } from "@matchday/contracts";
 import {
   competitionDomain,
   generateDivisionShortCode,
+  placeholderLabel,
   type AdvancementRule,
   type AdvancementSlot,
   type FormatGraph,
@@ -441,11 +442,13 @@ export class Phase3Runtime {
       id: string;
       name: string;
       code: string | null;
+      short_code: string | null;
       created_at: Date | string;
       updated_at: Date | string;
-    }>(`SELECT id,name,code,created_at,updated_at FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`, [
-      competitionId,
-    ]);
+    }>(
+      `SELECT id,name,code,short_code,created_at,updated_at FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`,
+      [competitionId],
+    );
     const entries = await tx.unsafe<{
       id: string;
       division_id: string;
@@ -467,6 +470,34 @@ export class Phase3Runtime {
        WHERE d.competition_id=$1 ORDER BY e.created_at,e.id`,
       [competitionId],
     );
+    const poolMembership = await tx.unsafe<{ division_id: string; pool_id: string; entry_id: string }>(
+      `SELECT DISTINCT m.division_id, COALESCE(m.graph_pool_id,m.graph_stage_id) AS pool_id, entry.entry_id
+       FROM matches m
+       CROSS JOIN LATERAL (VALUES (m.home_entry_id),(m.away_entry_id)) AS entry(entry_id)
+       WHERE m.competition_id=$1 AND m.graph_purpose='pool' AND entry.entry_id IS NOT NULL
+         AND COALESCE(m.graph_pool_id,m.graph_stage_id) IS NOT NULL
+       ORDER BY m.division_id, pool_id, entry.entry_id`,
+      [competitionId],
+    );
+    const poolsByDivision = new Map<string, Map<string, string[]>>();
+    for (const row of poolMembership) {
+      const pools = poolsByDivision.get(row.division_id) ?? new Map<string, string[]>();
+      pools.set(row.pool_id, [...(pools.get(row.pool_id) ?? []), row.entry_id]);
+      poolsByDivision.set(row.division_id, pools);
+    }
+    const entryGroupMembership = new Map<string, { groupLabel: string; position: number }>();
+    for (const pools of poolsByDivision.values()) {
+      const sortedPoolIds = [...pools.keys()].sort();
+      sortedPoolIds.forEach((poolId, poolIndex) => {
+        const groupLabel =
+          String.fromCharCode(65 + (poolIndex % 26)) + (poolIndex >= 26 ? String(Math.floor(poolIndex / 26)) : "");
+        const entryIds = pools.get(poolId)!;
+        entryIds.forEach((entryId, entryIndex) => {
+          entryGroupMembership.set(entryId, { groupLabel, position: entryIndex + 1 });
+        });
+      });
+    }
+
     const instant = (value: Date | string | null): string | null =>
       value === null ? null : value instanceof Date ? value.toISOString() : new Date(value).toISOString();
     const restoredStatus = (value: string | null): competitionDomain.RestorableCompetitionStatus | null => {
@@ -496,12 +527,22 @@ export class Phase3Runtime {
         id: division.id,
         name: division.name,
         code: division.code,
+        shortCode: division.short_code,
         entries: entries
           .filter((entry) => entry.division_id === division.id)
-          .map((entry) => ({
+          .map((entry, index) => ({
             id: entry.id,
             divisionId: entry.division_id,
-            name: entry.name,
+            name:
+              entry.entry_type === "placeholder"
+                ? placeholderLabel({
+                    entry: { id: entry.id, name: entry.name, entry_type: "placeholder", seed: entry.seed },
+                    groupMembership: entryGroupMembership.get(entry.id),
+                    divisionShortCode: division.short_code,
+                    multiDivision: divisions.length > 1,
+                    fallbackIndex: index + 1,
+                  })
+                : entry.name,
             type: entry.entry_type,
             status: entry.status === "confirmed" ? "active" : entry.status,
             seed: entry.seed,
@@ -742,8 +783,33 @@ export class Phase3Runtime {
         `SELECT short_code FROM divisions WHERE competition_id=$1`,
         [competitionId],
       );
-      const existingCodes = existingDivs.map((d) => d.short_code).filter((code): code is string => Boolean(code));
-      const shortCode = input.shortCode ?? generateDivisionShortCode(input.name, existingCodes);
+      const existingCodes = new Set(
+        existingDivs
+          .map((d) => d.short_code)
+          .filter((code): code is string => Boolean(code))
+          .map((c) => c.toUpperCase()),
+      );
+      let shortCode: string;
+      if (input.shortCode !== undefined && input.shortCode !== null && input.shortCode.trim().length > 0) {
+        const trimmed = input.shortCode.trim().toUpperCase();
+        if (!/^[A-Z0-9]{1,4}$/.test(trimmed)) {
+          throw new ApiError(
+            422,
+            ErrorCode.VALIDATION_ERROR,
+            `Division short code "${input.shortCode}" is invalid; must be 1 to 4 uppercase letters or digits`,
+          );
+        }
+        if (existingCodes.has(trimmed)) {
+          throw new ApiError(
+            409,
+            ErrorCode.CONFLICT,
+            `Division short code "${trimmed}" already exists in this competition`,
+          );
+        }
+        shortCode = trimmed;
+      } else {
+        shortCode = generateDivisionShortCode(input.name, existingCodes);
+      }
       const rows = await tx.unsafe<Record<string, unknown>>(
         `INSERT INTO divisions (competition_id,name,code,short_code,team_limit) VALUES ($1,$2,$3,$4,$5)
          RETURNING id,competition_id,name,code,short_code,team_limit,revision`,
@@ -876,8 +942,20 @@ export class Phase3Runtime {
         ErrorCode.FREE_ENTRY_LIMIT_REACHED,
         `The free plan supports ${limit} active entries across all divisions, including planned teams`,
       );
+    const divRow = await tx.unsafe<{ short_code: string | null }>(`SELECT short_code FROM divisions WHERE id=$1`, [
+      target.divisionId,
+    ]);
+    const divCountRow = await tx.unsafe<{ count: string }>(
+      `SELECT count(*)::text AS count FROM divisions WHERE competition_id=$1`,
+      [target.competitionId],
+    );
+    const multiDivision = Number(divCountRow[0]?.count ?? "0") > 1;
+    const divisionShortCode = divRow[0]?.short_code ?? null;
+
     const drafts = buildPlannedEntryDrafts({
       divisionName: target.divisionName,
+      divisionShortCode,
+      multiDivision,
       count: target.count,
       entryLimit: target.entryLimit,
       existing,
@@ -907,17 +985,53 @@ export class Phase3Runtime {
     actor: Phase3Actor,
     competitionId: string,
     divisionId: string,
-    input: { revision: number; name?: string; code?: string | null; entryLimit?: 8 | 12 | 16 | 24 | 48 },
+    input: {
+      revision: number;
+      name?: string;
+      code?: string | null;
+      shortCode?: string | null;
+      entryLimit?: 8 | 12 | 16 | 24 | 48;
+    },
     requestId: string,
   ) {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
       if (competition.status === "archived")
         throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
+
+      let normalizedShortCode: string | null | undefined = undefined;
+      if (input.shortCode !== undefined) {
+        if (input.shortCode === null || input.shortCode.trim().length === 0) {
+          normalizedShortCode = null;
+        } else {
+          const trimmed = input.shortCode.trim().toUpperCase();
+          if (!/^[A-Z0-9]{1,4}$/.test(trimmed)) {
+            throw new ApiError(
+              422,
+              ErrorCode.VALIDATION_ERROR,
+              `Division short code "${input.shortCode}" is invalid; must be 1 to 4 uppercase letters or digits`,
+            );
+          }
+          const conflict = await tx.unsafe<{ id: string }>(
+            `SELECT id FROM divisions WHERE competition_id=$1 AND id<>$2 AND UPPER(short_code)=$3 LIMIT 1`,
+            [competitionId, divisionId, trimmed],
+          );
+          if (conflict.length > 0) {
+            throw new ApiError(
+              409,
+              ErrorCode.CONFLICT,
+              `Division short code "${trimmed}" already exists in this competition`,
+            );
+          }
+          normalizedShortCode = trimmed;
+        }
+      }
+
       const rows = await tx.unsafe<Record<string, unknown>>(
         `UPDATE divisions SET name=COALESCE($4,name),code=CASE WHEN $5 THEN $6 ELSE code END,
-           team_limit=COALESCE($7,team_limit),revision=revision+1,updated_at=$8
-         WHERE id=$1 AND competition_id=$2 AND revision=$3 RETURNING id,competition_id,name,code,team_limit,revision`,
+           short_code=CASE WHEN $7 THEN $8 ELSE short_code END,
+           team_limit=COALESCE($9,team_limit),revision=revision+1,updated_at=$10
+         WHERE id=$1 AND competition_id=$2 AND revision=$3 RETURNING id,competition_id,name,code,short_code,team_limit,revision`,
         [
           divisionId,
           competitionId,
@@ -925,6 +1039,8 @@ export class Phase3Runtime {
           input.name?.trim() ?? null,
           input.code !== undefined,
           input.code ?? null,
+          input.shortCode !== undefined,
+          normalizedShortCode ?? null,
           input.entryLimit ?? null,
           this.now(),
         ],
@@ -970,17 +1086,74 @@ export class Phase3Runtime {
     });
   }
 
-  async listEntries(actor: Phase3Actor, competitionId: string, divisionId: string) {
+  async listEntries(
+    actor: Phase3Actor,
+    competitionId: string,
+    divisionId: string,
+  ): Promise<Array<Record<string, unknown>>> {
     await this.competitionAccess(this.sql, competitionId, actor, false);
-    requiredRecord(
+    const division = requiredRecord(
       await this.divisionRepo.findByIdAndCompetitionId(divisionId, competitionId, "none", this.sql),
       "Division not found",
     );
-    return this.sql.unsafe<Record<string, unknown>>(
+    const divCountRow = await this.sql.unsafe<{ count: string }>(
+      `SELECT count(*)::text AS count FROM divisions WHERE competition_id=$1`,
+      [competitionId],
+    );
+    const multiDivision = Number(divCountRow[0]?.count ?? "0") > 1;
+
+    const poolMembership = await this.sql.unsafe<{ pool_id: string; entry_id: string }>(
+      `SELECT DISTINCT COALESCE(m.graph_pool_id,m.graph_stage_id) AS pool_id, entry.entry_id
+       FROM matches m
+       CROSS JOIN LATERAL (VALUES (m.home_entry_id),(m.away_entry_id)) AS entry(entry_id)
+       WHERE m.division_id=$1 AND m.graph_purpose='pool' AND entry.entry_id IS NOT NULL
+         AND COALESCE(m.graph_pool_id,m.graph_stage_id) IS NOT NULL
+       ORDER BY pool_id, entry.entry_id`,
+      [divisionId],
+    );
+    const pools = new Map<string, string[]>();
+    for (const row of poolMembership) {
+      pools.set(row.pool_id, [...(pools.get(row.pool_id) ?? []), row.entry_id]);
+    }
+    const entryGroupMembership = new Map<string, { groupLabel: string; position: number }>();
+    const sortedPoolIds = [...pools.keys()].sort();
+    sortedPoolIds.forEach((poolId, poolIndex) => {
+      const groupLabel =
+        String.fromCharCode(65 + (poolIndex % 26)) + (poolIndex >= 26 ? String(Math.floor(poolIndex / 26)) : "");
+      const entryIds = pools.get(poolId)!;
+      entryIds.forEach((entryId, entryIndex) => {
+        entryGroupMembership.set(entryId, { groupLabel, position: entryIndex + 1 });
+      });
+    });
+
+    const entries = await this.sql.unsafe<Record<string, unknown>>(
       `SELECT id,division_id,name,entry_type,status,seed,metadata,availability,replacement_entry_id,replaces_entry_id,revision,created_at,updated_at
        FROM division_entries WHERE division_id=$1 ORDER BY created_at,id`,
       [divisionId],
     );
+
+    return entries.map((entry, index) => {
+      const isPlaceholder = entry.entry_type === "placeholder";
+      const groupMembership = isPlaceholder ? entryGroupMembership.get(String(entry.id)) : undefined;
+      const derivedName = isPlaceholder
+        ? placeholderLabel({
+            entry: {
+              id: String(entry.id),
+              name: String(entry.name),
+              entry_type: "placeholder",
+              seed: typeof entry.seed === "number" ? entry.seed : null,
+            },
+            groupMembership,
+            divisionShortCode: division.short_code ?? null,
+            multiDivision,
+            fallbackIndex: index + 1,
+          })
+        : entry.name;
+      return {
+        ...entry,
+        name: derivedName,
+      };
+    });
   }
 
   private async assertEntriesEditable(tx: PostgresJsSql, competitionId: string, divisionId: string) {
@@ -1550,6 +1723,114 @@ export class Phase3Runtime {
           account_default_applied: boolean;
         };
       }
+
+      if (input.days && input.days.length > 0) {
+        const seenDates = new Set<string>();
+        const timePattern = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+        for (const day of input.days) {
+          if (!day.date || typeof day.date !== "string") {
+            throw new ApiError(422, ErrorCode.VALIDATION_ERROR, "Each day must specify a valid date");
+          }
+          if (day.date < input.startsOn || day.date > input.endsOn) {
+            throw new ApiError(
+              422,
+              ErrorCode.VALIDATION_ERROR,
+              `Day date "${day.date}" is outside competition dates ${input.startsOn} to ${input.endsOn}`,
+            );
+          }
+          if (seenDates.has(day.date)) {
+            throw new ApiError(422, ErrorCode.VALIDATION_ERROR, `Duplicate day date "${day.date}"`);
+          }
+          seenDates.add(day.date);
+
+          if (!timePattern.test(day.opens) || !timePattern.test(day.closes)) {
+            throw new ApiError(422, ErrorCode.VALIDATION_ERROR, `Invalid operating hours for date "${day.date}"`);
+          }
+          if (day.opens >= day.closes) {
+            throw new ApiError(
+              422,
+              ErrorCode.VALIDATION_ERROR,
+              `Operating hours open time "${day.opens}" must be strictly before close time "${day.closes}" on "${day.date}"`,
+            );
+          }
+
+          if (day.breaks && day.breaks.length > 0) {
+            const sortedBreaks = [...day.breaks].sort((a, b) => a.start.localeCompare(b.start));
+            let lastEnd = day.opens;
+            for (const b of sortedBreaks) {
+              if (!timePattern.test(b.start) || !timePattern.test(b.end)) {
+                throw new ApiError(422, ErrorCode.VALIDATION_ERROR, `Invalid break hours for date "${day.date}"`);
+              }
+              if (b.start >= b.end) {
+                throw new ApiError(
+                  422,
+                  ErrorCode.VALIDATION_ERROR,
+                  `Break start time "${b.start}" must be strictly before end time "${b.end}" on "${day.date}"`,
+                );
+              }
+              if (b.start < day.opens || b.end > day.closes) {
+                throw new ApiError(
+                  422,
+                  ErrorCode.VALIDATION_ERROR,
+                  `Break interval "${b.start}-${b.end}" must fall within operating hours "${day.opens}-${day.closes}" on "${day.date}"`,
+                );
+              }
+              if (b.start < lastEnd) {
+                throw new ApiError(
+                  422,
+                  ErrorCode.VALIDATION_ERROR,
+                  `Overlapping break interval starting at "${b.start}" on "${day.date}"`,
+                );
+              }
+              lastEnd = b.end;
+            }
+          }
+        }
+      }
+
+      const validatedDivisions: Array<{
+        id: string;
+        name: string;
+        shortCode: string;
+        entryLimit: number;
+        plannedEntryCount?: number;
+      }> = [];
+      if (input.divisions && input.divisions.length > 0) {
+        const existingCodes = new Set<string>();
+        for (const div of input.divisions) {
+          const divName = div.name.trim();
+          if (!divName) {
+            throw new ApiError(422, ErrorCode.VALIDATION_ERROR, "Division name cannot be empty");
+          }
+          let shortCode: string;
+          if (div.shortCode !== undefined && div.shortCode !== null && div.shortCode.trim().length > 0) {
+            const trimmed = div.shortCode.trim().toUpperCase();
+            if (!/^[A-Z0-9]{1,4}$/.test(trimmed)) {
+              throw new ApiError(
+                422,
+                ErrorCode.VALIDATION_ERROR,
+                `Division short code "${div.shortCode}" is invalid; must be 1 to 4 uppercase letters or digits`,
+              );
+            }
+            if (existingCodes.has(trimmed)) {
+              throw new ApiError(409, ErrorCode.CONFLICT, `Duplicate division short code "${trimmed}" in competition`);
+            }
+            shortCode = trimmed;
+          } else {
+            shortCode = generateDivisionShortCode(divName, existingCodes);
+          }
+          existingCodes.add(shortCode);
+          const entryLimit = Number(div.teamLimit ?? div.entryLimit ?? 16);
+          validatedDivisions.push({
+            id: randomUUID(),
+            name: divName,
+            shortCode,
+            entryLimit,
+            ...(div.plannedEntryCount !== undefined ? { plannedEntryCount: div.plannedEntryCount } : {}),
+          });
+        }
+      }
+
       const competitionId = randomUUID();
       expectDomain(
         this.domain.createCompetition(
@@ -1717,33 +1998,26 @@ export class Phase3Runtime {
         }
       }
 
-      if (input.divisions && input.divisions.length > 0) {
-        const existingCodes = new Set<string>();
-        for (const div of input.divisions) {
-          const divisionId = randomUUID();
-          const shortCode = div.shortCode ?? generateDivisionShortCode(div.name, existingCodes);
-          existingCodes.add(shortCode);
-          const entryLimit = Number(div.teamLimit ?? div.entryLimit ?? 16);
-          await tx.unsafe(
-            `INSERT INTO divisions (id,competition_id,name,short_code,team_limit)
-             VALUES ($1,$2,$3,$4,$5)`,
-            [divisionId, competition.id, div.name.trim(), shortCode, entryLimit],
-          );
-          await tx.unsafe(
-            `INSERT INTO division_sport_settings (division_id,competition_id,sport_code,pack_version,settings_override,updated_by)
-             SELECT $1,competition_id,sport_code,pack_version,'{}'::jsonb,$2
-             FROM competition_sport_settings WHERE competition_id=$3`,
-            [divisionId, actor.accountId, competition.id],
-          );
-          if (div.plannedEntryCount && div.plannedEntryCount > 0) {
-            await this.insertPlannedEntries(tx, actor, input.organisationId, requestId, {
-              competitionId: competition.id,
-              divisionId,
-              divisionName: div.name.trim(),
-              entryLimit,
-              count: div.plannedEntryCount,
-            });
-          }
+      for (const div of validatedDivisions) {
+        await tx.unsafe(
+          `INSERT INTO divisions (id,competition_id,name,short_code,team_limit)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [div.id, competition.id, div.name, div.shortCode, div.entryLimit],
+        );
+        await tx.unsafe(
+          `INSERT INTO division_sport_settings (division_id,competition_id,sport_code,pack_version,settings_override,updated_by)
+           SELECT $1,competition_id,sport_code,pack_version,'{}'::jsonb,$2
+           FROM competition_sport_settings WHERE competition_id=$3`,
+          [div.id, actor.accountId, competition.id],
+        );
+        if (div.plannedEntryCount && div.plannedEntryCount > 0) {
+          await this.insertPlannedEntries(tx, actor, input.organisationId, requestId, {
+            competitionId: competition.id,
+            divisionId: div.id,
+            divisionName: div.name,
+            entryLimit: div.entryLimit,
+            count: div.plannedEntryCount,
+          });
         }
       }
 
@@ -1848,17 +2122,34 @@ export class Phase3Runtime {
         id: string;
         name: string;
         code: string | null;
+        short_code: string | null;
         team_limit: number;
         settings_override: unknown;
       }>(
-        `SELECT id,name,code,team_limit,settings_override FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`,
+        `SELECT id,name,code,short_code,team_limit,settings_override FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`,
         [competitionId],
       );
+      const usedShortCodes = new Set<string>();
       for (const division of sourceDivisions) {
+        let shortCode: string;
+        if (division.short_code && !usedShortCodes.has(division.short_code.toUpperCase())) {
+          shortCode = division.short_code.toUpperCase();
+        } else {
+          shortCode = generateDivisionShortCode(division.name, usedShortCodes);
+        }
+        usedShortCodes.add(shortCode);
+
         const inserted = required(
           await tx.unsafe<{ id: string }>(
-            `INSERT INTO divisions (competition_id,name,code,team_limit,settings_override) VALUES ($1,$2,$3,$4,$5::jsonb) RETURNING id`,
-            [copy.id, division.name, division.code, division.team_limit, decodedJson(division.settings_override)],
+            `INSERT INTO divisions (competition_id,name,code,short_code,team_limit,settings_override) VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING id`,
+            [
+              copy.id,
+              division.name,
+              division.code,
+              shortCode,
+              division.team_limit,
+              decodedJson(division.settings_override),
+            ],
           ),
           "Division copy failed",
         );
