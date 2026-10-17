@@ -162,7 +162,7 @@ export function PublicCompetitionApp({
           {competition.sport} · {competition.dateLabel}
         </p>
         <h1>{competition.name}</h1>
-        <p className={styles.venue}>{competition.venue}</p>
+        {competition.venue?.trim() ? <p className={styles.venue}>{competition.venue}</p> : null}
       </header>
       <div className={styles.subHeader}>
         <div className={styles.subHeaderRow}>

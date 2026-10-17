@@ -284,8 +284,11 @@ function validateCompetitionFields(input: CompetitionInput | Competition): reado
   if (!(SUPPORTED_SPORTS as readonly string[]).includes(input.sport)) {
     issues.push(issue("unsupported_sport", "sport", "Competition must use one supported sport"));
   }
-  if (!input.location.venue.trim()) issues.push(issue("required", "location.venue", "Venue is required"));
-  if (!input.location.address.trim()) issues.push(issue("required", "location.address", "Address is required"));
+  // Venue and address are optional: guided start lets organisers add them later, and every surface
+  // hides an empty location line rather than rendering a blank label.
+  if (typeof input.location.venue !== "string" || typeof input.location.address !== "string") {
+    issues.push(issue("invalid_shape", "location", "Venue and address must be text (empty when not yet known)"));
+  }
   if (!COUNTRY_PATTERN.test(input.location.countryCode)) {
     issues.push(issue("invalid_country", "location.countryCode", "Country code must be ISO 3166-1 alpha-2"));
   }

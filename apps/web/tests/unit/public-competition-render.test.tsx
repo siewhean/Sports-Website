@@ -126,6 +126,25 @@ describe("spectator page render", () => {
     expect(html).toContain('aria-live="polite"');
   });
 
+  it("hides the venue line instead of rendering a blank or undefined label when no venue is set", () => {
+    const withVenue = renderToString(
+      <PublicCompetitionApp competition={competition} liveUpdates={false} renderedAt="2026-09-19T01:30:00Z" />,
+    );
+    expect(withVenue).toContain(">Hall</p>");
+    for (const venue of ["", "   ", undefined]) {
+      const html = renderToString(
+        <PublicCompetitionApp
+          competition={{ ...competition, venue } as unknown as CompetitionView}
+          liveUpdates={false}
+          renderedAt="2026-09-19T01:30:00Z"
+        />,
+      );
+      expect(html).not.toContain("undefined");
+      expect(html).not.toMatch(/<p class="[^"]*venue[^"]*">\s*<\/p>/);
+      expect(html).not.toContain(">Hall</p>");
+    }
+  });
+
   it("drops LIVE badges once the competition is completed", () => {
     const html = renderToString(
       <PublicCompetitionApp

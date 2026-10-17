@@ -160,6 +160,26 @@ describe("RES-021 & RES-025 - RES-032 Public Pages and SEO Verification", () => 
     expect(JSON.parse(serializeJsonLd(jsonLd!))).toEqual(jsonLd);
   });
 
+  it("omits the JSON-LD location when the competition has no venue", () => {
+    for (const venue of ["", "  ", undefined]) {
+      const jsonLd = publicCompetitionJsonLd(
+        {
+          slug: "summer-cup",
+          name: "Summer Cup",
+          sport: "Football",
+          startsOn: "2026-09-19",
+          endsOn: "2026-09-20",
+          status: "live",
+          ...(venue === undefined ? {} : { venue }),
+        },
+        publicOrigin,
+      );
+      expect(jsonLd).not.toBeNull();
+      expect(jsonLd).not.toHaveProperty("location");
+      expect(serializeJsonLd(jsonLd!)).not.toContain("undefined");
+    }
+  });
+
   it("generates SportsEvent JSON-LD for public match pages", () => {
     const jsonLd = publicMatchJsonLd(
       { slug: "summer-cup", name: "Summer Cup", sport: "Football", status: "live" },
