@@ -706,8 +706,14 @@
     border-left: 0;
   }
 
+  /* Visually hidden on phones, but still the link's accessible name. */
   .p2-wordmark > .p2-shell__brand {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }
 
