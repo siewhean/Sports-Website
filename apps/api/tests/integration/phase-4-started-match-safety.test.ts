@@ -491,10 +491,26 @@ describeInfrastructure("started and finished matches keep their published placem
         >`SELECT id,state FROM matches WHERE competition_id=${competitionId}`
       ).map((row) => [row.id, row.state]),
     );
-    const live = [...published.values()].find(
-      (placement) => placement.area_id === courtB && states.get(placement.match_id) === "pending",
+    // A match can only start once its feeders are played, so pick a dependency-free one: starting a
+    // knockout match while its feeders are still pending can leave too few earlier slots on the one
+    // open court, and the solver then (correctly) finds no schedule.
+    const notStarted = new Set(["pending", "ready"]);
+    const independent = new Set(
+      (
+        await client<{ id: string }[]>`
+          SELECT m.id FROM matches m WHERE m.competition_id=${competitionId}
+            AND NOT EXISTS (SELECT 1 FROM phase4_match_schedule_dependencies(m.id))`
+      ).map((row) => row.id),
     );
-    if (!live) throw new Error("Fixture needs a pending published match on Court B");
+    const live = [...published.values()]
+      .filter(
+        (placement) =>
+          placement.area_id === courtB &&
+          notStarted.has(states.get(placement.match_id) ?? "") &&
+          independent.has(placement.match_id),
+      )
+      .sort((left, right) => left.start_epoch_ms - right.start_epoch_ms)[0];
+    if (!live) throw new Error("Fixture needs a not-started, dependency-free published match on Court B");
     await setState(live.match_id, "in_progress");
     // Close Court B for the whole day.
     await phase3.replaceCapacity(actor(), competitionId, await capacityInput([]), randomUUID());
@@ -510,7 +526,7 @@ describeInfrastructure("started and finished matches keep their published placem
     // Every match that has not started left the closed court; started/finished ones all stayed.
     states.set(live.match_id, "in_progress");
     const onClosedCourt = regenerated.assignments.filter((assignment) => assignment.area_id === courtB);
-    expect(onClosedCourt.filter((assignment) => states.get(assignment.match_id) === "pending")).toEqual([]);
+    expect(onClosedCourt.filter((assignment) => notStarted.has(states.get(assignment.match_id) ?? ""))).toEqual([]);
     expect(onClosedCourt.every((assignment) => assignment.fixed && assignment.slot_id.startsWith("historical:"))).toBe(
       true,
     );
