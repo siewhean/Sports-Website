@@ -1,0 +1,13 @@
+{
+  "$comment": "The only colour literals MATCHDAY may use (owner decision D12). Two base colours (black background / white text, swapped in the light theme) plus exactly four accents: lime = actions, red = errors and urgent, blue = info and live, amber = warnings. Every other colour is a color-mix() of these. Adding an entry here is an owner decision.",
+  "base": {
+    "black": "#111513",
+    "white": "#ffffff"
+  },
+  "accents": {
+    "lime": "#b7dc22",
+    "red": "#d4443c",
+    "blue": "#4f6fd6",
+    "amber": "#e9a410"
+  }
+}

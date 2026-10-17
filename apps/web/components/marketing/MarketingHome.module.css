@@ -10,8 +10,8 @@
   align-items: center;
   min-height: min(780px, 82dvh);
   overflow: hidden;
-  background: #111513;
-  color: #f0f3ed;
+  background: var(--canvas);
+  color: var(--ink);
 }
 .heroCopy {
   position: relative;
@@ -48,7 +48,7 @@
 .summary {
   max-width: 53ch;
   margin: 28px 0 0;
-  color: #d1d8ce;
+  color: var(--ink-muted);
   font-size: clamp(1rem, 1.35vw, 1.2rem);
   line-height: 1.6;
 }
@@ -81,11 +81,11 @@
 }
 .primaryAction {
   background: var(--signal);
-  color: #15190e;
+  color: var(--signal-ink);
 }
 .secondaryAction {
-  border: 1px solid #859083;
-  color: #f4f7f1;
+  border: 1px solid var(--field-border);
+  color: var(--ink);
 }
 .heroVisual {
   position: absolute;
@@ -97,7 +97,7 @@
 .heroVisual::after {
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, #111513, transparent 65%);
+  background: linear-gradient(90deg, var(--canvas), transparent 65%);
   content: "";
 }
 .heroVisual img {
@@ -210,7 +210,7 @@
   color: var(--ink-muted);
 }
 .eventStatus[data-live="true"] {
-  color: #506d0c;
+  color: var(--signal-text);
 }
 .eventStatus svg {
   width: 18px;
@@ -279,7 +279,7 @@
     opacity: 0.25;
   }
   .heroVisual::after {
-    background: linear-gradient(90deg, #111513, transparent);
+    background: linear-gradient(90deg, var(--canvas), transparent);
   }
   .section {
     display: block;
@@ -316,10 +316,5 @@
   .heroActions a,
   .journey {
     transition: none;
-  }
-}
-@media (prefers-color-scheme: dark) {
-  .eventStatus[data-live="true"] {
-    color: #c4e86d;
   }
 }

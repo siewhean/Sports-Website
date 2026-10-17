@@ -67,7 +67,7 @@ test("capacity controls preserve touch targets while the hydrated source stays r
   await dismissConsent(page);
   const surface = page.getByTestId("phase3-capacity");
   await expect(surface).toBeVisible();
-  await expect(page.getByText("Capacity revision")).toBeVisible();
+  await expect(page.getByText("Capacity version")).toBeVisible();
   await expect(page.getByRole("button", { name: "Save capacity" })).toBeDisabled();
   await page.getByLabel("Area name").fill("Pool Alpha");
   await expect(page.getByRole("button", { name: "Save capacity" })).toBeEnabled();

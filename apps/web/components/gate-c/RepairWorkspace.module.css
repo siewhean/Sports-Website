@@ -13,7 +13,7 @@
 .error {
   margin: 0;
   padding: 0.875rem 1rem;
-  border: 1px solid #b42318;
+  border: 1px solid var(--danger-line);
   border-radius: 0.75rem;
   background: var(--danger-surface);
   color: var(--danger-ink);
@@ -141,8 +141,8 @@
 }
 
 .queue button[aria-pressed="true"] {
-  box-shadow: inset 4px 0 #176b45;
-  background: var(--success-surface);
+  box-shadow: inset 4px 0 var(--signal);
+  background: var(--signal-surface);
 }
 
 .queue button span,
@@ -152,7 +152,7 @@
 }
 
 .queue button em {
-  color: var(--success-ink);
+  color: var(--signal-text);
   font-size: 0.75rem;
   font-style: normal;
   font-weight: 750;
@@ -225,8 +225,8 @@
 }
 
 .summary > strong[data-ready="true"] {
-  background: var(--success-surface);
-  color: var(--success-ink);
+  background: var(--signal-surface);
+  color: var(--ink);
 }
 
 .actions {
@@ -241,8 +241,8 @@
 }
 
 .action[data-protected="true"] {
-  border-color: #e0a458;
-  box-shadow: inset 4px 0 #d47a16;
+  border-color: var(--warning-line);
+  box-shadow: inset 4px 0 var(--warning);
 }
 
 .action > header {
@@ -346,9 +346,9 @@
 }
 
 .commands > div button:nth-child(3) {
-  border-color: #176b45;
-  background: #176b45;
-  color: #fff;
+  border-color: var(--signal);
+  background: var(--signal);
+  color: var(--signal-ink);
 }
 
 .exports {

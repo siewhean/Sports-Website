@@ -51,10 +51,12 @@ test("@a11y organiser competition creation walkthrough completes with keyboard o
   await page.getByLabel("Competition name").focus();
   await page.keyboard.type("Keyboard Invitational 2027");
 
-  // Tab into Public address (slug)
+  // Tab past the Public address (i), then into the field (slug)
   await page.keyboard.press("Tab");
-  await expect(page.getByLabel("Public address")).toBeFocused();
-  await expect(page.getByLabel("Public address")).toHaveValue("keyboard-invitational-2027");
+  await expect(page.getByRole("button", { name: "More about public address" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByLabel("Public address", { exact: true })).toBeFocused();
+  await expect(page.getByLabel("Public address", { exact: true })).toHaveValue("keyboard-invitational-2027");
 
   // Tab into Sport select
   await page.keyboard.press("Tab");
@@ -69,7 +71,7 @@ test("@a11y organiser competition creation walkthrough completes with keyboard o
 
   // Verify transition to Step 2 (Venue)
   await expect(page.getByRole("heading", { level: 2, name: "Venue" })).toBeVisible();
-  await expect(page.getByLabel("Venue name")).toBeFocused();
+  await expect(page.getByLabel("Venue name", { exact: true })).toBeFocused();
 
   // Type Venue name
   await page.keyboard.type("Kallang Water Sports Centre");
@@ -84,9 +86,11 @@ test("@a11y organiser competition creation walkthrough completes with keyboard o
   await expect(page.getByLabel(/City or locality/i)).toBeFocused();
   await page.keyboard.type("Singapore");
 
-  // Tab into Country Code
+  // Tab past the Country code (i), then into the field
   await page.keyboard.press("Tab");
-  await expect(page.getByLabel("Country code")).toBeFocused();
+  await expect(page.getByRole("button", { name: "More about country code" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByLabel("Country code", { exact: true })).toBeFocused();
 
   // Tab to Back button
   await page.keyboard.press("Tab");
@@ -107,13 +111,15 @@ test("@a11y organiser competition creation walkthrough completes with keyboard o
 
   // Fill Step 3
   await page.getByLabel("Start date").fill("2027-06-01");
-  await page.getByLabel("End date").fill("2027-06-02");
+  await page.getByLabel("End date", { exact: true }).fill("2027-06-02");
 
-  await page.getByLabel("Time zone").focus();
-  await expect(page.getByLabel("Time zone")).toBeFocused();
+  await page.getByLabel("Time zone", { exact: true }).focus();
+  await expect(page.getByLabel("Time zone", { exact: true })).toBeFocused();
 
   await page.keyboard.press("Tab");
-  await expect(page.getByLabel("Locale")).toBeFocused();
+  await expect(page.getByRole("button", { name: "More about locale" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByLabel("Locale", { exact: true })).toBeFocused();
 
   // Tab to Back button
   await page.keyboard.press("Tab");

@@ -6,9 +6,9 @@
   width: 100%;
   min-width: 0;
   align-self: end;
-  border-top: 1px solid #75846b;
-  background: var(--signal);
-  color: #15190e;
+  border-top: 1px solid color-mix(in srgb, var(--signal-bright-ink) 35%, var(--signal-bright));
+  background: var(--signal-bright);
+  color: var(--signal-bright-ink);
 }
 .viewport {
   flex: 1;
@@ -52,7 +52,7 @@
   flex-shrink: 0;
   width: 64px;
   border: 0;
-  border-left: 1px solid #75846b;
+  border-left: 1px solid color-mix(in srgb, var(--signal-bright-ink) 35%, var(--signal-bright));
   background: inherit;
   color: inherit;
   cursor: pointer;
@@ -62,10 +62,10 @@
   height: 22px;
 }
 .control:hover {
-  background: #b2d85d;
+  background: color-mix(in srgb, var(--signal-bright-ink) 10%, var(--signal-bright));
 }
 .control:focus-visible {
-  outline: 3px solid #15190e;
+  outline: 3px solid var(--signal-bright-ink);
   outline-offset: -6px;
 }
 .banner[data-paused="true"] .track,

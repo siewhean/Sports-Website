@@ -11,7 +11,7 @@
   border: 1px solid var(--hairline);
   border-radius: 18px;
   background: var(--surface);
-  box-shadow: 0 16px 42px rgb(26 28 24 / 5%);
+  box-shadow: 0 16px 42px color-mix(in srgb, var(--palette-black) 5%, transparent);
 }
 
 .panel h2,

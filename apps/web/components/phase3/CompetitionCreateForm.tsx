@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { messages, opaqueId } from "@matchday/ui";
+import { InfoTip } from "@matchday/ui/react";
 import {
   firstInvalidCompetitionCreateField,
   competitionCreateFieldIsValid,
@@ -342,7 +343,15 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
     const hintId = options.hint ? `${name}-hint` : undefined;
     return (
       <div className={name === phase3CompetitionCreateMachine.fields.address ? styles.wide : styles.field}>
-        <label htmlFor={name}>{label}</label>
+        {/* D13: format hints sit behind an (i); the input stays described by the hidden panel. */}
+        <span className="md-label-row">
+          <label htmlFor={name}>{label}</label>
+          {options.hint ? (
+            <InfoTip id={hintId} label={`${messages.organiser.moreAbout} ${label.toLowerCase()}`}>
+              {options.hint}
+            </InfoTip>
+          ) : null}
+        </span>
         <input
           id={name}
           name={name}
@@ -361,11 +370,6 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
             update(name, event.currentTarget.value);
           }}
         />
-        {options.hint ? (
-          <p id={hintId} className={styles.hint}>
-            {options.hint}
-          </p>
-        ) : null}
         {errorId ? (
           <p id={errorId} className={styles.error}>
             {fieldErrors[name]}
@@ -379,7 +383,12 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
 
   return (
     <form ref={formRef} className={styles.form} noValidate onSubmit={submit}>
-      <p className={styles.intro}>{messages.organiserCreate.intro}</p>
+      <div className="md-label-row">
+        <strong>{messages.organiserCreate.afterCreateTitle}</strong>
+        <InfoTip label={`${messages.organiser.moreAbout} ${messages.organiserCreate.afterCreateTitle.toLowerCase()}`}>
+          {messages.organiserCreate.intro} {messages.organiserCreate.afterCreate}
+        </InfoTip>
+      </div>
       <ol className={styles.progress} aria-label={messages.organiserCreate.progress}>
         {messages.organiserCreate.steps.map((step, index) => (
           <li key={step} data-current={index === activeStep} data-complete={index < activeStep}>
@@ -473,7 +482,10 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
             field(phase3CompetitionCreateMachine.fields.slug, messages.organiserCreate.slug, {
               required: true,
               maxLength: 120,
-              hint: messages.organiserCreate.slugHint,
+              hint:
+                !slugEdited && draft.slug
+                  ? `${messages.organiserCreate.slugHint} ${messages.organiserCreate.generatedSlug}`
+                  : messages.organiserCreate.slugHint,
             })}
           {activeStep === 0 ? (
             <div className={styles.field}>
@@ -572,13 +584,6 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
           </button>
         )}
       </div>
-      {activeStep === 0 && !slugEdited && draft.slug ? (
-        <p className={styles.hint}>{messages.organiserCreate.generatedSlug}</p>
-      ) : null}
-      <aside className={styles.nextSteps} aria-label={messages.organiserCreate.afterCreateTitle}>
-        <strong>{messages.organiserCreate.afterCreateTitle}</strong>
-        <p>{messages.organiserCreate.afterCreate}</p>
-      </aside>
       <p className={styles.live} aria-live="polite" aria-atomic="true">
         {announcement}
       </p>

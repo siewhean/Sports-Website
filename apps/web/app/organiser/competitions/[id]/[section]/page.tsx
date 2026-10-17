@@ -7,6 +7,7 @@ import { ResultsWorkspace } from "@/components/phase3/ResultsWorkspace";
 import { V1PublishWorkspace } from "@/components/phase4/schedule/V1PublishWorkspace";
 import { gateCC4Copy } from "@/lib/gate-c-c4";
 import { isOrganiserSection, phase2Copy } from "@/lib/phase2";
+import { activityTab } from "@/lib/organiser-navigation";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
 import { phase3CapacityCopy, phase3CapacityMachine } from "@/lib/phase3-capacity";
 import { getCapacityDocument } from "@/lib/phase3-capacity.server";
@@ -24,7 +25,7 @@ export default async function CompetitionSectionPage({
   searchParams,
 }: {
   params: Promise<{ id: string; section: string }>;
-  searchParams: Promise<{ state?: string; match?: string }>;
+  searchParams: Promise<{ state?: string; match?: string; mode?: string }>;
 }) {
   const { id, section } = await params;
   const query = await searchParams;
@@ -178,6 +179,11 @@ export default async function CompetitionSectionPage({
     );
   }
   return (
-    <OrganiserWorkspace competition={result.competition} section={section} accessApiEnabled={!demoFixturesEnabled()} />
+    <OrganiserWorkspace
+      competition={result.competition}
+      section={section}
+      accessApiEnabled={!demoFixturesEnabled()}
+      {...(section === "audit" ? { tab: activityTab(query.mode) } : {})}
+    />
   );
 }

@@ -18,6 +18,10 @@ export const featureFlags = {
     "Serve the Phase 2 scoring experience at the canonical score route instead of the Phase 0 prototype.",
   ),
   "public.results": booleanFlag(true, "Expose published competition results on public surfaces."),
+  "organiser.redesign-shell": booleanFlag(
+    false,
+    "Redesign Phase 2: organiser competition pages use the Setup / Live navigation shell and account menu.",
+  ),
 } as const;
 
 export type MatchdayFeatureFlags = typeof featureFlags;

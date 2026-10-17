@@ -39,10 +39,10 @@ const stateCopy: Record<
   { title: string; body: string }
 > = {
   error: { title: t("prototype.073e5db01546"), body: t("prototype.198b6e228883") },
-  offline: { title: phase4SetupCopy.offline, body: t("prototype.305006a60cee") },
+  offline: { title: phase4SetupCopy.offline, body: t("prototype.0101bd2d74bf") },
   permission: { title: phase4SetupCopy.permission, body: t("prototype.72b2c902df68") },
   "read-only": { title: phase4SetupCopy.readOnly, body: t("prototype.4f2da4d7aaa9") },
-  conflict: { title: phase4SetupCopy.conflict, body: t("prototype.ab445f863ccd") },
+  conflict: { title: phase4SetupCopy.conflict, body: t("prototype.4e81072aba65") },
   expired: { title: t("prototype.ccc6652a3553"), body: t("prototype.f4d72f1cb57d") },
   quota: { title: phase4SetupCopy.quota, body: t("prototype.3f9a74ef1f28") },
   plan: { title: phase4SetupCopy.plan, body: t("prototype.4e1fab500c6e") },
@@ -286,7 +286,7 @@ export function AssistedSetupWorkspace({ document }: { document: AssistedSetupPa
         assertive
         action={
           viewState === "conflict" ? (
-            <button onClick={() => router.refresh()}>{t("prototype.4b46950ea4dd")}</button>
+            <button onClick={() => router.refresh()}>{t("prototype.50e4cc4d11f7")}</button>
           ) : null
         }
       />
@@ -596,7 +596,7 @@ function CapacityStep({ setup, competitionId }: { setup: Phase4SetupDocument; co
           icon={<Gauge />}
           title={t("prototype.df884c89c2aa")}
           value={`${capacity.area_ids.length} active`}
-          detail={t("prototype.88eb127a564b", { value1: capacity.revision })}
+          detail={t("prototype.4a760a580fae", { value1: capacity.revision })}
         />
         <ReferenceRow
           icon={<CalendarBlank />}
@@ -652,7 +652,7 @@ function SettingsStep({ setup, competitionId }: { setup: Phase4SetupDocument; co
           icon={<ShieldCheck />}
           title={item.scope === "competition" ? opaqueId("Competition rules") : opaqueId("Division rules")}
           value={item.mode === "recommended" ? "Recommended" : "Customised"}
-          detail={t("prototype.aa38f34342f1", { value1: item.settings_revision, value2: item.pack_version })}
+          detail={t("prototype.ade85c2a4680", { value1: item.settings_revision, value2: item.pack_version })}
         />
       ))}
       <Link className={styles.textLink} href={`/organiser/competitions/${competitionId}/settings`}>
@@ -687,7 +687,7 @@ function EntriesStep({ setup, competitionId }: { setup: Phase4SetupDocument; com
           icon={<UsersThree />}
           title={t("prototype.c89fae5bc3d5", { value1: index + 1 })}
           value={`${division.confirmed_count} confirmed`}
-          detail={`${division.placeholder_count} placeholders · revision ${division.division_revision}`}
+          detail={`${division.placeholder_count} placeholders · version ${division.division_revision}`}
         />
       ))}
       <Link className={styles.textLink} href={`/organiser/competitions/${competitionId}/entries`}>
@@ -711,7 +711,7 @@ function PreferencesStep({
     onChange({ ...value, [key]: { ...value[key], [field]: checked } });
   return (
     <div className={styles.preferences}>
-      <Field label={t("prototype.325eaefc3daf")} helper={t("prototype.10b678fb92e3")}>
+      <Field label={t("prototype.325eaefc3daf")} helper={t("prototype.c7ef49637017")}>
         <NumberField
           value={value.minimum_matches.per_entry}
           disabled={disabled}
@@ -867,14 +867,14 @@ function ScheduleStep({ setup, competitionId }: { setup: Phase4SetupDocument; co
         icon={<CalendarBlank />}
         title={t("prototype.3019f5a09b8b")}
         value={schedule.objective.replace("_", " ")}
-        detail={t("prototype.51be7b5a38e1", {
+        detail={t("prototype.e5a2ac8b4f0e", {
           value1: schedule.selected_result_revision,
           value2: schedule.feasibility,
         })}
       />
       <ReferenceRow
         icon={<ShieldCheck />}
-        title={t("prototype.efc237c244e4")}
+        title={t("prototype.85c5f11c87a8")}
         value={`Capacity r${schedule.capacity_revision}`}
         detail={`${schedule.settings_references.length} settings references`}
       />
@@ -1051,18 +1051,16 @@ function stepTitle(step: Phase4SetupStepId) {
 function stepIntro(step: Phase4SetupStepId) {
   return (
     {
-      basics: opaqueId(
-        "Start with deterministic fields. An optional brief can populate them without becoming the source of truth.",
-      ),
+      basics: opaqueId("Start with the basic fields. An optional brief can fill them in for you to check."),
       capacity: opaqueId("Authoritative playing-area availability is calculated by the venue capacity service."),
       settings: opaqueId("These immutable references keep every format and schedule decision reproducible."),
-      entries: opaqueId("Validated imports and entry revisions are referenced without copying sensitive source rows."),
-      format_preferences: opaqueId("Six explicit preference groups drive the deterministic recommendation engine."),
+      entries: opaqueId("Checked imports and team lists are used without copying the original files."),
+      format_preferences: opaqueId("Six groups of preferences shape the recommended formats."),
       format_recommendations: opaqueId(
         "Rules-based suggestions computed deterministically from your capacity and format preferences (no AI models used).",
       ),
-      schedule_review: opaqueId("Compare named quality components before selecting a schedule revision."),
-      review_publish: opaqueId("Nothing becomes public until you confirm the exact pinned evidence."),
+      schedule_review: opaqueId("Compare how each option scores before you choose a schedule."),
+      review_publish: opaqueId("Nothing becomes public until you confirm these exact details."),
     } as const
   )[step];
 }

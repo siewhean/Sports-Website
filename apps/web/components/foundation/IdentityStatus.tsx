@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { messages } from "@matchday/ui";
 import { identityStatusRequest } from "@/lib/identity-status";
@@ -8,6 +8,8 @@ import { identityStatusRequest } from "@/lib/identity-status";
 type IdentityStatusProps = Readonly<{
   className?: string;
   initialDisplayName?: string | null;
+  /** Called once the signed-in name is known (null when signed out), e.g. for the account menu initials. */
+  onResolved?: (displayName: string | null) => void;
 }>;
 
 type IdentityPayload = {
@@ -15,8 +17,12 @@ type IdentityPayload = {
   displayName?: unknown;
 };
 
-export function IdentityStatus({ className, initialDisplayName = null }: IdentityStatusProps) {
+export function IdentityStatus({ className, initialDisplayName = null, onResolved }: IdentityStatusProps) {
   const [displayName, setDisplayName] = useState(initialDisplayName);
+  const onResolvedRef = useRef(onResolved);
+  useEffect(() => {
+    onResolvedRef.current = onResolved;
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -32,11 +38,12 @@ export function IdentityStatus({ className, initialDisplayName = null }: Identit
         if (!response.ok) return;
         const payload = (await response.json().catch(() => null)) as IdentityPayload | null;
         const candidate = payload?.displayName;
-        setDisplayName(
+        const resolved =
           payload?.status === "authenticated" && typeof candidate === "string" && candidate.trim()
             ? candidate.trim()
-            : null,
-        );
+            : null;
+        setDisplayName(resolved);
+        onResolvedRef.current?.(resolved);
       })
       .catch((error: unknown) => {
         if (!active || (error instanceof DOMException && error.name === "AbortError")) return;

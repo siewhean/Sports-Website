@@ -248,8 +248,8 @@
 }
 .primaryButton {
   border: 1px solid var(--line-strong);
-  background: #20211f;
-  color: #fffef9;
+  background: var(--inverse-surface);
+  color: var(--inverse-ink);
   padding: 0 1.15rem;
 }
 .secondaryButton {
@@ -362,7 +362,7 @@
   display: grid;
   gap: 0.75rem;
   padding: 1.25rem;
-  border: 1px solid #b4541a;
+  border: 1px solid var(--warning-line);
   border-left-width: 4px;
   border-radius: 0.45rem;
   background: var(--warning-surface);

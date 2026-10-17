@@ -29,7 +29,7 @@ test("assisted setup renders authoritative capacity and preserves text on AI fal
     });
   });
   await page.goto("/organiser/competitions/singapore-open/setup?step=basics");
-  const brief = page.getByLabel("Competition brief");
+  const brief = page.getByRole("textbox", { name: "Competition brief", exact: true });
   await brief.fill("Sixteen canoe polo teams over two days at OCBC Aquatic Centre.");
   await page.getByRole("button", { name: "Convert to fields" }).click();
   await expect(brief).toHaveValue("Sixteen canoe polo teams over two days at OCBC Aquatic Centre.");
@@ -67,8 +67,8 @@ test("assisted setup sends an optimistic server transition and surfaces conflict
   await dismissConsent(page);
   allowConsoleFailure(page, /server responded with a status of 409 \(Conflict\)/);
   await page.getByRole("button", { name: /^Back$/ }).click();
-  await expect(page.getByRole("heading", { name: "A newer setup revision is available" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Load latest revision" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "A newer setup version is available" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Load latest version" })).toBeVisible();
 });
 
 test("manual and visual format modes edit the same canonical stage", async ({ page }) => {
@@ -244,7 +244,7 @@ test.describe("authoritative format round trip", () => {
     await page.keyboard.press("Enter");
     await expect(page.getByText(/16 matches materialised/)).toBeVisible();
     await page.getByRole("button", { name: "Publish format" }).click();
-    await expect(page.getByText("Format published. It is now available to deterministic scheduling.")).toBeVisible();
+    await expect(page.getByText("Format published. It is now available to the scheduler.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Publish format" })).toBeDisabled();
   });
 

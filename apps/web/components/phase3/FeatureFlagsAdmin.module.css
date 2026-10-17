@@ -1,5 +1,5 @@
 .ff-admin {
-  --p3-line: #d1cec3;
+  --p3-line: var(--hairline);
   min-height: 100dvh;
   background: var(--canvas);
   color: var(--ink);
@@ -186,8 +186,8 @@
 }
 
 .ff-badge--override {
-  background: var(--success-surface);
-  color: var(--success-ink);
+  background: var(--signal-surface);
+  color: var(--ink);
 }
 
 .ff-badge--inherited {
@@ -274,9 +274,9 @@
 }
 
 .ff-btn--danger {
-  background: #c53030;
-  color: white;
-  border-color: #c53030;
+  background: var(--danger);
+  color: var(--danger-on-fill);
+  border-color: var(--danger);
 }
 
 .ff-btn--secondary {
@@ -328,7 +328,7 @@
 .ff-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--scrim);
   display: grid;
   place-items: center;
   z-index: 1000;
@@ -337,10 +337,10 @@
 .ff-modal {
   width: min(520px, calc(100% - 32px));
   background: var(--surface);
-  border: 2px solid #b7791f;
+  border: 2px solid var(--warning-line);
   border-radius: 8px;
   padding: 24px;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 10px 25px color-mix(in srgb, var(--palette-black) 20%, transparent);
 }
 
 .ff-modal h3 {
@@ -359,7 +359,7 @@
   margin: 16px 0;
   padding: 12px 16px;
   background: var(--warning-surface);
-  border: 1px solid #f6e05e;
+  border: 1px solid var(--warning-line);
   border-radius: var(--radius-sm);
   display: grid;
   grid-template-columns: 120px 1fr;
@@ -378,11 +378,11 @@
 
 .ff-banner-success {
   padding: 12px 16px;
-  background: var(--success-surface);
-  border: 1px solid var(--success-line);
+  background: var(--signal-surface);
+  border: 1px solid var(--signal-line);
   border-radius: var(--radius-sm);
   margin-bottom: 20px;
-  color: var(--success-ink);
+  color: var(--ink);
 }
 
 .ff-banner-error {
@@ -417,4 +417,12 @@
 
 .ff-btn-group--right {
   justify-content: flex-end;
+}
+
+.ff-icon-danger {
+  color: var(--danger);
+}
+
+.ff-icon-warning {
+  color: var(--warning-ink);
 }

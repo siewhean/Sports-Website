@@ -66,7 +66,7 @@ test("V1 Publish page performs the real schedule publication mutation", async ({
 
   await expect(page.getByTestId("v1-publish-workspace")).toBeVisible();
   await expect(page.getByRole("button", { name: "Save changes" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Schedule revision 4" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Schedule version 4" })).toBeVisible();
   await expect(page.getByText("8", { exact: true })).toBeVisible();
   const publish = page.getByRole("button", { name: "Publish schedule" });
   await expect(publish).toBeEnabled();
@@ -74,7 +74,7 @@ test("V1 Publish page performs the real schedule publication mutation", async ({
 
   await expect.poll(() => expectedRevision).toBe(4);
   expect(typeof idempotencyKey).toBe("string");
-  await expect(page.getByRole("status").filter({ hasText: "Schedule revision 4 is now public." })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Schedule version 4 is now public." })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open public competition" })).toBeVisible();
 });
 
@@ -96,7 +96,7 @@ test("V1 Publish page preserves public truth when optimistic publication conflic
   await page.getByRole("button", { name: "Publish schedule" }).click();
 
   await expect(
-    page.getByText("This schedule changed before publication. Reload the latest revision and review it again."),
+    page.getByText("This schedule changed before publication. Reload the latest version and review it again."),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Open public competition" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Publish schedule" })).toBeEnabled();

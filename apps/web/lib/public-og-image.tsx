@@ -1,21 +1,23 @@
 import { ImageResponse } from "next/og";
-import { interpolate, messages } from "@matchday/ui";
+import { interpolate, messages, mixPalette, palette } from "@matchday/ui";
 import type { CompetitionView, MatchView } from "@/lib/phase2";
 import { publicCompetitionPhase } from "@/lib/phase2-public-phase";
 
 /*
  * Social preview cards (1200×630) for public competition and match pages, rendered with next/og.
- * Colours are the brand tokens from globals.css (--ink graphite, --signal chartreuse, dark --canvas / --surface).
+ * Colours are the dark-theme tokens from globals.css, resolved from the shared palette (packages/ui tokens.ts).
  */
 export const OG_IMAGE_SIZE = { width: 1200, height: 630 } as const;
 
-const INK = "#171918";
-const CANVAS = "#111513";
-const SURFACE = "#1b211e";
-const SIGNAL = "#b7dc22";
-const TEXT = "#f0f3ed";
-const MUTED = "#bbc5ba";
-const LINE = "#4b594e";
+// next/og cannot read CSS custom properties, so the dark-theme tokens are resolved from the shared palette.
+const INK = mixPalette("white", 6, "black");
+const CANVAS = palette.black;
+const SURFACE = mixPalette("white", 10, "black");
+const SIGNAL = palette.lime;
+const SIGNAL_INK = palette.black;
+const TEXT = mixPalette("white", 94, "black");
+const MUTED = mixPalette("white", 72, "black");
+const LINE = mixPalette("white", 22, "black");
 
 function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1).trimEnd()}…` : value;
@@ -44,7 +46,7 @@ function Frame({ eyebrow, children }: { eyebrow: string; children: React.ReactNo
               height: 48,
               borderRadius: 12,
               background: SIGNAL,
-              color: INK,
+              color: SIGNAL_INK,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -77,7 +79,7 @@ function Badge({ label, live }: { label: string; live: boolean }) {
         fontSize: 24,
         fontWeight: 700,
         background: live ? SIGNAL : SURFACE,
-        color: live ? INK : TEXT,
+        color: live ? SIGNAL_INK : TEXT,
         border: `2px solid ${live ? SIGNAL : LINE}`,
       }}
     >

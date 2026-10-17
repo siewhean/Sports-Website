@@ -70,7 +70,7 @@ async function getPageLifetimeMarker(page: Page): Promise<string | null> {
 
 function getLoadLatestRevisionControl(page: Page): Locator {
   const testIdFallback = page.getByTestId("phase4-format-conflict-reload");
-  const explicitButton = page.getByRole("button", { name: /load latest revision|reload/i });
+  const explicitButton = page.getByRole("button", { name: /load latest version|reload/i });
   return testIdFallback.or(explicitButton);
 }
 
@@ -78,7 +78,7 @@ function getAssistedSetupConflictControl(page: Page): Locator {
   return page
     .getByTestId("assisted-setup-conflict-retry")
     .or(page.getByTestId("assisted-setup-inline-conflict-retry"))
-    .or(page.getByRole("button", { name: /load latest revision|reload/i }));
+    .or(page.getByRole("button", { name: /load latest version|reload/i }));
 }
 
 function setupDocument(input: {
@@ -428,10 +428,10 @@ test("Gate B state preservation focus recovery and retry flow for assisted setup
   await expect(page).toHaveURL(baselineUrl);
   await expect(await getPageLifetimeMarker(page)).toBe(marker);
 
-  await expect(page.getByRole("heading", { name: /A newer setup revision is available/i })).toBeVisible();
-  const conflictRetry = page.getByRole("button", { name: /Load latest revision/i });
+  await expect(page.getByRole("heading", { name: /A newer setup version is available/i })).toBeVisible();
+  const conflictRetry = page.getByRole("button", { name: /Load latest version/i });
   await expect(conflictRetry).toBeVisible();
-  await expect(page.getByRole("alert").filter({ hasText: /conflict|A newer setup revision/i })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: /conflict|A newer setup version/i })).toBeVisible();
 
   await conflictRetry.focus();
   await expect(conflictRetry).toBeFocused();
@@ -561,7 +561,7 @@ test("Gate B state preservation focus and retry for sport-settings conflict", as
   await expect.poll(() => saveCounter.count()).toBe(beforeRetry + 1);
   expect(saveCounter.count()).toBe(beforeRetry + 1);
   releaseSavedResponse();
-  await expect(page.getByText(/Settings saved as a new revision/i)).toBeVisible();
+  await expect(page.getByText(/Settings saved as a new version/i)).toBeVisible();
   await expect(slot).toHaveValue("31");
   await expect(page.locator(ANNOUNCEMENT).filter({ hasText: /Settings saved/ })).toBeVisible();
 
@@ -733,7 +733,7 @@ test("Gate B state preservation for fallback journey refresh with no href link",
 
   const marker = await setPageLifetimeMarker(page);
 
-  await expect(page.getByRole("heading", { name: /A newer setup revision is available/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /A newer setup version is available/i })).toBeVisible();
   const fallback = getAssistedSetupConflictControl(page);
   await expect(fallback).toHaveCount(1);
   await expect(fallback).toBeVisible();

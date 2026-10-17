@@ -1,5 +1,5 @@
 .p3-settings {
-  --p3-line: #d1cec3;
+  --p3-line: var(--hairline);
   min-width: 0;
   color: var(--ink);
 }
@@ -80,7 +80,7 @@
 .p3-settings-context nav a[aria-current="page"] {
   background: var(--surface);
   color: var(--ink);
-  box-shadow: 0 1px 5px rgb(23 25 24 / 10%);
+  box-shadow: 0 1px 5px color-mix(in srgb, var(--palette-black) 10%, transparent);
 }
 
 .p3-settings-context dl {
@@ -430,14 +430,14 @@
 }
 
 .p3-state {
-  --p3-line: #d1cec3;
+  --p3-line: var(--hairline);
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 20px;
   max-width: 760px;
   margin: 48px 0;
   padding: 28px;
-  border: 1px solid #c59d37;
+  border: 1px solid var(--warning-line);
   border-left: 5px solid var(--warning);
   background: var(--warning-surface);
 }
@@ -458,7 +458,7 @@
 }
 
 .p3-skeleton {
-  --p3-line: #d1cec3;
+  --p3-line: var(--hairline);
   display: grid;
   gap: 28px;
   min-height: 60vh;
@@ -510,7 +510,7 @@
   .p3-field--ordered button:hover:not(:disabled),
   .p3-toggle-target:hover,
   .p3-settings-context nav a:hover {
-    background: rgb(23 25 24 / 6%);
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
   }
 
   .p3-button:hover:not(:disabled) {

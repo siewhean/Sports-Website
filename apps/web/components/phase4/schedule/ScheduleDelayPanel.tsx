@@ -1,7 +1,8 @@
 "use client";
 
 import { useId, useState } from "react";
-import { NumberField } from "@matchday/ui/react";
+import { messages } from "@matchday/ui";
+import { InfoTip, NumberField } from "@matchday/ui/react";
 import { Clock, ShieldWarning } from "@phosphor-icons/react";
 import {
   commandErrorMessage,
@@ -116,8 +117,10 @@ export function ScheduleDelayPanel({
       <header>
         <Clock aria-hidden="true" />
         <h2 id={`${id}-title`}>{phase4ScheduleCopy.delayTitle}</h2>
+        <InfoTip label={`${messages.organiser.moreAbout} ${phase4ScheduleCopy.delayTitle.toLowerCase()}`}>
+          {phase4ScheduleCopy.delayIntro}
+        </InfoTip>
       </header>
-      <p>{phase4ScheduleCopy.delayIntro}</p>
       <form
         className={styles.delayForm}
         noValidate

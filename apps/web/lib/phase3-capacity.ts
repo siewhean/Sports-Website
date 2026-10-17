@@ -601,7 +601,7 @@ export const phase3CapacityCopy = {
   saving: "Saving…",
   saved: "Capacity saved",
   unsaved: "Unsaved capacity changes",
-  revision: "Capacity revision",
+  revision: "Capacity version",
   timezone: "Source timezone",
   status: "Capacity status",
   available: "Available match slots",
