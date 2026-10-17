@@ -3,7 +3,6 @@ import type { Phase3SportCode } from "@matchday/contracts";
 import {
   competitionDomain,
   generateDivisionShortCode,
-  placeholderLabel,
   type AdvancementRule,
   type AdvancementSlot,
   type FormatGraph,
@@ -29,6 +28,7 @@ import {
 } from "./repositories/index.js";
 import { CreateCompetitionCommand, CreateCompetitionHandler } from "./commands/index.js";
 import { buildPlannedEntryDrafts, plannedEntryCountIssue } from "./phase-3-planned-entries.js";
+import { loadCompetitionPlaceholderLabels } from "./placeholder-labels.js";
 
 export type Phase3Actor = { accountId: string };
 
@@ -470,33 +470,7 @@ export class Phase3Runtime {
        WHERE d.competition_id=$1 ORDER BY e.created_at,e.id`,
       [competitionId],
     );
-    const poolMembership = await tx.unsafe<{ division_id: string; pool_id: string; entry_id: string }>(
-      `SELECT DISTINCT m.division_id, COALESCE(m.graph_pool_id,m.graph_stage_id) AS pool_id, entry.entry_id
-       FROM matches m
-       CROSS JOIN LATERAL (VALUES (m.home_entry_id),(m.away_entry_id)) AS entry(entry_id)
-       WHERE m.competition_id=$1 AND m.graph_purpose='pool' AND entry.entry_id IS NOT NULL
-         AND COALESCE(m.graph_pool_id,m.graph_stage_id) IS NOT NULL
-       ORDER BY m.division_id, pool_id, entry.entry_id`,
-      [competitionId],
-    );
-    const poolsByDivision = new Map<string, Map<string, string[]>>();
-    for (const row of poolMembership) {
-      const pools = poolsByDivision.get(row.division_id) ?? new Map<string, string[]>();
-      pools.set(row.pool_id, [...(pools.get(row.pool_id) ?? []), row.entry_id]);
-      poolsByDivision.set(row.division_id, pools);
-    }
-    const entryGroupMembership = new Map<string, { groupLabel: string; position: number }>();
-    for (const pools of poolsByDivision.values()) {
-      const sortedPoolIds = [...pools.keys()].sort();
-      sortedPoolIds.forEach((poolId, poolIndex) => {
-        const groupLabel =
-          String.fromCharCode(65 + (poolIndex % 26)) + (poolIndex >= 26 ? String(Math.floor(poolIndex / 26)) : "");
-        const entryIds = pools.get(poolId)!;
-        entryIds.forEach((entryId, entryIndex) => {
-          entryGroupMembership.set(entryId, { groupLabel, position: entryIndex + 1 });
-        });
-      });
-    }
+    const placeholderLabels = await loadCompetitionPlaceholderLabels(tx, competitionId);
 
     const instant = (value: Date | string | null): string | null =>
       value === null ? null : value instanceof Date ? value.toISOString() : new Date(value).toISOString();
@@ -530,18 +504,12 @@ export class Phase3Runtime {
         shortCode: division.short_code,
         entries: entries
           .filter((entry) => entry.division_id === division.id)
-          .map((entry, index) => ({
+          .map((entry) => ({
             id: entry.id,
             divisionId: entry.division_id,
             name:
               entry.entry_type === "placeholder"
-                ? placeholderLabel({
-                    entry: { id: entry.id, name: entry.name, entry_type: "placeholder", seed: entry.seed },
-                    groupMembership: entryGroupMembership.get(entry.id),
-                    divisionShortCode: division.short_code,
-                    multiDivision: divisions.length > 1,
-                    fallbackIndex: index + 1,
-                  })
+                ? (placeholderLabels.labels.get(entry.id)?.organiserLabel ?? entry.name)
                 : entry.name,
             type: entry.entry_type,
             status: entry.status === "confirmed" ? "active" : entry.status,
@@ -1092,39 +1060,11 @@ export class Phase3Runtime {
     divisionId: string,
   ): Promise<Array<Record<string, unknown>>> {
     await this.competitionAccess(this.sql, competitionId, actor, false);
-    const division = requiredRecord(
+    requiredRecord(
       await this.divisionRepo.findByIdAndCompetitionId(divisionId, competitionId, "none", this.sql),
       "Division not found",
     );
-    const divCountRow = await this.sql.unsafe<{ count: string }>(
-      `SELECT count(*)::text AS count FROM divisions WHERE competition_id=$1`,
-      [competitionId],
-    );
-    const multiDivision = Number(divCountRow[0]?.count ?? "0") > 1;
-
-    const poolMembership = await this.sql.unsafe<{ pool_id: string; entry_id: string }>(
-      `SELECT DISTINCT COALESCE(m.graph_pool_id,m.graph_stage_id) AS pool_id, entry.entry_id
-       FROM matches m
-       CROSS JOIN LATERAL (VALUES (m.home_entry_id),(m.away_entry_id)) AS entry(entry_id)
-       WHERE m.division_id=$1 AND m.graph_purpose='pool' AND entry.entry_id IS NOT NULL
-         AND COALESCE(m.graph_pool_id,m.graph_stage_id) IS NOT NULL
-       ORDER BY pool_id, entry.entry_id`,
-      [divisionId],
-    );
-    const pools = new Map<string, string[]>();
-    for (const row of poolMembership) {
-      pools.set(row.pool_id, [...(pools.get(row.pool_id) ?? []), row.entry_id]);
-    }
-    const entryGroupMembership = new Map<string, { groupLabel: string; position: number }>();
-    const sortedPoolIds = [...pools.keys()].sort();
-    sortedPoolIds.forEach((poolId, poolIndex) => {
-      const groupLabel =
-        String.fromCharCode(65 + (poolIndex % 26)) + (poolIndex >= 26 ? String(Math.floor(poolIndex / 26)) : "");
-      const entryIds = pools.get(poolId)!;
-      entryIds.forEach((entryId, entryIndex) => {
-        entryGroupMembership.set(entryId, { groupLabel, position: entryIndex + 1 });
-      });
-    });
+    const placeholderLabels = await loadCompetitionPlaceholderLabels(this.sql, competitionId);
 
     const entries = await this.sql.unsafe<Record<string, unknown>>(
       `SELECT id,division_id,name,entry_type,status,seed,metadata,availability,replacement_entry_id,replaces_entry_id,revision,created_at,updated_at
@@ -1132,23 +1072,11 @@ export class Phase3Runtime {
       [divisionId],
     );
 
-    return entries.map((entry, index) => {
-      const isPlaceholder = entry.entry_type === "placeholder";
-      const groupMembership = isPlaceholder ? entryGroupMembership.get(String(entry.id)) : undefined;
-      const derivedName = isPlaceholder
-        ? placeholderLabel({
-            entry: {
-              id: String(entry.id),
-              name: String(entry.name),
-              entry_type: "placeholder",
-              seed: typeof entry.seed === "number" ? entry.seed : null,
-            },
-            groupMembership,
-            divisionShortCode: division.short_code ?? null,
-            multiDivision,
-            fallbackIndex: index + 1,
-          })
-        : entry.name;
+    return entries.map((entry) => {
+      const derivedName =
+        entry.entry_type === "placeholder"
+          ? (placeholderLabels.labels.get(String(entry.id))?.organiserLabel ?? entry.name)
+          : entry.name;
       return {
         ...entry,
         name: derivedName,

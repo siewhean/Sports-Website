@@ -114,6 +114,168 @@ export function placeholderLabel(options: PlaceholderLabelOptions): string {
   return `Team ${pos}`;
 }
 
+/** Minimal structural view of a published format graph needed to place entries into groups. */
+export type PlaceholderFormatGraph = Readonly<{
+  stages: ReadonlyArray<Readonly<{ id: string; kind?: string; order: number; groupIds?: readonly string[] }>>;
+  matches: ReadonlyArray<
+    Readonly<{
+      stageId: string;
+      poolId?: string | null | undefined;
+      purpose?: string;
+      home: Readonly<{ type: string; seed?: number }>;
+      away: Readonly<{ type: string; seed?: number }>;
+    }>
+  >;
+}>;
+
+export type PlaceholderGroup = Readonly<{
+  /** Graph pool/group id (or stage id for a single round-robin pool). Internal; never publish it. */
+  graphGroupId: string;
+  /** Positional letter ("A", "B", ... "Z", "A1", ...) in format-graph order. */
+  label: string;
+  /** Seeds placed in this group, ascending; position = index + 1. */
+  seeds: readonly number[];
+}>;
+
+function groupLetter(index: number): string {
+  return String.fromCharCode(65 + (index % 26)) + (index >= 26 ? String(Math.floor(index / 26)) : "");
+}
+
+/**
+ * Derives the ordered groups of a format graph from the graph itself: stages in their `order`,
+ * groups in the stage's own `groupIds` order, and each group's seeds from the `entry_seed`
+ * sources of its pool matches. Letters are assigned sequentially in that order, so labels never
+ * depend on database row ids.
+ */
+export function placeholderGroupsFromGraph(graph: PlaceholderFormatGraph | null | undefined): PlaceholderGroup[] {
+  if (!graph || !Array.isArray(graph.stages) || !Array.isArray(graph.matches)) return [];
+  const stages = [...graph.stages].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+  const seedsByGroup = new Map<string, Set<number>>();
+  for (const match of graph.matches) {
+    if (match.purpose !== undefined && match.purpose !== "pool") continue;
+    const groupId = match.poolId ?? match.stageId;
+    for (const source of [match.home, match.away]) {
+      if (source?.type !== "entry_seed" || typeof source.seed !== "number") continue;
+      const seeds = seedsByGroup.get(groupId) ?? new Set<number>();
+      seeds.add(source.seed);
+      seedsByGroup.set(groupId, seeds);
+    }
+  }
+  const orderedGroupIds: string[] = [];
+  const seen = new Set<string>();
+  const push = (groupId: string) => {
+    if (seen.has(groupId) || !seedsByGroup.has(groupId)) return;
+    seen.add(groupId);
+    orderedGroupIds.push(groupId);
+  };
+  for (const stage of stages) {
+    for (const groupId of stage.groupIds ?? []) push(groupId);
+    push(stage.id);
+    // Pools the stage does not list (legacy graphs) follow its listed groups, in id order.
+    const stray = graph.matches
+      .filter((match) => match.stageId === stage.id && match.poolId && !seen.has(match.poolId))
+      .map((match) => match.poolId as string)
+      .sort();
+    for (const groupId of stray) push(groupId);
+  }
+  const claimed = new Set<number>();
+  const groups: PlaceholderGroup[] = [];
+  for (const groupId of orderedGroupIds) {
+    // A seed belongs to the first group (in graph order) that draws it.
+    const seeds = [...seedsByGroup.get(groupId)!].filter((seed) => !claimed.has(seed)).sort((a, b) => a - b);
+    if (seeds.length === 0) continue;
+    for (const seed of seeds) claimed.add(seed);
+    groups.push({ graphGroupId: groupId, label: groupLetter(groups.length), seeds });
+  }
+  return groups;
+}
+
+export type PlaceholderLabelEntry = Readonly<{
+  id: string;
+  name: string;
+  entryType: string;
+  seed: number | null;
+  createdAt: string | Date;
+}>;
+
+export type PlaceholderLabelDivision = Readonly<{
+  id: string;
+  shortCode: string | null;
+  entries: readonly PlaceholderLabelEntry[];
+  /** The division's published format graph, or null before a format is published. */
+  graph?: PlaceholderFormatGraph | null | undefined;
+}>;
+
+export type ResolvedPlaceholderLabel = Readonly<{
+  divisionId: string;
+  groupMembership: PlaceholderGroupMembership | null;
+  /** Stable ordinal used before a format places the entry: its seed, else the lowest free number. */
+  ordinal: number;
+  organiserLabel: string;
+  publicLabel: string;
+}>;
+
+function createdAtMillis(value: string | Date): number {
+  const millis = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(millis) ? millis : 0;
+}
+
+/**
+ * Single source of truth for placeholder labels across organiser and public surfaces.
+ *
+ * - Group letter and position come from the published format graph (see placeholderGroupsFromGraph)
+ *   and the entry's seed, so moving an entry to another seed moves it to that seed's group slot.
+ * - Entries the graph does not place use their seed, or (null seed) the lowest positive number not
+ *   used by any seed in the division, assigned in creation order. Null-seed entries therefore never
+ *   collapse onto one label, and the ordinal does not depend on the caller's row order.
+ */
+export function resolvePlaceholderLabels(
+  divisions: readonly PlaceholderLabelDivision[],
+): Map<string, ResolvedPlaceholderLabel> {
+  const multiDivision = divisions.length > 1;
+  const resolved = new Map<string, ResolvedPlaceholderLabel>();
+  for (const division of divisions) {
+    const membershipBySeed = new Map<number, PlaceholderGroupMembership>();
+    for (const group of placeholderGroupsFromGraph(division.graph)) {
+      group.seeds.forEach((seed, index) =>
+        membershipBySeed.set(seed, { groupLabel: group.label, position: index + 1 }),
+      );
+    }
+    const ordered = [...division.entries].sort(
+      (a, b) => createdAtMillis(a.createdAt) - createdAtMillis(b.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+    const usedOrdinals = new Set(ordered.flatMap((entry) => (typeof entry.seed === "number" ? [entry.seed] : [])));
+    let nextFree = 1;
+    for (const entry of ordered) {
+      let ordinal: number;
+      if (typeof entry.seed === "number") {
+        ordinal = entry.seed;
+      } else {
+        while (usedOrdinals.has(nextFree)) nextFree += 1;
+        ordinal = nextFree;
+        usedOrdinals.add(ordinal);
+      }
+      const groupMembership = typeof entry.seed === "number" ? (membershipBySeed.get(entry.seed) ?? null) : null;
+      const labelEntry = { id: entry.id, name: entry.name, entry_type: entry.entryType, seed: ordinal };
+      const shared = {
+        entry: labelEntry,
+        groupMembership,
+        divisionShortCode: division.shortCode,
+        multiDivision,
+        fallbackIndex: ordinal,
+      };
+      resolved.set(entry.id, {
+        divisionId: division.id,
+        groupMembership,
+        ordinal,
+        organiserLabel: placeholderLabel(shared),
+        publicLabel: placeholderLabel({ ...shared, isPublic: true }),
+      });
+    }
+  }
+  return resolved;
+}
+
 /**
  * Validates whether an incoming registration can replace a placeholder entry (Phase 12 guard).
  * Pending registrations never replace a placeholder; only approved registrations do.

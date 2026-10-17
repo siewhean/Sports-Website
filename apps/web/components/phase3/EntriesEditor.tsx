@@ -2,7 +2,6 @@
 
 import { type FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { placeholderLabel } from "@matchday/domain";
 import { NumberField } from "@matchday/ui/react";
 import {
   isPlaceholderEntry,
@@ -356,19 +355,9 @@ export function EntriesEditor({
                 <ol className={styles.entries}>
                   {activeEntries.map((entry) => {
                     const placeholder = isPlaceholderEntry(entry);
-                    const displayName = placeholder
-                      ? placeholderLabel({
-                          entry: {
-                            id: entry.id,
-                            name: entry.name,
-                            entry_type: phase3EntriesMachine.placeholderEntryType,
-                            seed: entry.seed,
-                          },
-                          divisionShortCode: division.shortCode ?? division.code,
-                          multiDivision: divisions.length > 1,
-                          fallbackIndex: entry.seed ?? undefined,
-                        })
-                      : entry.name;
+                    // The API derives placeholder labels (group + seed position, or a stable ordinal) with the
+                    // same helper the public pages use, so render its name rather than re-deriving it here.
+                    const displayName = entry.name;
                     return (
                       <li key={entry.id}>
                         <span>{entry.seed ?? "—"}</span>

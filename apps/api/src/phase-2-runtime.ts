@@ -18,7 +18,6 @@ import {
   parseFiveSportScoreCommand,
   reduceFiveSportScoreEvents,
   generateDivisionShortCode,
-  placeholderLabel,
   type AppliedSportAction,
   type FiveSportScoreCommand,
   type FiveSportScoreEvent,
@@ -34,6 +33,7 @@ import { standingsResultFromSnapshot } from "./standings-results.js";
 import { RepairRepository } from "./repositories/repair.repository.js";
 import { enqueueResultPublishedNotifications } from "./match-notifications.js";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
+import { loadCompetitionPlaceholderLabels } from "./placeholder-labels.js";
 import { applyLiveOverlay, liveOverlayRowsSql, liveOverlayUpdatedAt, parseLiveOverlay } from "./public-live-overlay.js";
 import {
   NoopScoringAccessRateLimiter,
@@ -5635,73 +5635,41 @@ export class Phase2Runtime {
           )
         : [];
     const standingsByDivision = new Map(standings.map((snapshot) => [snapshot.division_id, snapshot]));
-    const poolMembership =
-      resultVersion > 0
-        ? await tx.unsafe<{ division_id: string; pool_id: string; entry_id: string }>(
-            `SELECT DISTINCT m.division_id,COALESCE(m.graph_pool_id,m.graph_stage_id) AS pool_id,entry.entry_id
-           FROM matches m
-           CROSS JOIN LATERAL (VALUES (m.home_entry_id),(m.away_entry_id)) AS entry(entry_id)
-           WHERE m.competition_id=$1 AND m.graph_purpose='pool' AND entry.entry_id IS NOT NULL
-             AND COALESCE(m.graph_pool_id,m.graph_stage_id) IS NOT NULL
-           ORDER BY m.division_id,pool_id,entry.entry_id`,
-            [competitionId],
-          )
-        : [];
+    // Labels and group letters come from the shared loader (published format graph + seeds), so the
+    // public projection always matches the organiser workspace for the same entry.
+    const placeholderLabels = await loadCompetitionPlaceholderLabels(tx, competitionId);
     // Public-safety: the internal graph pool/stage ids never leave the API. Groups are published as
-    // positional letters (A, B, ...) in deterministic pool order, and entry_ids are restricted to
-    // entries already present in the division's published standings rows (which carry entryId).
-    const poolsByDivision = new Map<string, Map<string, string[]>>();
-    for (const row of poolMembership) {
-      const pools = poolsByDivision.get(row.division_id) ?? new Map<string, string[]>();
-      pools.set(row.pool_id, [...(pools.get(row.pool_id) ?? []), row.entry_id]);
-      poolsByDivision.set(row.division_id, pools);
-    }
+    // positional letters (A, B, ...) in format-graph order, and the group lists only expose entry_ids
+    // already present in the division's published standings rows (which carry entryId).
     const groupsByDivision = new Map<string, Array<{ id: string; entry_ids: string[] }>>();
-    for (const [divisionId, pools] of poolsByDivision) {
-      const snapshot = standingsByDivision.get(divisionId);
-      const rows = snapshot ? jsonValue<unknown>(snapshot.standings) : [];
-      const publishedEntryIds = new Set(
-        (Array.isArray(rows) ? rows : []).flatMap((row) =>
-          row && typeof row === "object" && typeof (row as { entryId?: unknown }).entryId === "string"
-            ? [(row as { entryId: string }).entryId]
-            : [],
-        ),
-      );
-      const groups = [...pools.keys()]
-        .sort()
-        .map((poolId, index) => ({
-          id: String.fromCharCode(65 + (index % 26)) + (index >= 26 ? String(Math.floor(index / 26)) : ""),
-          entry_ids: pools.get(poolId)!.filter((entryId) => publishedEntryIds.has(entryId)),
-        }))
-        .filter((group) => group.entry_ids.length > 0);
-      groupsByDivision.set(divisionId, groups);
+    if (resultVersion > 0) {
+      for (const [divisionId, graphGroups] of placeholderLabels.groupsByDivision) {
+        const snapshot = standingsByDivision.get(divisionId);
+        const rows = snapshot ? jsonValue<unknown>(snapshot.standings) : [];
+        const publishedEntryIds = new Set(
+          (Array.isArray(rows) ? rows : []).flatMap((row) =>
+            row && typeof row === "object" && typeof (row as { entryId?: unknown }).entryId === "string"
+              ? [(row as { entryId: string }).entryId]
+              : [],
+          ),
+        );
+        const bySeed = placeholderLabels.entryIdBySeed.get(divisionId) ?? new Map<number, string>();
+        const groups = graphGroups
+          .map((group) => ({
+            id: group.label,
+            entry_ids: group.seeds.flatMap((seed) => {
+              const entryId = bySeed.get(seed);
+              return entryId && publishedEntryIds.has(entryId) ? [entryId] : [];
+            }),
+          }))
+          .filter((group) => group.entry_ids.length > 0);
+        groupsByDivision.set(divisionId, groups);
+      }
     }
-    const entryGroupMembership = new Map<string, { groupLabel: string; position: number }>();
-    for (const groups of groupsByDivision.values()) {
-      groups.forEach((group) => {
-        group.entry_ids.forEach((entryId, index) => {
-          entryGroupMembership.set(entryId, { groupLabel: group.id, position: index + 1 });
-        });
-      });
-    }
-    const divisionMap = new Map(divisions.map((d) => [d.id, d]));
-    const resolvePublicName = (
-      divisionId: string,
-      entryId: string | null,
-      name: string | null,
-      entryType: string | null,
-      seed: number | null,
-    ): string => {
+    const resolvePublicName = (entryId: string | null, name: string | null, entryType: string | null): string => {
       if (!entryId) return name ?? "TBD";
       if (entryType !== "placeholder") return name ?? "TBD";
-      const div = divisionMap.get(divisionId);
-      return placeholderLabel({
-        entry: { id: entryId, name: name ?? "", entry_type: "placeholder", seed: seed ?? null },
-        groupMembership: entryGroupMembership.get(entryId),
-        divisionShortCode: div?.short_code ?? null,
-        multiDivision: divisions.length > 1,
-        isPublic: true,
-      });
+      return placeholderLabels.labels.get(entryId)?.publicLabel ?? name ?? "TBD";
     };
 
     const persistedPublicResults: Array<PublicMatchResult & { division_id: string }> = results.map((match) => ({
@@ -5711,23 +5679,11 @@ export class Phase2Runtime {
       stage: match.stage,
       home: {
         id: match.home_entry_id,
-        name: resolvePublicName(
-          match.division_id,
-          match.home_entry_id,
-          match.home_name,
-          match.home_entry_type,
-          match.home_seed,
-        ),
+        name: resolvePublicName(match.home_entry_id, match.home_name, match.home_entry_type),
       },
       away: {
         id: match.away_entry_id,
-        name: resolvePublicName(
-          match.division_id,
-          match.away_entry_id,
-          match.away_name,
-          match.away_entry_type,
-          match.away_seed,
-        ),
+        name: resolvePublicName(match.away_entry_id, match.away_name, match.away_entry_type),
       },
       home_score: match.home_score,
       away_score: match.away_score,
@@ -5785,23 +5741,11 @@ export class Phase2Runtime {
         stage: match.stage,
         home: {
           id: match.home_entry_id,
-          name: resolvePublicName(
-            match.division_id,
-            match.home_entry_id,
-            match.home_name,
-            match.home_entry_type,
-            match.home_seed,
-          ),
+          name: resolvePublicName(match.home_entry_id, match.home_name, match.home_entry_type),
         },
         away: {
           id: match.away_entry_id,
-          name: resolvePublicName(
-            match.division_id,
-            match.away_entry_id,
-            match.away_name,
-            match.away_entry_type,
-            match.away_seed,
-          ),
+          name: resolvePublicName(match.away_entry_id, match.away_name, match.away_entry_type),
         },
         home_score: homeScore,
         away_score: awayScore,
@@ -5825,23 +5769,11 @@ export class Phase2Runtime {
           stage: match.stage,
           home: {
             id: match.home_entry_id,
-            name: resolvePublicName(
-              match.division_id,
-              match.home_entry_id,
-              match.home_name,
-              match.home_entry_type,
-              match.home_seed,
-            ),
+            name: resolvePublicName(match.home_entry_id, match.home_name, match.home_entry_type),
           },
           away: {
             id: match.away_entry_id,
-            name: resolvePublicName(
-              match.division_id,
-              match.away_entry_id,
-              match.away_name,
-              match.away_entry_type,
-              match.away_seed,
-            ),
+            name: resolvePublicName(match.away_entry_id, match.away_name, match.away_entry_type),
           },
           starts_at: serializedDate(match.starts_at),
           ends_at: serializedDate(match.ends_at),
@@ -6009,33 +5941,7 @@ export class Phase2Runtime {
        WHERE d.competition_id=$1 GROUP BY d.id ORDER BY d.created_at`,
       [competitionId],
     );
-    const poolMembership = await this.sql.unsafe<{ division_id: string; pool_id: string; entry_id: string }>(
-      `SELECT DISTINCT m.division_id, COALESCE(m.graph_pool_id,m.graph_stage_id) AS pool_id, entry.entry_id
-       FROM matches m
-       CROSS JOIN LATERAL (VALUES (m.home_entry_id),(m.away_entry_id)) AS entry(entry_id)
-       WHERE m.competition_id=$1 AND m.graph_purpose='pool' AND entry.entry_id IS NOT NULL
-         AND COALESCE(m.graph_pool_id,m.graph_stage_id) IS NOT NULL
-       ORDER BY m.division_id, pool_id, entry.entry_id`,
-      [competitionId],
-    );
-    const poolsByDivision = new Map<string, Map<string, string[]>>();
-    for (const row of poolMembership) {
-      const pools = poolsByDivision.get(row.division_id) ?? new Map<string, string[]>();
-      pools.set(row.pool_id, [...(pools.get(row.pool_id) ?? []), row.entry_id]);
-      poolsByDivision.set(row.division_id, pools);
-    }
-    const entryGroupMembership = new Map<string, { groupLabel: string; position: number }>();
-    for (const pools of poolsByDivision.values()) {
-      const sortedPoolIds = [...pools.keys()].sort();
-      sortedPoolIds.forEach((poolId, poolIndex) => {
-        const groupLabel =
-          String.fromCharCode(65 + (poolIndex % 26)) + (poolIndex >= 26 ? String(Math.floor(poolIndex / 26)) : "");
-        const entryIds = pools.get(poolId)!;
-        entryIds.forEach((entryId, entryIndex) => {
-          entryGroupMembership.set(entryId, { groupLabel, position: entryIndex + 1 });
-        });
-      });
-    }
+    const placeholderLabels = await loadCompetitionPlaceholderLabels(this.sql, competitionId);
 
     const processedDivisions = divisions.map((division) => {
       const rawEntries = Array.isArray(division.entries) ? (division.entries as Array<Record<string, unknown>>) : [];
@@ -6043,20 +5949,9 @@ export class Phase2Runtime {
       return {
         ...division,
         short_code: shortCode,
-        entries: rawEntries.map((entry, index) => {
+        entries: rawEntries.map((entry) => {
           if (entry.entry_type === "placeholder") {
-            const derived = placeholderLabel({
-              entry: {
-                id: String(entry.id),
-                name: String(entry.name),
-                entry_type: "placeholder",
-                seed: typeof entry.seed === "number" ? entry.seed : null,
-              },
-              groupMembership: entryGroupMembership.get(String(entry.id)),
-              divisionShortCode: shortCode,
-              multiDivision: divisions.length > 1,
-              fallbackIndex: typeof entry.seed === "number" ? entry.seed : index + 1,
-            });
+            const derived = placeholderLabels.labels.get(String(entry.id))?.organiserLabel ?? String(entry.name);
             return { ...entry, name: derived };
           }
           return entry;

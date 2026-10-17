@@ -16,7 +16,7 @@ const divisions: EntryEditorDivision[] = [
     name: "Open",
     entryLimit: 8,
     entries: [
-      { id: "entry-1", name: "Open 1", seed: null, status: "active", entryType: "placeholder", revision: 1 },
+      { id: "entry-1", name: "Team 1", seed: null, status: "active", entryType: "placeholder", revision: 1 },
       { id: "entry-2", name: "Harbour", seed: 1, status: "active", entryType: "team", revision: 3 },
       // Legacy read without entry_type/revision is treated as a named team.
       { id: "entry-3", name: "Marina", seed: 2, status: "confirmed" },
