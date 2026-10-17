@@ -306,7 +306,7 @@ test("setup states are explicit and viewers cannot send mutations", async ({ pag
     { id: "empty", kind: "heading", text: "Start assisted setup", action: "Start setup" },
     { id: "offline", kind: "heading", text: "Editing paused while offline" },
     { id: "permission", kind: "heading", text: "You do not have permission to edit this setup" },
-    { id: "conflict", kind: "heading", text: "A newer setup revision is available", action: "Load latest revision" },
+    { id: "conflict", kind: "heading", text: "A newer setup version is available", action: "Load latest version" },
     { id: "expired", kind: "heading", text: "This setup draft has expired", action: "Reload expiry status" },
   ] as const;
 

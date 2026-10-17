@@ -21,7 +21,7 @@ test("Gate C C4 organiser resolves an automatic participant and publishes one re
   await expect(ready).toBeEnabled();
   await ready.click();
 
-  await expect(page.getByText("Repair revision saved.")).toBeVisible();
+  await expect(page.getByText("Repair version saved.")).toBeVisible();
   expect(controller.revisionRequests).toHaveLength(1);
   expect(controller.revisionRequests[0]).toMatchObject({
     parent_revision_id: gateCC4Ids.revision,

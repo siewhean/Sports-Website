@@ -129,7 +129,7 @@ test("schedule exposes measurable alternatives, timeline, inspector and explicit
   const acceptScroll = await page.evaluate(() => window.scrollY);
   await useFastest.click();
   await expect.poll(() => acceptedFastest).toBe(true);
-  await expect(page.getByText("The selected option was saved as a new private revision.")).toBeVisible();
+  await expect(page.getByText("The selected option was saved as a new private version.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Schedule update status" })).toBeFocused();
   await expect(page.getByRole("heading", { name: "M2" })).toBeVisible();
   expect(await page.evaluate(() => window.scrollY)).toBe(acceptScroll);
@@ -298,7 +298,7 @@ test("move flow validates consequences before sending the optimistic revision", 
   await page.getByRole("button", { name: "Confirm move" }).click();
   await expect.poll(() => confirmed).toBe(true);
   await expect(page).toHaveURL(new RegExp(`/schedule\\?match=${matchId}&notice=moved$`));
-  await expect(page.getByText("Match moved into a new private schedule revision.")).toBeVisible();
+  await expect(page.getByText("Match moved into a new private schedule version.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Schedule update status" })).toBeFocused();
   await expect(page.getByRole("heading", { name: "M1" })).toBeVisible();
 });

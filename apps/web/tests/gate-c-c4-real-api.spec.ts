@@ -130,7 +130,7 @@ test("browser publishes a C4 repair through the real BFF and public truth", asyn
   );
   await page.getByRole("button", { name: "Mark ready for publication" }).click();
   expect((await revisionResponse).status()).toBe(201);
-  await expect(page.getByText("Repair revision saved.")).toBeVisible();
+  await expect(page.getByText("Repair version saved.")).toBeVisible();
 
   const publicationResponse = page.waitForResponse(
     (response) => response.request().method() === "POST" && response.url().endsWith("/publish"),

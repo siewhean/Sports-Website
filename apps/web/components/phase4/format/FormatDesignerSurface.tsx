@@ -246,7 +246,7 @@ export function FormatDesignerSurface({
       {viewState === "read-only" ? (
         <div className={styles.banner} role="status">
           <Info />
-          {t("prototype.aa040aab458f")}
+          {t("prototype.192ba380b6f7")}
         </div>
       ) : null}
       {showTemplates ? (

@@ -13,10 +13,10 @@ import { DesignerSkeleton, DesignerState } from "./FormatDesignerPanels";
 
 const stateCopy: Record<Exclude<FormatSurfaceState, "ready" | "loading" | "empty">, { title: string; body: string }> = {
   error: { title: t("prototype.825eb58e5ef2"), body: t("prototype.f7664bec2b06") },
-  offline: { title: t("prototype.fb50f4d0f2aa"), body: t("prototype.58cc20f9863f") },
+  offline: { title: t("prototype.fb50f4d0f2aa"), body: t("prototype.a7572b785769") },
   permission: { title: t("prototype.754d312aa0d3"), body: t("prototype.72b2c902df68") },
-  "read-only": { title: t("prototype.d7d6b6505b25"), body: t("prototype.f65cde1ae5a1") },
-  conflict: { title: t("prototype.1c30d12dca7e"), body: t("prototype.0d51a3bd0ed6") },
+  "read-only": { title: t("prototype.7e7b2c9ec54c"), body: t("prototype.f65cde1ae5a1") },
+  conflict: { title: t("prototype.8849d4b76ed4"), body: t("prototype.0d51a3bd0ed6") },
   quota: { title: t("prototype.32da9c17ed32"), body: t("prototype.414488b9f927") },
   plan: { title: t("prototype.b21c9117015f"), body: t("prototype.366a21bb03b5") },
 };
@@ -86,7 +86,7 @@ export function FormatDesignerWorkspace({
         action={
           viewState === "conflict" ? (
             <button data-testid="phase4-format-conflict-reload" onClick={refresh}>
-              {t("prototype.4b46950ea4dd")}
+              {t("prototype.50e4cc4d11f7")}
             </button>
           ) : undefined
         }

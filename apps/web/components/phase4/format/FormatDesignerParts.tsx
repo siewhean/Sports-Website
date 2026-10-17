@@ -135,7 +135,7 @@ export function FormatEditor({
       }
       onDraft(next);
       dispatch({ type: "replace_document", document: next.document });
-      onAnnouncement(`Draft revision ${next.revision} saved.`);
+      onAnnouncement(`Draft version ${next.revision} saved.`);
     } catch {
       onViewState(opaqueId("offline"));
     } finally {
@@ -197,7 +197,7 @@ export function FormatEditor({
         definition_hash: result.definition_hash,
         document: result.document,
       });
-      onAnnouncement(opaqueId("Format published. It is now available to deterministic scheduling."));
+      onAnnouncement(opaqueId("Format published. It is now available to the scheduler."));
     } catch {
       onViewState(opaqueId("offline"));
     } finally {

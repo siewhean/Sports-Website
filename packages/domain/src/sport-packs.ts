@@ -1839,6 +1839,21 @@ export const SPORT_PACKS: Readonly<Record<SportId, SportPack>> = deepFreeze({
   basketball: BASKETBALL_SPORT_PACK,
 });
 
+/** What a sport calls its playing area, for plain labels ("Pitch 1", "Courts"). Not part of the versioned pack. */
+export type PlayingAreaNoun = "pitch" | "court" | "table";
+
+const PLAYING_AREA_NOUNS: Readonly<Record<SportId, PlayingAreaNoun>> = Object.freeze({
+  canoe_polo: "pitch",
+  badminton: "court",
+  table_tennis: "table",
+  volleyball: "court",
+  basketball: "court",
+});
+
+export function playingAreaNoun(sportId: SportId): PlayingAreaNoun {
+  return PLAYING_AREA_NOUNS[sportId];
+}
+
 function effectiveSettings(base: SportPackSettings, override: SportPackOverride): SportPackSettings {
   return frozenClone({ ...base, ...override });
 }

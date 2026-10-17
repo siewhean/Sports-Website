@@ -49,7 +49,7 @@ export const phase4SetupCopy = {
   intro: "Build a competition from authoritative capacity, rules, entries and format evidence.",
   saved: "Draft saved",
   saving: "Saving draft",
-  conflict: "A newer setup revision is available",
+  conflict: "A newer setup version is available",
   offline: "Editing paused while offline",
   readOnly: "This setup is read only",
   permission: "You do not have permission to edit this setup",

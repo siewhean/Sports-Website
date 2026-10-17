@@ -109,7 +109,7 @@ export function V1PublishWorkspace({
         <span className="p2-published-mark" aria-hidden="true">
           {published ? <CheckCircle weight="fill" /> : <ShieldWarning />}
         </span>
-        <p>{published ? `Published revision ${revision.revision}` : v1ScheduleProductionCopy.publicationReview}</p>
+        <p>{published ? `Published version ${revision.revision}` : v1ScheduleProductionCopy.publicationReview}</p>
         <h2>{v1ScheduleRevisionLabel(revision.revision)}</h2>
         <dl>
           <div>

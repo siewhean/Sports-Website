@@ -1,3 +1,4 @@
+import { opaqueId } from "@matchday/ui";
 import { notFound, redirect } from "next/navigation";
 import { PendingRepairCases } from "@/components/gate-c/PendingRepairCases";
 import { RepairWorkspace } from "@/components/gate-c/RepairWorkspace";
@@ -22,6 +23,7 @@ export default async function CompetitionRepairsPage({ params }: { params: Promi
     <OrganiserWorkspace
       competition={competition}
       section={gateCC4UiMachine.resultsSection}
+      tab={opaqueId("corrections")}
       pageEyebrow={gateCC4Copy.eyebrow}
       pageTitle={gateCC4Copy.title}
       pageIntro={gateCC4Copy.intro}

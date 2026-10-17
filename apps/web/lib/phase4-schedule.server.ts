@@ -911,7 +911,7 @@ function demoDocument(input: ScheduleInput, state: ScheduleSurfaceState): Schedu
     warnings: [
       {
         code: "expires_soon",
-        message: "Draft 4 expires on 19 August 2026. Publish or create a fresh revision before then.",
+        message: "Draft 4 expires on 19 August 2026. Publish or create a fresh version before then.",
         daysRemaining: 30,
       },
     ],

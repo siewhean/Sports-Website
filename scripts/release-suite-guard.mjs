@@ -158,6 +158,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       runCommand("4  Lint", "pnpm lint");
       // Redesign Phase 1 (D12): only the six approved colour literals; the self-test proves a fifth colour fails.
       runCommand("4b Palette lint", "pnpm check:palette && pnpm test:check:palette", { expectTests: true });
+      // Redesign Phase 2: organiser and public copy avoids engineering terms (revision, solver, canonical...).
+      runCommand("4c Copy lint", "pnpm check:copy && pnpm test:check:copy", { expectTests: true });
       runCommand("5  Type-check", "pnpm typecheck");
       runCommand("6  Unit tests (all packages)", "pnpm test:unit", { expectTests: true });
       runCommand("7  Gate C evidence seals", "pnpm test:seal:gate-c && pnpm test:evidence:gate-c", {
