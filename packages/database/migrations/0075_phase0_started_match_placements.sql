@@ -11,7 +11,12 @@
 --    hours changed, or the slot became a reserve) is carried as a slot `historical:<match id>`
 --    with interval_id = match id. The input guard accepts such a slot only when it is exactly that
 --    match's placement in the latest published revision and the snapshot fixes the match there;
---    every other slot must still lie inside authoritative capacity, as in 0027.
+--    every other slot must still lie inside authoritative capacity.
+-- 3. Capacity slots come from the merged per-area grid, the same one `phase3_available_match_slots`
+--    counts with range_agg, so a slot may span two touching availability windows (09:00-10:30 and
+--    10:30-12:00 give a 10:00-11:00 slot). A slot is accepted when it overlaps its interval_id
+--    window and lies inside the union of the area's windows; 0027 required a single window, which
+--    rejected such snapshots and failed the whole regeneration.
 DO $migration$
 DECLARE
   target_schema text := current_schema();
@@ -88,7 +93,7 @@ $function$, target_schema);
 END;
 $migration$;
 
--- 0027's guard, unchanged except for the historical-slot branch in the slot loop.
+-- 0027's guard, unchanged except for the historical-slot branch and the merged-window check (3).
 CREATE OR REPLACE FUNCTION phase4_guard_schedule_job_input_references() RETURNS trigger AS $$
 DECLARE competition_row competitions%ROWTYPE; match_value jsonb; slot_value jsonb; stored_match matches%ROWTYPE;
 BEGIN
@@ -141,8 +146,13 @@ BEGIN
       JOIN playing_areas area ON area.id=availability_window.playing_area_id AND area.competition_id=availability_window.competition_id
       WHERE availability_window.id=(slot_value->>'interval_id')::uuid AND availability_window.competition_id=NEW.competition_id
         AND availability_window.playing_area_id=(slot_value->>'area_id')::uuid
-        AND to_timestamp((slot_value->>'start_epoch_ms')::double precision/1000)>=availability_window.starts_at
-        AND to_timestamp((slot_value->>'end_epoch_ms')::double precision/1000)<=availability_window.ends_at
+        AND tstzrange(availability_window.starts_at,availability_window.ends_at,'[)') && tstzrange(
+          to_timestamp((slot_value->>'start_epoch_ms')::double precision/1000),
+          to_timestamp((slot_value->>'end_epoch_ms')::double precision/1000),'[)')
+        AND (SELECT range_agg(tstzrange(area_window.starts_at,area_window.ends_at,'[)'))
+          FROM competition_availability_windows area_window WHERE area_window.playing_area_id=area.id) @> tstzrange(
+          to_timestamp((slot_value->>'start_epoch_ms')::double precision/1000),
+          to_timestamp((slot_value->>'end_epoch_ms')::double precision/1000),'[)')
         AND (slot_value->>'end_epoch_ms')::numeric-(slot_value->>'start_epoch_ms')::numeric=area.slot_minutes::numeric*60000
         AND NOT EXISTS (SELECT 1 FROM playing_area_unavailable_intervals unavailable
           WHERE unavailable.playing_area_id=area.id

@@ -225,4 +225,42 @@ describe("solver never uses reserve slots (Phase 0 property test)", () => {
     // exact-instant IDs; the latest slot (10:10) is the reserve and is not offered.
     expect(slots.map((slot) => slot.id)).toEqual(["w1:1", `w1:at:${Date.parse("2027-01-01T01:40:00Z")}`]);
   });
+
+  it("attributes a slot spanning touching windows to the window holding its start, with unique IDs", () => {
+    // Three touching windows merge into one 09:00-13:00 interval, so with 60-minute slots the
+    // 10:00 and 11:00 slots each span two windows. IDs are chosen so the sorted-first source (w1)
+    // does not overlap the 10:00 slot: the DB guard requires the slot to overlap its window.
+    const input: CalendarCapacityInput = {
+      timeZone: "Asia/Singapore",
+      slotMinutes: 60,
+      areas: [{ id: "court-a", name: "A", fixedReserveSlots: 0 }],
+      availability: [
+        { id: "w2", areaId: "court-a", date: "2027-01-01", startTime: "09:00", endTime: "10:30" },
+        { id: "w3", areaId: "court-a", date: "2027-01-01", startTime: "10:30", endTime: "11:30" },
+        { id: "w1", areaId: "court-a", date: "2027-01-01", startTime: "11:30", endTime: "13:00" },
+      ],
+      unavailable: [],
+    };
+    const { windows, unavailable } = rows(input);
+    const slots = capacityMatchSlots(
+      windows,
+      unavailable,
+      60,
+      [{ id: "court-a", slot_minutes: 60, fixed_reserve_slots: 0 }],
+      "Asia/Singapore",
+    );
+    expect(slots).toHaveLength(calculateCalendarCapacity(input).availableMatchSlots);
+    expect(slots.map((slot) => [new Date(slot.startEpochMs).toISOString(), slot.intervalId])).toEqual([
+      ["2027-01-01T01:00:00.000Z", "w2"],
+      ["2027-01-01T02:00:00.000Z", "w2"],
+      ["2027-01-01T03:00:00.000Z", "w3"],
+      ["2027-01-01T04:00:00.000Z", "w1"],
+    ]);
+    for (const slot of slots) {
+      const source = windows.find((window) => window.id === slot.intervalId)!;
+      expect(new Date(source.starts_at).getTime()).toBeLessThan(slot.endEpochMs);
+      expect(new Date(source.ends_at).getTime()).toBeGreaterThan(slot.startEpochMs);
+    }
+    expect(new Set(slots.map((slot) => slot.id)).size).toBe(slots.length);
+  });
 });
