@@ -53,7 +53,9 @@ test("@a11y info tips open by keyboard and tap, close on Escape and outside clic
 
   // Opened near the right edge, the popover stays inside the viewport.
   await page.getByRole("button", { name: "More about reserve slots" }).first().click();
-  const panel = page.getByText("Slots held back for ceremonies or overruns.", { exact: false }).first();
+  const panel = page
+    .getByText("This saved total applies once across this area’s available days.", { exact: false })
+    .first();
   await expect(panel).toBeVisible();
   const rect = await panel.boundingBox();
   const width = page.viewportSize()?.width ?? 0;
@@ -64,7 +66,7 @@ test("@a11y info tips open by keyboard and tap, close on Escape and outside clic
 test("@a11y number fields drop leading zeros and show no spin buttons", async ({ page }) => {
   await page.goto("/organiser/competitions/singapore-open/capacity");
   await dismissConsent(page);
-  const reserve = page.getByRole("textbox", { name: "Reserve slots", exact: true }).first();
+  const reserve = page.getByRole("textbox", { name: "Reserve slots across all days", exact: true }).first();
   await expect(reserve).toHaveAttribute("inputmode", "numeric");
   await reserve.fill("");
   await reserve.pressSequentially("010");

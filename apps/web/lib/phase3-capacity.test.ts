@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   capacityMutationBody,
+  capacityReserveDates,
   isCapacityMutationBody,
   parseCapacityResponse,
   validateCapacityDraft,
@@ -183,4 +184,63 @@ describe("Phase 3 capacity web boundary", () => {
     ).toBeNull();
     expect(parseCapacityResponse({ ...response, replan_required: "yes" }, competitionId)).toBeNull();
   });
+});
+
+describe("daily reserve capacity boundary", () => {
+  it.each([null, {}, { "2026-08-30": 2, "2026-08-31": 3 }])(
+    "round-trips explicit %j without multiplying the legacy count",
+    (daily) => {
+      const response = payload();
+      Object.assign(response.areas[0]!, { daily_reserve_slots: daily });
+      const parsed = parseCapacityResponse(response, competitionId)!;
+      expect(parsed.areas[0]!.dailyReserveSlots).toEqual(daily);
+      const body = capacityMutationBody(parsed.revision, parsed.timezone, parsed.areas);
+      expect(body.areas[0]!.daily_reserve_slots).toEqual(daily);
+      expect(body.areas[0]!.fixed_reserve_slots).toBe(2);
+      expect(isCapacityMutationBody(body)).toBe(true);
+      expect(validateCapacityDraft(parsed.areas)).toEqual({});
+    },
+  );
+
+  it("keeps omitted legacy configuration omitted on save", () => {
+    const parsed = parseCapacityResponse(payload(), competitionId)!;
+    expect(capacityMutationBody(parsed.revision, parsed.timezone, parsed.areas).areas[0]).not.toHaveProperty(
+      "daily_reserve_slots",
+    );
+  });
+
+  it.each([{ "2026-02-30": 1 }, { "2026-08-30": -1 }, { "2026-08-30": 1.5 }, [], 3])(
+    "rejects invalid daily values %j at both boundaries",
+    (daily) => {
+      const response = payload();
+      Object.assign(response.areas[0]!, { daily_reserve_slots: daily });
+      expect(parseCapacityResponse(response, competitionId)).toBeNull();
+      const parsed = parseCapacityResponse(payload(), competitionId)!;
+      const body = capacityMutationBody(parsed.revision, parsed.timezone, parsed.areas);
+      Object.assign(body.areas[0]!, { daily_reserve_slots: daily });
+      expect(isCapacityMutationBody(body)).toBe(false);
+    },
+  );
+
+  it("shows overnight civil dates and retains dates with entered counts after window edits", () => {
+    const area = parseCapacityResponse(payload(), competitionId)!.areas[0]!;
+    const overnight = {
+      ...area,
+      dailyReserveSlots: { "2026-09-02": 4 },
+      availability: [{ ...area.availability[0]!, date: "2026-08-31", crossMidnight: true }],
+    };
+    expect(capacityReserveDates(overnight)).toEqual(["2026-08-31", "2026-09-01", "2026-09-02"]);
+    expect(overnight.dailyReserveSlots).toEqual({ "2026-09-02": 4 });
+  });
+});
+
+it("accepts and preserves computed reserve-overflow warnings without claiming more capacity", () => {
+  const response = payload();
+  const reserveOverflows = [{ areaId, date: "2026-08-30", requestedSlots: 30, availableSlots: 18 }];
+  Object.assign(response.effective, { reserveOverflows });
+  const parsed = parseCapacityResponse(response, competitionId)!;
+  expect(parsed.effective.reserveOverflows).toEqual(reserveOverflows);
+  expect(parsed.effective.availableMatchSlots).toBe(16);
+  Object.assign(response.effective, { reserveOverflows: [{ ...reserveOverflows[0], requestedSlots: -1 }] });
+  expect(parseCapacityResponse(response, competitionId)).toBeNull();
 });

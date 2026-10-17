@@ -1080,7 +1080,7 @@ export class Phase4Runtime {
     access: CompetitionAccess,
   ): Promise<CompetitionFormatRecommendationRequest["checkSchedule"]> {
     const areaRows = await tx.unsafe<CapacityAreaRow>(
-      `SELECT id,slot_minutes,fixed_reserve_slots FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
+      `SELECT id,slot_minutes,fixed_reserve_slots,daily_reserve_slots FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
       [access.id],
     );
     if (areaRows.length === 0 || new Set(areaRows.map((area) => area.slot_minutes)).size !== 1) return undefined;
@@ -3497,7 +3497,7 @@ export class Phase4Runtime {
     if (!capacityHash)
       throw new ApiError(422, ErrorCode.CAPACITY_NOT_CONFIGURED, "Competition capacity must be configured first");
     const areaRows = await tx.unsafe<CapacityAreaRow>(
-      `SELECT id,slot_minutes,fixed_reserve_slots FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
+      `SELECT id,slot_minutes,fixed_reserve_slots,daily_reserve_slots FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
       [competition.id],
     );
     if (areaRows.length === 0)

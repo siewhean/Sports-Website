@@ -1,3 +1,5 @@
+import { messages } from "@matchday/ui";
+
 export type CapacitySurfaceState =
   "ready" | "loading" | "empty" | "error" | "offline" | "permission" | "read-only" | "conflict";
 
@@ -17,6 +19,7 @@ export type CapacityAreaDraft = Readonly<{
   sortOrder: number;
   slotMinutes: number;
   fixedReserveSlots: number;
+  dailyReserveSlots?: Readonly<Record<string, number>> | null;
   availability: readonly CapacityWindowDraft[];
   unavailable: readonly CapacityWindowDraft[];
   /** Open matches in published or in-review schedules that use this area (read-only). */
@@ -43,6 +46,12 @@ export type CapacitySummary = Readonly<{
   requiredMatchSlots: number;
   remainingMatchSlots: number;
   status: "comfortable" | "tight" | "does_not_fit";
+  reserveOverflows?: readonly Readonly<{
+    areaId: string | null;
+    date: string | null;
+    requestedSlots: number;
+    availableSlots: number;
+  }>[];
   areas: readonly Readonly<{
     areaId: string;
     areaName: string;
@@ -99,6 +108,7 @@ export type CapacityMutationBody = Readonly<{
     sort_order: number;
     slot_minutes: number;
     fixed_reserve_slots: number;
+    daily_reserve_slots?: Readonly<Record<string, number>> | null;
     availability: readonly Readonly<{
       id: string;
       date: string;
@@ -125,6 +135,27 @@ function validDate(value: string): boolean {
   const [year, month, day] = value.split("-").map(Number);
   const parsed = new Date(Date.UTC(year!, month! - 1, day!));
   return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month! - 1 && parsed.getUTCDate() === day;
+}
+
+function validDailyReserves(value: unknown): value is Readonly<Record<string, number>> | null {
+  if (value === null) return true;
+  const entries = record(value);
+  return Boolean(entries && Object.entries(entries).every(([date, count]) => validDate(date) && integer(count)));
+}
+
+/** Dates are local civil dates, including the following day of an overnight window. */
+export function capacityReserveDates(area: CapacityAreaDraft): readonly string[] {
+  const dates = new Set(Object.keys(area.dailyReserveSlots ?? {}));
+  for (const window of area.availability) {
+    if (!validDate(window.date)) continue;
+    dates.add(window.date);
+    if (window.crossMidnight) {
+      const next = new Date(`${window.date}T00:00:00.000Z`);
+      next.setUTCDate(next.getUTCDate() + 1);
+      dates.add(next.toISOString().slice(0, 10));
+    }
+  }
+  return [...dates].sort();
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -211,9 +242,26 @@ function parseSummary(value: unknown): CapacitySummary | null {
       "requiredMatchSlots",
       "remainingMatchSlots",
       "status",
+      ...(item.reserveOverflows === undefined ? [] : ["reserveOverflows"]),
       "intervals",
       "areas",
     ])
+  )
+    return null;
+  if (
+    item.reserveOverflows !== undefined &&
+    (!Array.isArray(item.reserveOverflows) ||
+      item.reserveOverflows.some((value: unknown) => {
+        const overflow = record(value);
+        return (
+          !overflow ||
+          !exactKeys(overflow, ["areaId", "date", "requestedSlots", "availableSlots"]) ||
+          (overflow.areaId !== null && !UUID.test(String(overflow.areaId))) ||
+          (overflow.date !== null && (typeof overflow.date !== "string" || !validDate(overflow.date))) ||
+          !integer(overflow.requestedSlots) ||
+          !integer(overflow.availableSlots)
+        );
+      }))
   )
     return null;
   const areas = Array.isArray(item.areas) ? item.areas.map(parseEffectiveArea) : [];
@@ -295,8 +343,8 @@ function parseSourceArea(value: unknown): CapacityAreaDraft | null {
   const item = record(value);
   // scheduled_match_count/retained were added for Track R2.1; accept responses with or without them.
   const hasUsage = item?.scheduled_match_count !== undefined || item?.retained !== undefined;
-  if (!item || !exactKeys(item, hasUsage ? [...AREA_KEYS, "scheduled_match_count", "retained"] : AREA_KEYS))
-    return null;
+  const areaKeys = [...AREA_KEYS, ...(item?.daily_reserve_slots === undefined ? [] : ["daily_reserve_slots"])];
+  if (!item || !exactKeys(item, hasUsage ? [...areaKeys, "scheduled_match_count", "retained"] : areaKeys)) return null;
   if (hasUsage && (!integer(item.scheduled_match_count) || typeof item.retained !== "boolean")) return null;
   const availability = Array.isArray(item.availability) ? item.availability.map(parseWindow) : [];
   const unavailable = Array.isArray(item.unavailable) ? item.unavailable.map(parseWindow) : [];
@@ -308,6 +356,7 @@ function parseSourceArea(value: unknown): CapacityAreaDraft | null {
     !integer(item.slot_minutes, 1) ||
     item.slot_minutes > 1440 ||
     !integer(item.fixed_reserve_slots) ||
+    (item.daily_reserve_slots !== undefined && !validDailyReserves(item.daily_reserve_slots)) ||
     !Array.isArray(item.availability) ||
     availability.some((window) => !window) ||
     !Array.isArray(item.unavailable) ||
@@ -320,6 +369,9 @@ function parseSourceArea(value: unknown): CapacityAreaDraft | null {
     sortOrder: item.sort_order as number,
     slotMinutes: item.slot_minutes as number,
     fixedReserveSlots: item.fixed_reserve_slots as number,
+    ...(item.daily_reserve_slots === undefined
+      ? {}
+      : { dailyReserveSlots: item.daily_reserve_slots as Readonly<Record<string, number>> | null }),
     availability: availability as CapacityWindowDraft[],
     unavailable: unavailable as CapacityWindowDraft[],
     ...(hasUsage
@@ -397,6 +449,8 @@ export function validateCapacityDraft(areas: readonly CapacityAreaDraft[]): Read
     if (!integer(area.slotMinutes, 1) || area.slotMinutes > 1440)
       issues[`area-${areaIndex}-slot`] = "Use 1–1440 minutes.";
     if (!integer(area.fixedReserveSlots)) issues[`area-${areaIndex}-reserve`] = "Use zero or more reserve slots.";
+    if (area.dailyReserveSlots !== undefined && !validDailyReserves(area.dailyReserveSlots))
+      issues[`area-${areaIndex}-daily-reserve`] = messages.capacityReserves.invalidDaily;
     if (area.availability.length === 0) issues[`area-${areaIndex}-availability`] = "Add an available window.";
     (["availability", "unavailable"] as const).forEach((kind) => {
       area[kind].forEach((window, windowIndex) => {
@@ -432,6 +486,7 @@ export function capacityMutationBody(
       sort_order: area.sortOrder,
       slot_minutes: area.slotMinutes,
       fixed_reserve_slots: area.fixedReserveSlots,
+      ...(area.dailyReserveSlots === undefined ? {} : { daily_reserve_slots: area.dailyReserveSlots }),
       availability: area.availability.map(windowBody),
       unavailable: area.unavailable.map(windowBody),
     })),
@@ -459,6 +514,7 @@ export function isCapacityMutationBody(value: unknown): value is CapacityMutatio
         "sort_order",
         "slot_minutes",
         "fixed_reserve_slots",
+        ...(item.daily_reserve_slots === undefined ? [] : ["daily_reserve_slots"]),
         "availability",
         "unavailable",
       ])
@@ -493,6 +549,7 @@ export function isCapacityMutationBody(value: unknown): value is CapacityMutatio
       !integer(item.slot_minutes, 1) ||
       item.slot_minutes > 1440 ||
       !integer(item.fixed_reserve_slots) ||
+      (item.daily_reserve_slots !== undefined && !validDailyReserves(item.daily_reserve_slots)) ||
       !Array.isArray(item.availability) ||
       item.availability.length === 0 ||
       availability.some((window) => !window) ||
@@ -522,8 +579,9 @@ export const phase3CapacityCopy = {
   areaName: "Area name",
   slotMinutes: "Match slot (minutes)",
   slotMinutesHint: "Time allocated per match slot, including changeover. Typically 30 or 45 minutes.",
-  reserveSlots: "Reserve slots",
-  reserveSlotsHint: "Slots held back for ceremonies or overruns. These are subtracted from available match capacity.",
+  reserveSlots: messages.capacityReserves.legacyLabel,
+  dailyReserve: messages.capacityReserves,
+  reserveSlotsHint: messages.capacityReserves.legacyHint,
   availableWindows: "Available windows",
   availableWindowsHint:
     "Add one row per block of time this area is open for play. Multiple windows on the same day are allowed.",
@@ -599,4 +657,18 @@ export const phase3CapacityMachine = {
 
 export function removeAreaLabel(name: string): string {
   return `Remove ${name}`;
+}
+
+export function capacityReserveOverflowLabel(
+  summary: CapacitySummary,
+  overflow: NonNullable<CapacitySummary["reserveOverflows"]>[number],
+): string {
+  return messages.capacityReserves.overflow
+    .replace(
+      "{area}",
+      summary.areas.find((area) => area.areaId === overflow.areaId)?.areaName ?? phase3CapacityCopy.playingAreas,
+    )
+    .replace("{date}", overflow.date ?? messages.capacityReserves.allDays)
+    .replace("{requested}", String(overflow.requestedSlots))
+    .replace("{available}", String(overflow.availableSlots));
 }
