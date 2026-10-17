@@ -34,6 +34,7 @@ import { RepairRepository } from "./repositories/repair.repository.js";
 import { enqueueResultPublishedNotifications } from "./match-notifications.js";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
 import { loadCompetitionPlaceholderLabels } from "./placeholder-labels.js";
+import { loadDivisionShortCodes, withDivisionShortCodeConflict } from "./division-short-codes.js";
 import { applyLiveOverlay, liveOverlayRowsSql, liveOverlayUpdatedAt, parseLiveOverlay } from "./public-live-overlay.js";
 import {
   NoopScoringAccessRateLimiter,
@@ -1254,10 +1255,12 @@ export class Phase2Runtime {
       );
       if ((existing[0]?.count ?? 0) >= 1)
         throw new ApiError(409, ErrorCode.SLICE_DIVISION_LIMIT, "This slice supports one division");
-      const shortCode = generateDivisionShortCode(input.name.trim(), []);
-      const rows = await tx.unsafe<{ id: string; short_code: string | null }>(
-        `INSERT INTO divisions (competition_id, name, short_code, team_limit) VALUES ($1,$2,$3,$4) RETURNING id, short_code`,
-        [competitionId, input.name.trim(), shortCode, input.teamLimit],
+      const shortCode = generateDivisionShortCode(input.name.trim(), await loadDivisionShortCodes(tx, competitionId));
+      const rows = await withDivisionShortCodeConflict(() =>
+        tx.unsafe<{ id: string; short_code: string | null }>(
+          `INSERT INTO divisions (competition_id, name, short_code, team_limit) VALUES ($1,$2,$3,$4) RETURNING id, short_code`,
+          [competitionId, input.name.trim(), shortCode, input.teamLimit],
+        ),
       );
       const division = required(rows, "Division was not created");
       await this.evidence(tx, {

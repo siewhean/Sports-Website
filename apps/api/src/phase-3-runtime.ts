@@ -29,6 +29,7 @@ import {
 import { CreateCompetitionCommand, CreateCompetitionHandler } from "./commands/index.js";
 import { buildPlannedEntryDrafts, plannedEntryCountIssue } from "./phase-3-planned-entries.js";
 import { loadCompetitionPlaceholderLabels } from "./placeholder-labels.js";
+import { withDivisionShortCodeConflict } from "./division-short-codes.js";
 
 export type Phase3Actor = { accountId: string };
 
@@ -778,10 +779,12 @@ export class Phase3Runtime {
       } else {
         shortCode = generateDivisionShortCode(input.name, existingCodes);
       }
-      const rows = await tx.unsafe<Record<string, unknown>>(
-        `INSERT INTO divisions (competition_id,name,code,short_code,team_limit) VALUES ($1,$2,$3,$4,$5)
+      const rows = await withDivisionShortCodeConflict(() =>
+        tx.unsafe<Record<string, unknown>>(
+          `INSERT INTO divisions (competition_id,name,code,short_code,team_limit) VALUES ($1,$2,$3,$4,$5)
          RETURNING id,competition_id,name,code,short_code,team_limit,revision`,
-        [competitionId, input.name.trim(), input.code ?? null, shortCode, input.entryLimit],
+          [competitionId, input.name.trim(), input.code ?? null, shortCode, input.entryLimit],
+        ),
       );
       const created = required(rows, "Division was not created");
       await tx.unsafe(
@@ -995,23 +998,25 @@ export class Phase3Runtime {
         }
       }
 
-      const rows = await tx.unsafe<Record<string, unknown>>(
-        `UPDATE divisions SET name=COALESCE($4,name),code=CASE WHEN $5 THEN $6 ELSE code END,
-           short_code=CASE WHEN $7 THEN $8 ELSE short_code END,
-           team_limit=COALESCE($9,team_limit),revision=revision+1,updated_at=$10
-         WHERE id=$1 AND competition_id=$2 AND revision=$3 RETURNING id,competition_id,name,code,short_code,team_limit,revision`,
-        [
-          divisionId,
-          competitionId,
-          input.revision,
-          input.name?.trim() ?? null,
-          input.code !== undefined,
-          input.code ?? null,
-          input.shortCode !== undefined,
-          normalizedShortCode ?? null,
-          input.entryLimit ?? null,
-          this.now(),
-        ],
+      const rows = await withDivisionShortCodeConflict(() =>
+        tx.unsafe<Record<string, unknown>>(
+          `UPDATE divisions SET name=COALESCE($4,name),code=CASE WHEN $5 THEN $6 ELSE code END,
+             short_code=CASE WHEN $7 THEN $8 ELSE short_code END,
+             team_limit=COALESCE($9,team_limit),revision=revision+1,updated_at=$10
+           WHERE id=$1 AND competition_id=$2 AND revision=$3 RETURNING id,competition_id,name,code,short_code,team_limit,revision`,
+          [
+            divisionId,
+            competitionId,
+            input.revision,
+            input.name?.trim() ?? null,
+            input.code !== undefined,
+            input.code ?? null,
+            input.shortCode !== undefined,
+            normalizedShortCode ?? null,
+            input.entryLimit ?? null,
+            this.now(),
+          ],
+        ),
       );
       const division = rows[0];
       if (!division) throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Division revision is stale");
