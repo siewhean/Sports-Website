@@ -17,5 +17,5 @@
 }
 
 [data-testid="phase4-schedule"] > [role="alert"] > svg {
-  color: var(--danger);
+  color: var(--danger-ink);
 }

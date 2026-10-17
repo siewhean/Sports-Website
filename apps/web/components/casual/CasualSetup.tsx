@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { NumberField } from "@matchday/ui/react";
 import { ArrowRight, ClockCounterClockwise, UsersThree } from "@phosphor-icons/react";
 import { createCasualGame, type CasualGame, type CasualSettings } from "@/lib/casual-client";
 import { getPresets, getSavedGames, getSharedGames, savePreset, type CasualPreset } from "@/lib/casual-account";
@@ -163,26 +164,22 @@ export function CasualSetup() {
               {sport.timed ? (
                 <label className={styles.field}>
                   {c.period}
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={120}
-                    value={settings.period_minutes ?? ""}
-                    onChange={(event) => setSettings({ ...settings, period_minutes: Number(event.target.value) })}
+                  <NumberField
+                    value={settings.period_minutes ?? null}
+                    onValueChange={(next) => {
+                      if (next !== null) setSettings({ ...settings, period_minutes: next });
+                    }}
                   />
                 </label>
               ) : (
                 <>
                   <label className={styles.field}>
                     {c.target}
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      max={99}
-                      value={settings.target_points ?? ""}
-                      onChange={(event) => setSettings({ ...settings, target_points: Number(event.target.value) })}
+                    <NumberField
+                      value={settings.target_points ?? null}
+                      onValueChange={(next) => {
+                        if (next !== null) setSettings({ ...settings, target_points: next });
+                      }}
                     />
                   </label>
                   <label className={styles.field}>

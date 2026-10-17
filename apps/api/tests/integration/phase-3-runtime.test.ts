@@ -2360,4 +2360,269 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
     );
     expect(interval).toEqual({ starts_at: "2027-10-31T00:00:00Z", ends_at: "2027-10-31T02:00:00Z" });
   });
+
+  describe("planned (placeholder) entries", () => {
+    let actor: { accountId: string };
+    beforeAll(() => {
+      actor = { accountId };
+    });
+    async function createPlanningCompetition(name: string) {
+      return runtime.createCompetition(
+        actor,
+        {
+          organisationId,
+          name,
+          slug: `${name.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}-${randomUUID()}`,
+          sportCode: "canoe_polo",
+          venue: "Planning Pool",
+          address: "1 Planning Way",
+          countryCode: "SG",
+          startsOn: "2027-11-06",
+          endsOn: "2027-11-07",
+          timezone: "Asia/Singapore",
+          locale: "en-SG",
+        },
+        randomUUID(),
+      );
+    }
+
+    it("creates a division with N unnamed placeholders that count toward the free-plan cap", async () => {
+      const competition = await createPlanningCompetition("Planning Cup");
+      const division = (await runtime.createDivision(
+        actor,
+        competition.id,
+        { name: "Women", entryLimit: 8, plannedEntryCount: 6 },
+        randomUUID(),
+        randomUUID(),
+      )) as { id: string; entries: Array<{ name: string; entry_type: string; seed: number; status: string }> };
+      expect(division.entries.map((entry) => [entry.name, entry.entry_type, entry.seed, entry.status])).toEqual(
+        [1, 2, 3, 4, 5, 6].map((n) => [`Women ${n}`, "placeholder", n, "active"]),
+      );
+      const stored = await client<{ name: string; entry_type: string }[]>`
+        SELECT name,entry_type FROM division_entries WHERE division_id=${division.id} ORDER BY seed`;
+      expect(stored).toHaveLength(6);
+      expect(stored.every((entry) => entry.entry_type === "placeholder")).toBe(true);
+
+      // 6 placeholders + 10 more fills the free cap exactly; the 11th is refused
+      // with the same 422 the single-entry path uses, and nothing is persisted.
+      const open = (await runtime.createDivision(
+        actor,
+        competition.id,
+        { name: "Open", entryLimit: 16 },
+        randomUUID(),
+        randomUUID(),
+      )) as { id: string };
+      const planned = (await runtime.planEntries(
+        actor,
+        competition.id,
+        open.id,
+        { count: 10 },
+        randomUUID(),
+        randomUUID(),
+      )) as { division_id: string; entries: Array<{ name: string; seed: number }> };
+      expect(planned.division_id).toBe(open.id);
+      expect(planned.entries.map((entry) => entry.name)).toEqual([...Array(10)].map((_, i) => `Open ${i + 1}`));
+      await expect(
+        runtime.planEntries(actor, competition.id, open.id, { count: 1 }, randomUUID(), randomUUID()),
+      ).rejects.toMatchObject({ statusCode: 422, code: "FREE_ENTRY_LIMIT_REACHED" });
+      await expect(
+        runtime.mutateEntry(
+          actor,
+          competition.id,
+          open.id,
+          { action: "create", name: "Named club" },
+          randomUUID(),
+          randomUUID(),
+        ),
+      ).rejects.toMatchObject({ statusCode: 422, code: "FREE_ENTRY_LIMIT_REACHED" });
+      await expect(
+        runtime.createDivision(
+          actor,
+          competition.id,
+          { name: "Mixed", entryLimit: 8, plannedEntryCount: 2 },
+          randomUUID(),
+          randomUUID(),
+        ),
+      ).rejects.toMatchObject({ statusCode: 422, code: "FREE_ENTRY_LIMIT_REACHED" });
+      const totals = required(
+        await client<{ entries: number; divisions: number }[]>`SELECT
+          (SELECT count(*)::int FROM division_entries e JOIN divisions d ON d.id=e.division_id
+           WHERE d.competition_id=${competition.id}) AS entries,
+          (SELECT count(*)::int FROM divisions WHERE competition_id=${competition.id}) AS divisions`,
+      );
+      expect(totals).toEqual({ entries: 16, divisions: 2 });
+    });
+
+    it("rejects planned counts beyond the division limit and continues numbering past existing names", async () => {
+      const competition = await createPlanningCompetition("Numbering Cup");
+      await expect(
+        runtime.createDivision(
+          actor,
+          competition.id,
+          { name: "Tiny", entryLimit: 8, plannedEntryCount: 9 },
+          randomUUID(),
+          randomUUID(),
+        ),
+      ).rejects.toMatchObject({ statusCode: 422, code: "VALIDATION_ERROR" });
+      const division = (await runtime.createDivision(
+        actor,
+        competition.id,
+        { name: "Mixed", entryLimit: 8, plannedEntryCount: 2 },
+        randomUUID(),
+        randomUUID(),
+      )) as { id: string };
+      await runtime.mutateEntry(
+        actor,
+        competition.id,
+        division.id,
+        { action: "create", name: "Mixed 3", seed: 3 },
+        randomUUID(),
+        randomUUID(),
+      );
+      const planned = (await runtime.planEntries(
+        actor,
+        competition.id,
+        division.id,
+        { count: 2 },
+        randomUUID(),
+        randomUUID(),
+      )) as { entries: Array<{ name: string; seed: number }> };
+      expect(planned.entries.map((entry) => [entry.name, entry.seed])).toEqual([
+        ["Mixed 4", 4],
+        ["Mixed 5", 5],
+      ]);
+      await expect(
+        runtime.planEntries(actor, competition.id, division.id, { count: 4 }, randomUUID(), randomUUID()),
+      ).rejects.toMatchObject({ statusCode: 422, code: "VALIDATION_ERROR" });
+    });
+
+    it("lets organisers name a placeholder after the schedule exists and the schedule read reflects it", async () => {
+      const competition = await createPlanningCompetition("Rename Cup");
+      await runtime.replaceCapacity(
+        actor,
+        competition.id,
+        {
+          revision: 1,
+          areas: [
+            {
+              name: "Pool",
+              slotMinutes: 30,
+              availability: [{ date: "2027-11-06", startTime: "08:00", endTime: "12:00" }],
+            },
+          ],
+        },
+        randomUUID(),
+      );
+      const division = (await runtime.createDivision(
+        actor,
+        competition.id,
+        { name: "Open", entryLimit: 8, plannedEntryCount: 2 },
+        randomUUID(),
+        randomUUID(),
+      )) as { id: string; entries: Array<{ id: string; revision: number; seed: number }> };
+      const [first, second] = division.entries;
+      if (!first || !second) throw new Error("Expected two placeholders");
+      const graph = createRoundRobinFormatGraph(2);
+      const format = await runtime.createFormatRevision(actor, competition.id, division.id, graph, randomUUID());
+      const match = required(graph.matches);
+      const matchId = randomUUID();
+      await client`INSERT INTO matches
+        (id,competition_id,division_id,format_revision_id,code,stage,round_number,ordinal,home_entry_id,away_entry_id,state)
+        VALUES (${matchId},${competition.id},${division.id},${format.id},${match.id},'group',1,1,${first.id},${second.id},'ready')`;
+      await runtime.publishFormat(actor, competition.id, format.id, format.definition_hash, randomUUID());
+
+      // New placeholders and seed changes stay locked by the format...
+      await expect(
+        runtime.planEntries(actor, competition.id, division.id, { count: 1 }, randomUUID(), randomUUID()),
+      ).rejects.toMatchObject({ code: "ENTRY_MUTATION_LOCKED_BY_FORMAT" });
+      await expect(
+        runtime.updateEntry(
+          actor,
+          competition.id,
+          division.id,
+          first.id,
+          { revision: first.revision, seed: 5 },
+          randomUUID(),
+          randomUUID(),
+        ),
+      ).rejects.toMatchObject({ code: "ENTRY_MUTATION_LOCKED_BY_FORMAT" });
+      // ...but naming the team is display data joined by id everywhere.
+      const renamed = (await runtime.updateEntry(
+        actor,
+        competition.id,
+        division.id,
+        first.id,
+        { revision: first.revision, name: "Kayak Club", entryType: "team" },
+        randomUUID(),
+        randomUUID(),
+      )) as { name: string; entry_type: string; seed: number; revision: number };
+      expect(renamed).toMatchObject({
+        name: "Kayak Club",
+        entry_type: "team",
+        seed: first.seed,
+        revision: first.revision + 1,
+      });
+      const scheduleRow = required(
+        await client<{ home_name: string; away_name: string }[]>`
+          SELECT home.name AS home_name,away.name AS away_name FROM matches m
+          LEFT JOIN division_entries home ON home.id=m.home_entry_id
+          LEFT JOIN division_entries away ON away.id=m.away_entry_id WHERE m.id=${matchId}`,
+      );
+      expect(scheduleRow).toEqual({ home_name: "Kayak Club", away_name: "Open 2" });
+      const listed = (await runtime.listEntries(actor, competition.id, division.id)) as Array<{
+        id: string;
+        entry_type: string;
+      }>;
+      expect(listed.find((entry) => entry.id === first.id)?.entry_type).toBe("team");
+      expect(listed.find((entry) => entry.id === second.id)?.entry_type).toBe("placeholder");
+    });
+
+    it("never plans, renames, or stores placeholders on an archived competition", async () => {
+      const competition = await createPlanningCompetition("Archived Cup");
+      const division = (await runtime.createDivision(
+        actor,
+        competition.id,
+        { name: "Open", entryLimit: 8, plannedEntryCount: 2 },
+        randomUUID(),
+        randomUUID(),
+      )) as { id: string; entries: Array<{ id: string; revision: number }> };
+      const placeholder = required(division.entries);
+      await runtime.mutateCompetition(actor, competition.id, { action: "archive", revision: 1 }, randomUUID());
+      const before = await client<{ id: string; name: string; entry_type: string; revision: number }[]>`
+        SELECT id,name,entry_type,revision FROM division_entries WHERE division_id=${division.id} ORDER BY seed`;
+      await expect(
+        runtime.createDivision(
+          actor,
+          competition.id,
+          { name: "Women", entryLimit: 8, plannedEntryCount: 2 },
+          randomUUID(),
+          randomUUID(),
+        ),
+      ).rejects.toMatchObject({ code: "COMPETITION_ARCHIVED" });
+      await expect(
+        runtime.planEntries(actor, competition.id, division.id, { count: 1 }, randomUUID(), randomUUID()),
+      ).rejects.toMatchObject({ code: "COMPETITION_ARCHIVED" });
+      await expect(
+        runtime.updateEntry(
+          actor,
+          competition.id,
+          division.id,
+          placeholder.id,
+          { revision: placeholder.revision, name: "Late name", entryType: "team" },
+          randomUUID(),
+          randomUUID(),
+        ),
+      ).rejects.toMatchObject({ code: "COMPETITION_ARCHIVED" });
+      const after = await client<{ id: string; name: string; entry_type: string; revision: number }[]>`
+        SELECT id,name,entry_type,revision FROM division_entries WHERE division_id=${division.id} ORDER BY seed`;
+      expect(after).toEqual(before);
+      expect(
+        required(
+          await client<
+            { divisions: number }[]
+          >`SELECT count(*)::int AS divisions FROM divisions WHERE competition_id=${competition.id}`,
+        ).divisions,
+      ).toBe(1);
+    });
+  });
 });

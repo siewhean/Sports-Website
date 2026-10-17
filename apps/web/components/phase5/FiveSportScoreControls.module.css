@@ -108,7 +108,7 @@
 }
 .primaryGroup .action {
   min-height: 72px;
-  border-color: #a1ba5b;
+  border-color: var(--success-line);
   background: #31411e;
   font-size: 1rem;
 }
@@ -121,7 +121,7 @@
 .action[data-side="away"] {
   border-color: #f1c94a;
   background: #c99700;
-  color: #12150b;
+  color: var(--signal-ink);
 }
 .primaryGroup .action[data-side="home"]:hover:not(:disabled) {
   background: #2360d0;
@@ -207,11 +207,11 @@
 }
 :global([data-contrast="high"]) .action[data-side="home"] {
   background: #8ec5ff;
-  color: #000000;
+  color: var(--ink);
 }
 :global([data-contrast="high"]) .action[data-side="away"] {
   background: #ffe066;
-  color: #000000;
+  color: var(--ink);
 }
 :global([data-contrast="high"]) .status,
 :global([data-contrast="high"]) .header p {

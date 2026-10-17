@@ -1,10 +1,10 @@
 .container {
   margin: 1rem 0;
   padding: 1.1rem 1.25rem;
-  background: var(--surface-subtle, #fef2f2);
-  border: 1px solid var(--border-danger, #fecaca);
+  background: var(--surface-subtle, var(--danger-surface));
+  border: 1px solid var(--border-danger, var(--danger-line));
   border-radius: var(--radius-md, 8px);
-  color: var(--text-primary, #1e293b);
+  color: var(--text-primary, var(--ink));
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -20,7 +20,7 @@
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
-  color: var(--text-danger, #b91c1c);
+  color: var(--text-danger, var(--danger-ink));
 }
 
 .disclaimer,
@@ -28,7 +28,7 @@
   margin: 0;
   font-size: 0.82rem;
   line-height: 1.45;
-  color: var(--text-muted, #334155);
+  color: var(--text-muted, var(--ink-muted));
 }
 
 .diagnosticsList {
@@ -42,8 +42,8 @@
 
 .diagnosticItem {
   padding: 0.75rem;
-  background: var(--surface-card, #ffffff);
-  border: 1px solid var(--border-subtle, #e2e8f0);
+  background: var(--surface-card, var(--surface));
+  border: 1px solid var(--border-subtle, var(--info-line));
   border-radius: var(--radius-sm, 6px);
   display: flex;
   flex-direction: column;
@@ -53,7 +53,7 @@
 .conditionTitle {
   font-size: 0.85rem;
   font-weight: 600;
-  color: var(--text-primary, #0f172a);
+  color: var(--text-primary, var(--ink));
 }
 
 .matchesRow {
@@ -66,19 +66,19 @@
 
 .matchLabels {
   font-size: 0.8rem;
-  color: var(--text-secondary, #334155);
+  color: var(--text-secondary, var(--ink-muted));
   font-weight: 500;
 }
 
 .reviewLink {
   font-size: 0.8rem;
   font-weight: 600;
-  color: var(--link-primary, #2563eb);
+  color: var(--link-primary, var(--info-ink));
   text-decoration: underline;
   text-underline-offset: 2px;
   white-space: nowrap;
 }
 
 .reviewLink:hover {
-  color: var(--link-hover, #1d4ed8);
+  color: var(--link-hover, var(--info-ink));
 }

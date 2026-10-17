@@ -130,14 +130,14 @@ export function OrganiserWorkspace({
               </small>
             ) : null}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="p2-organiser__account">
             {syncLabel ? (
               <p className="p2-sync" data-sync-state={syncState}>
                 <span aria-hidden="true" />
                 {syncLabel}
               </p>
             ) : null}
-            <IdentityStatus className="site-header__access" />
+            <IdentityStatus className="site-header__access p2-organiser__identity" />
           </div>
         </header>
       ) : null}

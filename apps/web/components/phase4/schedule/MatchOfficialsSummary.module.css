@@ -61,8 +61,8 @@
   align-items: center;
   padding: 0.1rem 0.35rem;
   border-radius: 4px;
-  background-color: var(--color-surface-sunken, #f3f4f6);
-  color: var(--color-text-secondary, #4b5563);
+  background-color: var(--color-surface-sunken, var(--surface-subtle));
+  color: var(--color-text-secondary, var(--ink-muted));
   font-size: 0.65rem;
   font-weight: 500;
   line-height: 1;
@@ -91,5 +91,5 @@
 
 .manageLink:hover,
 .manageLink:focus-visible {
-  color: var(--schedule-signal, #0052cc);
+  color: var(--schedule-signal, var(--info-ink));
 }

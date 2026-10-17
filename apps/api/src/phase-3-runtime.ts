@@ -26,6 +26,7 @@ import {
   OfficialRepository,
 } from "./repositories/index.js";
 import { CreateCompetitionCommand, CreateCompetitionHandler } from "./commands/index.js";
+import { buildPlannedEntryDrafts, plannedEntryCountIssue } from "./phase-3-planned-entries.js";
 
 export type Phase3Actor = { accountId: string };
 
@@ -692,7 +693,7 @@ export class Phase3Runtime {
   async createDivision(
     actor: Phase3Actor,
     competitionId: string,
-    input: { name: string; code?: string; entryLimit: 8 | 12 | 16 | 24 | 48 },
+    input: { name: string; code?: string; entryLimit: 8 | 12 | 16 | 24 | 48; plannedEntryCount?: number },
     requestId: string,
     idempotencyKey: string,
   ) {
@@ -709,17 +710,21 @@ export class Phase3Runtime {
       if (replay) return replay;
       if (competition.status === "archived")
         throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
+      if (input.plannedEntryCount !== undefined) {
+        const issue = plannedEntryCountIssue(input.plannedEntryCount, input.entryLimit, 0);
+        if (issue) throw new ApiError(422, ErrorCode.VALIDATION_ERROR, issue);
+      }
       const rows = await tx.unsafe<Record<string, unknown>>(
         `INSERT INTO divisions (competition_id,name,code,team_limit) VALUES ($1,$2,$3,$4)
          RETURNING id,competition_id,name,code,team_limit,revision`,
         [competitionId, input.name.trim(), input.code ?? null, input.entryLimit],
       );
-      const division = required(rows, "Division was not created");
+      const created = required(rows, "Division was not created");
       await tx.unsafe(
         `INSERT INTO division_sport_settings (division_id,competition_id,sport_code,pack_version,settings_override,updated_by)
          SELECT $1,competition_id,sport_code,pack_version,'{}'::jsonb,$2
          FROM competition_sport_settings WHERE competition_id=$3`,
-        [division.id, actor.accountId, competitionId],
+        [created.id, actor.accountId, competitionId],
       );
       await this.evidence(
         tx,
@@ -728,9 +733,19 @@ export class Phase3Runtime {
         requestId,
         "division.created",
         "division",
-        String(division.id),
-        division,
+        String(created.id),
+        created,
       );
+      const entries = input.plannedEntryCount
+        ? await this.insertPlannedEntries(tx, actor, competition.organisation_id, requestId, {
+            competitionId,
+            divisionId: String(created.id),
+            divisionName: String(created.name),
+            entryLimit: input.entryLimit,
+            count: input.plannedEntryCount,
+          })
+        : [];
+      const division = { ...created, entries };
       await this.recordMutationReceipt(
         tx,
         competition.organisation_id,
@@ -741,6 +756,116 @@ export class Phase3Runtime {
       );
       return division;
     });
+  }
+
+  /**
+   * Adds `count` unnamed placeholder entries to an existing division so the
+   * organiser can plan team numbers before names are known. Placeholders are
+   * locked by format creation like any other new entry, because the format graph
+   * is sized from the entry count.
+   */
+  async planEntries(
+    actor: Phase3Actor,
+    competitionId: string,
+    divisionId: string,
+    input: { count: number },
+    requestId: string,
+    idempotencyKey: string,
+  ) {
+    return this.transaction(async (tx) => {
+      const competition = await this.competitionAccess(tx, competitionId, actor, true);
+      const operation = "entry.plan";
+      const replay = await this.mutationReplay<Record<string, unknown>>(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        { competitionId, divisionId, input },
+      );
+      if (replay) return replay;
+      this.assertMutable(competition);
+      const division = required(
+        await tx.unsafe<{ id: string; name: string; team_limit: number }>(
+          `SELECT id,name,team_limit FROM divisions WHERE id=$1 AND competition_id=$2 FOR UPDATE`,
+          [divisionId, competitionId],
+        ),
+        "Division not found",
+      );
+      await this.assertEntriesEditable(tx, competitionId, divisionId);
+      const entries = await this.insertPlannedEntries(tx, actor, competition.organisation_id, requestId, {
+        competitionId,
+        divisionId,
+        divisionName: division.name,
+        entryLimit: division.team_limit,
+        count: input.count,
+      });
+      const result = { division_id: divisionId, entries };
+      await this.recordMutationReceipt(
+        tx,
+        competition.organisation_id,
+        idempotencyKey,
+        operation,
+        { competitionId, divisionId, input },
+        result,
+      );
+      return result;
+    });
+  }
+
+  private async insertPlannedEntries(
+    tx: PostgresJsSql,
+    actor: Phase3Actor,
+    organisationId: string,
+    requestId: string,
+    target: { competitionId: string; divisionId: string; divisionName: string; entryLimit: number; count: number },
+  ): Promise<readonly Record<string, unknown>[]> {
+    const existing = await tx.unsafe<{ name: string; seed: number | null; status: string }>(
+      `SELECT name,seed,status FROM division_entries WHERE division_id=$1`,
+      [target.divisionId],
+    );
+    const activeInDivision = existing.filter((entry) => entry.status === "active" || entry.status === "confirmed");
+    const issue = plannedEntryCountIssue(target.count, target.entryLimit, activeInDivision.length);
+    if (issue) throw new ApiError(422, ErrorCode.VALIDATION_ERROR, issue);
+    // Placeholders count toward the free-plan cap exactly like named teams. The
+    // database trigger is the last line of defence; checking here first turns a
+    // raw constraint failure into the same 422 the single-entry path returns.
+    const usage = required(
+      await tx.unsafe<{ plan_tier: string; active_count: number }>(
+        `SELECT matchday_effective_plan_tier(c.id) AS plan_tier,
+                (SELECT count(*)::int FROM division_entries e JOIN divisions d ON d.id=e.division_id
+                 WHERE d.competition_id=c.id AND e.status IN ('confirmed','active')) AS active_count
+         FROM competitions c WHERE c.id=$1`,
+        [target.competitionId],
+      ),
+      "Competition not found",
+    );
+    const limit = competitionDomain.COMPETITION_FREE_ENTRY_LIMIT;
+    if (usage.plan_tier === "free" && usage.active_count + target.count > limit)
+      throw new ApiError(
+        422,
+        ErrorCode.FREE_ENTRY_LIMIT_REACHED,
+        `The free plan supports ${limit} active entries across all divisions, including planned teams`,
+      );
+    const drafts = buildPlannedEntryDrafts({
+      divisionName: target.divisionName,
+      count: target.count,
+      entryLimit: target.entryLimit,
+      existing,
+    });
+    const created: Record<string, unknown>[] = [];
+    for (const draft of drafts) {
+      const id = randomUUID();
+      const rows = await tx.unsafe<Record<string, unknown>>(
+        `INSERT INTO division_entries (id,division_id,name,entry_type,seed,status)
+         VALUES ($1,$2,$3,'placeholder',$4,'active')
+         RETURNING id,division_id,name,entry_type,status,seed,metadata,availability,revision,created_at,updated_at`,
+        [id, target.divisionId, draft.name, draft.seed],
+      );
+      const entry = required(rows, "Planned entry was not created");
+      await this.evidence(tx, actor, organisationId, requestId, "entry.created", "entry", id, entry);
+      created.push(entry);
+    }
+    return created;
   }
 
   async listDivisions(actor: Phase3Actor, competitionId: string) {
@@ -847,6 +972,7 @@ export class Phase3Runtime {
     input: {
       revision: number;
       name?: string;
+      entryType?: competitionDomain.EntryType;
       seed?: number | null;
       metadata?: Record<string, unknown>;
       availability?: unknown[];
@@ -873,7 +999,12 @@ export class Phase3Runtime {
         ]),
         "Division not found",
       );
-      await this.assertEntriesEditable(tx, competitionId, divisionId);
+      // Seeds and availability feed the format graph and schedule, so they stay
+      // locked once a format exists. Names, entry type and metadata are display
+      // data joined by entry id everywhere (schedule, public pages, exports), so
+      // organisers can name planned teams even after the schedule is generated.
+      if (input.seed !== undefined || input.availability !== undefined)
+        await this.assertEntriesEditable(tx, competitionId, divisionId);
       const current = await this.domainCompetition(tx, competitionId);
       expectDomain(
         this.domain.updateEntry(
@@ -882,6 +1013,7 @@ export class Phase3Runtime {
           entryId,
           {
             ...(input.name === undefined ? {} : { name: input.name }),
+            ...(input.entryType === undefined ? {} : { type: input.entryType }),
             ...(input.seed === undefined ? {} : { seed: input.seed }),
             ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
             ...(input.availability === undefined
@@ -893,7 +1025,8 @@ export class Phase3Runtime {
       );
       const rows = await tx.unsafe<Record<string, unknown>>(
         `UPDATE division_entries SET name=COALESCE($4,name),seed=CASE WHEN $5 THEN $6::int ELSE seed END,
-          metadata=COALESCE($7::jsonb,metadata),availability=COALESCE($8::jsonb,availability),revision=revision+1,updated_at=$9
+          metadata=COALESCE($7::jsonb,metadata),availability=COALESCE($8::jsonb,availability),
+          entry_type=COALESCE($10,entry_type),revision=revision+1,updated_at=$9
          WHERE id=$1 AND division_id=$2 AND revision=$3 AND status IN ('confirmed','active')
          RETURNING id,division_id,name,entry_type,status,seed,metadata,availability,revision`,
         [
@@ -906,6 +1039,7 @@ export class Phase3Runtime {
           input.metadata ?? null,
           input.availability ?? null,
           this.now(),
+          input.entryType ?? null,
         ],
       );
       const entry = rows[0];

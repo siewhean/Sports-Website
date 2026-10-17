@@ -3,5 +3,5 @@ import tseslint from "typescript-eslint";
 
 export default defineConfig([
   globalIgnores(["**/dist/**", "**/node_modules/**"]),
-  ...tseslint.configs.recommended.map((config) => ({ ...config, files: ["**/*.ts"] })),
+  ...tseslint.configs.recommended.map((config) => ({ ...config, files: ["**/*.ts", "**/*.tsx"] })),
 ]);

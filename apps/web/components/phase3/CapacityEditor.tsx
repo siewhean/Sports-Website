@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
+import { InfoTip, NumberField, fieldControlId, withFieldControl, type FieldControl } from "@matchday/ui/react";
 import { Gauge, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import {
   capacityMutationBody,
@@ -158,7 +159,6 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
           <div>
             <p className={styles.kicker}>{phase3CapacityCopy.playingAreas}</p>
             <h2>{document.competitionName}</h2>
-            <p>{phase3CapacityCopy.intro}</p>
           </div>
           <button
             className={styles.secondaryButton}
@@ -195,29 +195,27 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
                 </Field>
                 <Field
                   label={phase3CapacityCopy.slotMinutes}
-                  hint={phase3CapacityCopy.slotMinutesHint}
+                  info={phase3CapacityCopy.slotMinutesHint}
                   error={issues[`area-${areaIndex}-slot`]}
                 >
-                  <input
-                    type="number"
-                    min={1}
-                    max={1440}
+                  <NumberField
                     value={area.slotMinutes}
-                    onChange={(event) => updateArea(areaIndex, { slotMinutes: Number(event.target.value) })}
+                    onValueChange={(next) => {
+                      if (next !== null) updateArea(areaIndex, { slotMinutes: next });
+                    }}
                   />
                 </Field>
                 {area.dailyReserveSlots == null ? (
                   <Field
                     label={phase3CapacityCopy.reserveSlots}
-                    hint={phase3CapacityCopy.reserveSlotsHint}
+                    info={phase3CapacityCopy.reserveSlotsHint}
                     error={issues[`area-${areaIndex}-reserve`]}
                   >
-                    <input
-                      type="number"
-                      min={0}
-                      step={1}
+                    <NumberField
                       value={area.fixedReserveSlots}
-                      onChange={(event) => updateArea(areaIndex, { fixedReserveSlots: Number(event.target.value) })}
+                      onValueChange={(next) => {
+                        if (next !== null) updateArea(areaIndex, { fixedReserveSlots: next });
+                      }}
                     />
                   </Field>
                 ) : null}
@@ -248,16 +246,14 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
                           label={phase3CapacityCopy.dailyReserve.reserveForDate.replace("{date}", date)}
                           error={issues[`area-${areaIndex}-daily-reserve`]}
                         >
-                          <input
-                            type="number"
-                            min={0}
-                            step={1}
+                          <NumberField
                             value={area.dailyReserveSlots?.[date] ?? 0}
-                            onChange={(event) =>
-                              updateArea(areaIndex, {
-                                dailyReserveSlots: { ...area.dailyReserveSlots, [date]: Number(event.target.value) },
-                              })
-                            }
+                            onValueChange={(next) => {
+                              if (next !== null)
+                                updateArea(areaIndex, {
+                                  dailyReserveSlots: { ...area.dailyReserveSlots, [date]: next },
+                                });
+                            }}
                           />
                         </Field>
                       ))}
@@ -404,24 +400,34 @@ function ReplanPanel({
   );
 }
 
+/** Label, control and inline error. Secondary explanations go in an InfoTip beside the label. */
 function Field({
   label,
   error,
-  hint,
+  info,
   children,
 }: {
   label: string;
   error?: string;
-  hint?: string;
-  children: React.ReactNode;
+  info?: string;
+  children: FieldControl;
 }) {
+  const generated = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const controlId = fieldControlId(children, `capacity-field-${generated}`);
+  const errorId = error ? `${controlId}-error` : undefined;
   return (
-    <label className={styles.field}>
-      <span>{label}</span>
-      {children}
-      {hint ? <p className={styles.fieldHint}>{hint}</p> : null}
-      {error ? <small role="alert">{error}</small> : null}
-    </label>
+    <div className={styles.field}>
+      <span className={styles.fieldLabel}>
+        <label htmlFor={controlId}>{label}</label>
+        {info ? <InfoTip label={`${phase3CapacityCopy.moreAbout} ${label.toLowerCase()}`}>{info}</InfoTip> : null}
+      </span>
+      {withFieldControl(children, { id: controlId, describedBy: [errorId], invalid: Boolean(error) })}
+      {error ? (
+        <small id={errorId} role="alert">
+          {error}
+        </small>
+      ) : null}
+    </div>
   );
 }
 
@@ -454,15 +460,19 @@ function WindowGroup({
   return (
     <section className={styles.windowGroup} aria-label={title}>
       <header>
-        <h3>{title}</h3>
+        <span className={styles.fieldLabel}>
+          <h3>{title}</h3>
+          <InfoTip label={`${phase3CapacityCopy.moreAbout} ${title.toLowerCase()}`}>
+            {kind === "availability"
+              ? phase3CapacityCopy.availableWindowsHint
+              : phase3CapacityCopy.unavailableWindowsHint}
+          </InfoTip>
+        </span>
         <button className={styles.textButton} type="button" onClick={onAdd}>
           <Plus aria-hidden="true" />
           {kind === "availability" ? phase3CapacityCopy.addWindow : phase3CapacityCopy.addBreak}
         </button>
       </header>
-      <p className={styles.windowGroupSubtitle}>
-        {kind === "availability" ? phase3CapacityCopy.availableWindowsHint : phase3CapacityCopy.unavailableWindowsHint}
-      </p>
       {windows.map((window, windowIndex) => (
         <div className={styles.windowRow} key={window.id}>
           <div className={styles.window}>
@@ -493,14 +503,19 @@ function WindowGroup({
                 onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { endTime: event.target.value })}
               />
             </Field>
-            <label className={styles.checkbox}>
-              <input
-                type="checkbox"
-                checked={window.crossMidnight}
-                onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { crossMidnight: event.target.checked })}
-              />
-              <span>{phase3CapacityCopy.crossMidnight}</span>
-            </label>
+            <span className={styles.checkboxRow}>
+              <label className={styles.checkbox}>
+                <input
+                  type="checkbox"
+                  checked={window.crossMidnight}
+                  onChange={(event) => onUpdate(areaIndex, kind, windowIndex, { crossMidnight: event.target.checked })}
+                />
+                <span>{phase3CapacityCopy.crossMidnight}</span>
+              </label>
+              <InfoTip label={`${phase3CapacityCopy.moreAbout} ${phase3CapacityCopy.crossMidnight.toLowerCase()}`}>
+                {phase3CapacityCopy.crossMidnightHint}
+              </InfoTip>
+            </span>
             <button
               className={styles.iconButton}
               type="button"
@@ -510,7 +525,6 @@ function WindowGroup({
               <Trash aria-hidden="true" />
             </button>
           </div>
-          <p className={styles.windowGroupHint}>{phase3CapacityCopy.crossMidnightHint}</p>
           {window.crossMidnight ? (
             <p className={styles.windowGroupHint} role="status">
               {phase3CapacityCopy.crossMidnightSelected}

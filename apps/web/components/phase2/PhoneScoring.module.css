@@ -23,7 +23,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0.35rem 0.75rem;
   border: 2px solid #4a4f4d;
   border-radius: 999px;
@@ -43,7 +43,7 @@
   border-color: #97bc0d;
 }
 .statusChip[data-tone="busy"] {
-  border-color: #9db2ff;
+  border-color: var(--info-line);
 }
 .statusChip[data-tone="warn"] {
   border-color: #e9a410;
@@ -109,7 +109,7 @@
   gap: 0.75rem;
   margin-top: 0.75rem;
   padding: 0.5rem 0.5rem 0.5rem 1rem;
-  border: 1px solid #a1ba5b;
+  border: 1px solid var(--success-line);
   border-radius: 0.875rem;
   background: #222b1a;
   font-size: 1rem;
@@ -174,7 +174,7 @@
 .reasonChips button[aria-pressed="true"] {
   border-color: #e2fa77;
   background: #e2fa77;
-  color: #12150b;
+  color: var(--signal-ink);
 }
 .reasonChips button:focus-visible {
   outline: 3px solid #e2fa77;
@@ -199,7 +199,7 @@
   color: #ffffff;
 }
 .scoringPage[data-contrast="high"] .liveScoreSide[data-side="home"] {
-  border-top-color: #8ec5ff;
+  border-top-color: var(--info-line);
 }
 .scoringPage[data-contrast="high"] .liveScoreSide[data-side="away"] {
   border-top-color: #ffe066;
