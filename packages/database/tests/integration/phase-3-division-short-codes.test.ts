@@ -9,6 +9,19 @@ import { parseConfig } from "@matchday/config";
 import { dropTestSchema, migrateDatabase } from "../../src/migrations.js";
 
 const config = parseConfig(process.env);
+
+// Same table as packages/domain/tests/placeholders.test.ts ("matches the 0077 SQL backfill"): names in
+// creation order -> the code generateDivisionShortCode assigns. Keeps the SQL backfill and the TS
+// suggestion in agreement.
+const parityCases: ReadonlyArray<readonly [string, string]> = [
+  ["U-16", "U16"],
+  ["Under-14", "U14"],
+  ["u12 Girls", "U12"],
+  ["Under 16", "U162"],
+  ["Women's Open", "W"],
+  ["Zeta League", "Z"],
+  ["!!!", "D"],
+];
 const schema = `test_p3_short_codes_${randomUUID().replaceAll("-", "")}`;
 const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../migrations");
 let tempDir: string | null = null;
@@ -90,6 +103,27 @@ describe("Migration 0077: division short codes", () => {
       `;
       await sql`UPDATE competitions SET status = 'archived', archived_from_status = 'draft', archived_at = now() WHERE id = ${compArchived}`;
 
+      // 3b. Seed a competition whose division names exercise every SQL/TS parity branch.
+      const compParity = randomUUID();
+      await sql`
+        INSERT INTO competitions (
+          id, organisation_id, created_by, name, slug, sport_code, timezone, starts_on, ends_on,
+          venue, address, country_code, locale, plan_tier, status
+        ) VALUES (
+          ${compParity}, ${orgId}, ${accountId}, 'P3 Parity Comp', 'p3-parity-comp',
+          'badminton', 'Asia/Singapore', '2026-11-01', '2026-11-02', 'Hall A', '1 Test St', 'SG', 'en-SG', 'free', 'draft'
+        )
+      `;
+      const parityIds: string[] = [];
+      for (const [index, [name]] of parityCases.entries()) {
+        const id = randomUUID();
+        parityIds.push(id);
+        await sql`
+          INSERT INTO divisions (id, competition_id, name, team_limit, created_at)
+          VALUES (${id}, ${compParity}, ${name}, 8, ${new Date(Date.UTC(2026, 0, 1, 0, index))})
+        `;
+      }
+
       // 4. Now copy 0077 into tempDir and run migration
       await cp(
         path.join(migrationsDirectory, "0077_redesign_p3_division_short_codes.sql"),
@@ -111,6 +145,12 @@ describe("Migration 0077: division short codes", () => {
       expect(new Set([codeMap[divM], codeMap[divM2]])).toEqual(new Set(["M", "M2"]));
       expect(codeMap[divU18]).toBe("U18");
       expect(codeMap[divX]).toBe("X");
+
+      const parityRows = await sql<{ id: string; short_code: string }[]>`
+        SELECT id, short_code FROM divisions WHERE competition_id = ${compParity}
+      `;
+      const parityMap = Object.fromEntries(parityRows.map((r) => [r.id, r.short_code]));
+      expect(parityIds.map((id) => parityMap[id])).toEqual(parityCases.map(([, code]) => code));
 
       // 6. Verify archived competition is untouched and has NULL short_code
       const [archivedRow] = await sql<{ short_code: string | null }[]>`

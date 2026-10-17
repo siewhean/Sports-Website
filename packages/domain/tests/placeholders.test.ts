@@ -24,6 +24,25 @@ describe("placeholders domain engine", () => {
       expect(generateDivisionShortCode("Division 1")).toBe("D");
     });
 
+    it("matches the 0077 SQL backfill for the same names in creation order", () => {
+      // Mirror of parityCases in packages/database/tests/integration/phase-3-division-short-codes.test.ts.
+      const cases: ReadonlyArray<readonly [string, string]> = [
+        ["U-16", "U16"],
+        ["Under-14", "U14"],
+        ["u12 Girls", "U12"],
+        ["Under 16", "U162"],
+        ["Women's Open", "W"],
+        ["Zeta League", "Z"],
+        ["!!!", "D"],
+      ];
+      const taken: string[] = [];
+      for (const [name, expected] of cases) {
+        const code = generateDivisionShortCode(name, taken);
+        expect(code, name).toBe(expected);
+        taken.push(code);
+      }
+    });
+
     it("resolves collisions by appending digits within 4 characters", () => {
       expect(generateDivisionShortCode("Men's Open", ["M"])).toBe("M2");
       expect(generateDivisionShortCode("Men's Open", ["M", "M2"])).toBe("M3");

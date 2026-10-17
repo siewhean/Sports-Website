@@ -36,7 +36,8 @@ export function generateDivisionShortCode(divisionName: string, existingCodes: I
   const taken = new Set(Array.from(existingCodes).map((c) => c.toUpperCase()));
 
   let baseCode = "";
-  const underMatch = /^(?:under\s*|u-?)([0-9]+)/i.exec(trimmed);
+  // Keep in step with the SQL backfill in migration 0077 ("Under 16", "Under-16", "U16", "U-16" -> "U16").
+  const underMatch = /^(?:under[\s-]*|u-?)([0-9]+)/i.exec(trimmed);
   if (underMatch?.[1]) {
     baseCode = `U${underMatch[1]}`;
   } else if (/^men/i.test(trimmed)) {

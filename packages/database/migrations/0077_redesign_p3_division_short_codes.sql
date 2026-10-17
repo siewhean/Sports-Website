@@ -25,10 +25,10 @@ BEGIN
     FOR div IN
       SELECT id, name FROM divisions WHERE competition_id = comp.id ORDER BY created_at, id
     LOOP
-      IF div.name ~* '^under\s*([0-9]+)' THEN
-        base_code := 'U' || substring(div.name from '(?i)^under\s*([0-9]+)');
-      ELSIF div.name ~* '^u([0-9]+)' THEN
-        base_code := 'U' || substring(div.name from '(?i)^u([0-9]+)');
+      -- Mirrors generateDivisionShortCode in packages/domain/src/placeholders.ts:
+      -- /^(?:under[\s-]*|u-?)([0-9]+)/i, so "Under 16", "Under-16", "U16" and "U-16" all become "U16".
+      IF div.name ~* '^(under[[:space:]-]*|u-?)[0-9]+' THEN
+        base_code := 'U' || substring(div.name from '(?i)^(?:under[[:space:]-]*|u-?)([0-9]+)');
       ELSIF div.name ~* '^men' THEN
         base_code := 'M';
       ELSIF div.name ~* '^women' THEN
@@ -53,7 +53,7 @@ BEGIN
       suffix := 2;
 
       WHILE candidate = ANY(taken) LOOP
-        candidate := substring(base_code from 1 for (4 - length(suffix::text))) || suffix::text;
+        candidate := substring(base_code from 1 for GREATEST(1, 4 - length(suffix::text))) || suffix::text;
         suffix := suffix + 1;
       END LOOP;
 
