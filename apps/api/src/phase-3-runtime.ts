@@ -167,6 +167,54 @@ function expectDomain<T>(result: DomainCommandResult<T>): T {
   throw new ApiError(validation ? 422 : 409, result.error.code, result.error.message);
 }
 
+/** The before/after state a sport-settings save writes to `audit_events` for the "Rules changes" history. */
+function settingsAuditState(
+  revision: number,
+  divisionId: string | undefined,
+  override: Readonly<Record<string, unknown>>,
+  effective: Readonly<Record<string, unknown>>,
+) {
+  return { revision, division_id: divisionId ?? null, override, effective };
+}
+
+export type SettingsHistoryChange = Readonly<{ setting: string; before: unknown; after: unknown }>;
+
+export type SettingsHistoryItem = Readonly<{
+  id: string;
+  action: "sport_settings.updated" | "sport_settings.copied";
+  occurred_at: string;
+  actor_name: string | null;
+  division_id: string | null;
+  revision: number | null;
+  changes: readonly SettingsHistoryChange[];
+}>;
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
+      .join(",")}}`;
+  return JSON.stringify(value ?? null);
+}
+
+/** The settings that differ between two audited effective states, in key order. */
+export function settingsHistoryChanges(before: unknown, after: unknown): readonly SettingsHistoryChange[] {
+  const record = (state: unknown): Record<string, unknown> => {
+    const effective = state && typeof state === "object" ? (state as { effective?: unknown }).effective : undefined;
+    return effective && typeof effective === "object" && !Array.isArray(effective)
+      ? (effective as Record<string, unknown>)
+      : {};
+  };
+  const left = record(before);
+  const right = record(after);
+  return [...new Set([...Object.keys(left), ...Object.keys(right)])]
+    .sort()
+    .filter((key) => stableJson(left[key]) !== stableJson(right[key]))
+    .map((key) => ({ setting: key, before: left[key] ?? null, after: right[key] ?? null }));
+}
+
 export type Phase3RuntimeOptions = Readonly<{
   /** Redesign Phase 4 flag `redesign_p4_rules`: new competitions start from the federation packs. */
   federationRulesEnabled?: () => Promise<boolean>;
@@ -564,12 +612,13 @@ export class Phase3Runtime {
     targetId: string,
     after: unknown,
     actorType: "account" | "platform_admin" = "account",
+    before: unknown = null,
   ) {
     const occurredAt = this.now();
     await tx.unsafe(
-      `INSERT INTO audit_events (occurred_at,request_id,actor_account_id,actor_type,organisation_id,action,target_type,target_id,after_state)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
-      [occurredAt, requestId, actor.accountId, actorType, organisationId, action, targetType, targetId, after],
+      `INSERT INTO audit_events (occurred_at,request_id,actor_account_id,actor_type,organisation_id,action,target_type,target_id,before_state,after_state)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb)`,
+      [occurredAt, requestId, actor.accountId, actorType, organisationId, action, targetType, targetId, before, after],
     );
     await tx.unsafe(
       `INSERT INTO outbox_events (aggregate_type,aggregate_id,event_type,payload,idempotency_key,created_at,available_at)
@@ -2098,6 +2147,45 @@ export class Phase3Runtime {
     };
   }
 
+  /**
+   * "Rules changes": every audited sport-settings save for the competition and its divisions, newest first, with
+   * who made it and which settings changed. Readable by anyone who can read the settings.
+   */
+  async settingsHistory(actor: Phase3Actor, competitionId: string): Promise<readonly SettingsHistoryItem[]> {
+    await this.competitionAccess(this.sql, competitionId, actor, false);
+    const rows = await this.sql.unsafe<{
+      id: string;
+      action: SettingsHistoryItem["action"];
+      occurred_at: Date | string;
+      actor_name: string | null;
+      before_state: unknown;
+      after_state: unknown;
+    }>(
+      `SELECT e.id,e.action,e.occurred_at,a.display_name AS actor_name,e.before_state,e.after_state
+       FROM audit_events e LEFT JOIN accounts a ON a.id=e.actor_account_id
+       WHERE e.target_type='competition' AND e.target_id=$1
+         AND e.action IN ('sport_settings.updated','sport_settings.copied')
+       ORDER BY e.occurred_at DESC,e.id DESC LIMIT 100`,
+      [competitionId],
+    );
+    return rows.map((row) => {
+      const after = decodedJson((row.after_state ?? {}) as Record<string, unknown>) as {
+        revision?: unknown;
+        division_id?: unknown;
+      };
+      const before = row.before_state ? decodedJson(row.before_state as Record<string, unknown>) : null;
+      return {
+        id: row.id,
+        action: row.action,
+        occurred_at: new Date(row.occurred_at).toISOString(),
+        actor_name: row.actor_name,
+        division_id: typeof after.division_id === "string" ? after.division_id : null,
+        revision: typeof after.revision === "number" ? after.revision : null,
+        changes: before ? settingsHistoryChanges(before, after) : [],
+      };
+    });
+  }
+
   async updateSettings(
     actor: Phase3Actor,
     competitionId: string,
@@ -2113,14 +2201,15 @@ export class Phase3Runtime {
           recommended_snapshot: Record<string, unknown>;
           competition_override: Record<string, unknown>;
           division_override: Record<string, unknown>;
+          revision: number;
         }>(
           input.divisionId
             ? `SELECT c.pack_version,c.recommended_snapshot,c.settings_override AS competition_override,
-                      d.settings_override AS division_override
+                      d.settings_override AS division_override,d.revision
                FROM competition_sport_settings c JOIN division_sport_settings d ON d.competition_id=c.competition_id
                WHERE c.competition_id=$1 AND d.division_id=$2`
             : `SELECT c.pack_version,c.recommended_snapshot,'{}'::jsonb AS competition_override,
-                      c.settings_override AS division_override
+                      c.settings_override AS division_override,c.revision
                FROM competition_sport_settings c WHERE c.competition_id=$1`,
           input.divisionId ? [competitionId, input.divisionId] : [competitionId],
         ),
@@ -2149,6 +2238,11 @@ export class Phase3Runtime {
             [id, input.override, actor.accountId, this.now(), input.revision, input.packVersion],
           );
       if (!updated[0]) throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Sport settings revision is stale");
+      // Redesign Phase 4 "Rules changes" history: every save records the settings before and after, with the actor.
+      const previousOverride = decodedJson(settings.division_override);
+      const previous = input.divisionId
+        ? this.domain.resolveSettings(pack, recommended, competitionOverride, previousOverride).effective
+        : this.domain.resolveSettings(pack, recommended, previousOverride).effective;
       await this.evidence(
         tx,
         actor,
@@ -2157,9 +2251,9 @@ export class Phase3Runtime {
         "sport_settings.updated",
         "competition",
         competitionId,
-        {
-          revision: updated[0].revision,
-        },
+        settingsAuditState(updated[0].revision, input.divisionId, input.override, resolved.effective),
+        "account",
+        settingsAuditState(settings.revision, input.divisionId, previousOverride, previous),
       );
       return {
         competition_id: competitionId,
@@ -2276,6 +2370,14 @@ export class Phase3Runtime {
         );
       }
       const override = this.domain.settingsDifference(effective, targetRecommended);
+      const current = required(
+        await tx.unsafe<{ revision: number; settings_override: Record<string, unknown> }>(
+          `SELECT revision,settings_override FROM competition_sport_settings WHERE competition_id=$1`,
+          [competitionId],
+        ),
+        "Sport settings not found",
+      );
+      const currentOverride = decodedJson(current.settings_override);
       const updated = required(
         await tx.unsafe<{ revision: number }>(
           `UPDATE competition_sport_settings SET settings_override=$2::jsonb,customised=$3,
@@ -2301,7 +2403,9 @@ export class Phase3Runtime {
         "sport_settings.copied",
         "competition",
         competitionId,
-        updated,
+        settingsAuditState(updated.revision, undefined, override, { ...targetRecommended, ...override }),
+        "account",
+        settingsAuditState(current.revision, undefined, currentOverride, { ...targetRecommended, ...currentOverride }),
       );
       return {
         competition_id: competitionId,
