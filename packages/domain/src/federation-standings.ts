@@ -67,15 +67,18 @@ export function applyFederationStandingsRules(
   const drawPoints = integerSetting(effective, "drawPoints") ?? config.drawPoints;
   const lossPoints = integerSetting(effective, "lossPoints") ?? config.lossPoints;
   const forfeitLossPoints = integerSetting(effective, "forfeitLossPoints");
+  const defaultLossPoints = integerSetting(effective, "defaultLossPoints");
   const disciplineWeights = disciplineWeightsFor(sportId, packVersion);
   const deleteIncomplete = sportId === "badminton";
   return {
     ...config,
-    version: `${config.version}+federation:${packVersion}:${winPoints}/${drawPoints}/${lossPoints}/${forfeitLossPoints ?? "loss"}${disciplineWeights ? ":honourable-play" : ""}${deleteIncomplete ? ":incomplete-deleted" : ""}`,
+    version: `${config.version}+federation:${packVersion}:${winPoints}/${drawPoints}/${lossPoints}/${forfeitLossPoints ?? "loss"}${defaultLossPoints === undefined ? "" : `:default-${defaultLossPoints}`}${disciplineWeights ? ":honourable-play" : ""}${deleteIncomplete ? ":incomplete-deleted" : ""}`,
     winPoints,
     drawPoints,
     lossPoints,
     ...(forfeitLossPoints === undefined ? {} : { forfeitLossPoints }),
+    // FIBA OBR Art. 21.2.1: a team that loses by default still gets a classification point.
+    ...(defaultLossPoints === undefined ? {} : { defaultLossPoints }),
     ...(disciplineWeights ? { disciplineWeights } : {}),
     // BWF GCR 16.2.5: a player or pair who cannot complete all their group matches has all their results deleted.
     ...(deleteIncomplete ? { incompleteEntryResults: "delete_all" as const } : {}),

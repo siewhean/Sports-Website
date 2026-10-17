@@ -51,7 +51,7 @@ export type FiveSportScorecardDefinition = Readonly<{
 }>;
 
 const SEGMENT_COMPLETION_EVENTS = new Set(["game_completion", "set_completion"]);
-const EXCEPTIONAL_OUTCOME_EVENTS = new Set(["retirement", "walkover"]);
+const EXCEPTIONAL_OUTCOME_EVENTS = new Set(["retirement", "walkover", "default"]);
 const LIFECYCLE_EVENTS = new Set(["finalisation", "reversal"]);
 
 function integerSetting(settings: SportPackSettings, key: string, fallback: number): number {

@@ -7,6 +7,11 @@ import {
 } from "./sport-packs.js";
 
 export type MatchSide = "home" | "away";
+/**
+ * How a match ended without being played out. `default` is FIBA's (OBR Art. 21): a team left with fewer than two
+ * players on court; only the basketball federation pack has that event.
+ */
+export type ExceptionalOutcome = "retirement" | "walkover" | "default";
 export type MatchLifecycle = "not_started" | "in_progress" | "finalised";
 
 export type FiveSportScoreEvent = Readonly<{
@@ -64,7 +69,7 @@ export type FiveSportScoreState = Readonly<{
   currentSegment: number;
   lastSequence: number;
   winner: MatchSide | null;
-  exceptionalOutcome: "retirement" | "walkover" | null;
+  exceptionalOutcome: ExceptionalOutcome | null;
   score: Readonly<Record<MatchSide, number>>;
   totalPoints: Readonly<Record<MatchSide, number>>;
   segmentWins: Readonly<Record<MatchSide, number>>;
@@ -105,7 +110,7 @@ type MutableState = {
   currentSegment: number;
   lastSequence: number;
   winner: MatchSide | null;
-  exceptionalOutcome: "retirement" | "walkover" | null;
+  exceptionalOutcome: ExceptionalOutcome | null;
   segments: Map<number, MutableSegment>;
   actions: Map<string, MutableAction>;
   clientEvents: Map<string, FiveSportScoreEvent>;
@@ -116,7 +121,7 @@ type MutableState = {
 const SYSTEM_EVENT_TYPES = new Set(["match_started", "match_reopened"]);
 const SEGMENT_COMPLETION_TYPES = new Set(["game_completion", "set_completion"]);
 const SEGMENT_TRANSITION_TYPES = new Set(["period_change", "deciding_set", "overtime"]);
-const EXCEPTIONAL_OUTCOME_TYPES = new Set(["retirement", "walkover"]);
+const EXCEPTIONAL_OUTCOME_TYPES = new Set<string>(["retirement", "walkover", "default"]);
 const NON_REVERSIBLE_TYPES = new Set([
   "match_started",
   "match_reopened",
@@ -480,7 +485,7 @@ function applySportAction(
   if (EXCEPTIONAL_OUTCOME_TYPES.has(event.type)) {
     if (!event.side) throw new Error(`${event.type} requires the winning side`);
     state.winner = event.side;
-    state.exceptionalOutcome = event.type as "retirement" | "walkover";
+    state.exceptionalOutcome = event.type as ExceptionalOutcome;
   }
 
   const number = event.segmentNumber ?? state.currentSegment;
@@ -708,4 +713,20 @@ export function reduceFiveSportScoreEvents(
   }
 
   return snapshot(state, pack);
+}
+
+/**
+ * The result of a game lost by default (FIBA OBR 2026 Art. 21.2.1): if the team awarded the game is ahead, the
+ * score at the stoppage stands; otherwise it is `defaultWinnerScore`-`defaultLoserScore` (2-0) in its favour.
+ */
+export function defaultResultScore(
+  points: Readonly<Record<MatchSide, number>>,
+  winner: MatchSide,
+  settings: SportPackSettings,
+): Readonly<Record<MatchSide, number>> {
+  const loser: MatchSide = winner === "home" ? "away" : "home";
+  if (points[winner] > points[loser]) return { home: points.home, away: points.away };
+  const winnerScore = integerSetting(settings, "defaultWinnerScore", 2);
+  const loserScore = integerSetting(settings, "defaultLoserScore", 0);
+  return winner === "home" ? { home: winnerScore, away: loserScore } : { home: loserScore, away: winnerScore };
 }

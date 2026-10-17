@@ -136,6 +136,11 @@ const table: Readonly<Record<string, readonly FederationRule[]>> = {
     rule("successiveOvertime", "time", true, fiba("Art. 8.7 Overtime")),
     rule("forfeitWinnerScore", "forfeits", 20, fiba("Art. 20.2.1 Forfeit")),
     rule("forfeitLoserScore", "forfeits", 0, fiba("Art. 20.2.1 Forfeit")),
+    // Default (Art. 21) is not a forfeit: the score stands if the other team leads, otherwise 2-0, and the
+    // defaulting team still gets 1 classification point.
+    rule("defaultWinnerScore", "forfeits", 2, fiba("Art. 21.1, 21.2.1 Default")),
+    rule("defaultLoserScore", "forfeits", 0, fiba("Art. 21.1, 21.2.1 Default")),
+    rule("defaultLossPoints", "standings", 1, fiba("Art. 21.1, 21.2.1 Default")),
   ],
   [`table_tennis@${FEDERATION_SPORT_PACK_VERSION}`]: [
     rule("bestOf", "scoring", 5, ittf("Law 2.12.1 A match")),

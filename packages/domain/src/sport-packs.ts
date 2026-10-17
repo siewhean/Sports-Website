@@ -2245,9 +2245,32 @@ const classificationPointsSchema = {
 const twoOneZero = { winPoints: 2, lossPoints: 1, forfeitLossPoints: 0 } as const;
 
 const basketballFederationOrder = ["points", "head_to_head", "point_difference", "points_for"] as const;
+/*
+ * FIBA default (OBR Art. 21), separate from a forfeit (Art. 20): a team with fewer than two players on court loses
+ * by default. The score stands if the other team leads, otherwise it is 2-0; the defaulting team still gets 1
+ * classification point. The scorer records it with the `default` event, naming the team awarded the game.
+ */
 export const BASKETBALL_FEDERATION_SPORT_PACK = definePack({
   ...BASKETBALL_SPORT_PACK,
   version: FEDERATION_SPORT_PACK_VERSION,
+  eventTypes: [
+    ...BASKETBALL_SPORT_PACK.eventTypes.filter((definition) => !["reversal", "finalisation"].includes(definition.id)),
+    event("default", "Default (fewer than 2 players)", 0, "none", true),
+    ...sharedFinalEvents,
+  ],
+  validationRules: [
+    ...BASKETBALL_SPORT_PACK.validationRules,
+    {
+      id: "default_score_orientation",
+      description: "The default winner score must exceed the loser score.",
+      severity: "error",
+      settingsConstraint: {
+        kind: "greater_than",
+        greaterField: "defaultWinnerScore",
+        lesserField: "defaultLoserScore",
+      },
+    },
+  ],
   standings: {
     ...BASKETBALL_SPORT_PACK.standings,
     points: { win: 2, draw: 1, loss: 1 }, // No draws in these sports; the validator needs win ≥ draw ≥ loss.
@@ -2260,6 +2283,9 @@ export const BASKETBALL_FEDERATION_SPORT_PACK = definePack({
   settingsSchema: {
     ...BASKETBALL_SPORT_PACK.settingsSchema,
     ...classificationPointsSchema,
+    defaultLossPoints: integer("Points for a default", 0, 20),
+    defaultWinnerScore: integer("Default winner score", 0, 300),
+    defaultLoserScore: integer("Default loser score", 0, 300),
     standingsOrder: ordered("Standings order", [
       "points",
       "wins",
@@ -2272,6 +2298,9 @@ export const BASKETBALL_FEDERATION_SPORT_PACK = definePack({
   recommendedSettings: {
     ...BASKETBALL_SPORT_PACK.recommendedSettings,
     ...twoOneZero,
+    defaultLossPoints: 1,
+    defaultWinnerScore: 2,
+    defaultLoserScore: 0,
     standingsOrder: basketballFederationOrder,
   },
 });

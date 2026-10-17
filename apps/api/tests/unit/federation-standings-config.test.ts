@@ -180,4 +180,43 @@ describe("standings configuration for federation packs (redesign Phase 4)", () =
     expect(draftResults[1]).not.toHaveProperty("retiredEntryId");
     expect(calculateStandings(entries, draftResults, draft).some((row) => row.resultsDeleted)).toBe(false);
   });
+  it("gives a basketball team that lost by default 1 classification point, keeping the stored default score", () => {
+    const engine = config(BASKETBALL_FEDERATION_SPORT_PACK);
+    expect(engine.defaultLossPoints).toBe(1);
+    const defaulted = standingsResultFromSnapshot(
+      {
+        match_id: "m4",
+        home_entry_id: "a",
+        away_entry_id: "b",
+        home_score: 2,
+        away_score: 0,
+        state: "final",
+        result_version: 1,
+        snapshot: {
+          segments: [{ home: 10, away: 31 }],
+          totalPoints: { home: 10, away: 31 },
+          exceptionalOutcome: "default",
+          winner: "home",
+          actions: [],
+        },
+      },
+      engine,
+    );
+    expect(defaulted).toMatchObject({ homeScore: 2, awayScore: 0, status: "final", defaultLoserEntryId: "b" });
+    const standings = calculateStandings(
+      [
+        { id: "a", name: "Alpha", seed: 1 },
+        { id: "b", name: "Bravo", seed: 2 },
+      ],
+      [defaulted],
+      engine,
+    );
+    expect(standings.map((entry) => [entry.entryId, entry.tablePoints])).toEqual([
+      ["a", 2],
+      ["b", 1],
+    ]);
+    expect(
+      phase3DomainAdapter.standingsConfig(SPORT_PACKS.basketball, SPORT_PACKS.basketball.recommendedSettings),
+    ).not.toHaveProperty("defaultLossPoints");
+  });
 });

@@ -11,7 +11,7 @@ import type { FiveSportScoreEvent, MatchSide } from "./five-sport-scoring.js";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SYSTEM_EVENT_TYPES = new Set(["match_started", "match_reopened"]);
 const SEGMENT_COMPLETION_TYPES = new Set(["game_completion", "set_completion"]);
-const EXCEPTIONAL_OUTCOME_TYPES = new Set(["retirement", "walkover"]);
+const EXCEPTIONAL_OUTCOME_TYPES = new Set(["retirement", "walkover", "default"]);
 const REASON_REQUIRED_TYPES = new Set(["match_reopened", "reversal"]);
 const MANUAL_TIME_EXCLUDED_TYPES = new Set([
   "match_started",

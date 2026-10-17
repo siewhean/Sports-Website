@@ -424,6 +424,8 @@ export type StandingsMatchResult = {
    * incomplete entry's results (`incompleteEntryResults`); other packs score a retirement as before.
    */
   retiredEntryId?: string;
+  /** The team that lost by default (FIBA OBR Art. 21), not by forfeit; the score is already the default result. */
+  defaultLoserEntryId?: string;
 };
 
 export type ForfeitScore = {
@@ -449,6 +451,11 @@ export type StandingsEngineConfig = {
    * points). Absent means a forfeit loss earns `lossPoints`, as before.
    */
   forfeitLossPoints?: number;
+  /**
+   * Classification points for a team that loses by default (redesign Phase 4: FIBA OBR Art. 21.2.1 gives 1, like
+   * a loss). Absent means a default loss earns `lossPoints`.
+   */
+  defaultLossPoints?: number;
   /**
    * Points per card type for the `discipline` criterion, counted from each finalised match's card events
    * (redesign Phase 4: ICF honourable play). Absent means discipline points come only from generated results.
@@ -601,6 +608,7 @@ function validateEngineConfig(config: StandingsEngineConfig): void {
     ["drawPoints", config.drawPoints],
     ["lossPoints", config.lossPoints],
     ...(config.forfeitLossPoints === undefined ? [] : ([["forfeitLossPoints", config.forfeitLossPoints]] as const)),
+    ...(config.defaultLossPoints === undefined ? [] : ([["defaultLossPoints", config.defaultLossPoints]] as const)),
   ] as const) {
     assertNonNegativeInteger(value, label);
   }
@@ -677,6 +685,15 @@ function validateStandingsResult(
   } else if (result.forfeitLoserEntryId !== undefined) {
     throw new Error(`Non-forfeit result ${result.matchId} cannot identify a forfeit loser`);
   }
+  if (result.defaultLoserEntryId !== undefined) {
+    if (result.defaultLoserEntryId !== result.homeEntryId && result.defaultLoserEntryId !== result.awayEntryId)
+      throw new Error(`Default result ${result.matchId} must identify a participating loser`);
+    if (result.status === "forfeit") throw new Error(`Forfeit result ${result.matchId} cannot also be a default`);
+    const loserScore = result.defaultLoserEntryId === result.homeEntryId ? result.homeScore : result.awayScore;
+    const winnerScore = result.defaultLoserEntryId === result.homeEntryId ? result.awayScore : result.homeScore;
+    if (winnerScore <= loserScore)
+      throw new Error(`Default result ${result.matchId} must leave the team awarded the game ahead`);
+  }
   if (
     result.retiredEntryId !== undefined &&
     result.retiredEntryId !== result.homeEntryId &&
@@ -723,13 +740,20 @@ function matchOutcome(result: StandingsMatchResult, config: StandingsEngineConfi
   return "draw";
 }
 
-/** Classification points a losing entry earns: `forfeitLossPoints` when it forfeited and the config sets one. */
+/**
+ * Classification points a losing entry earns: `forfeitLossPoints` when it forfeited, `defaultLossPoints` when it
+ * lost by default, each only when the config sets one; otherwise the loss points.
+ */
 function losingPoints(result: StandingsMatchResult, loserEntryId: string, config: StandingsEngineConfig): number {
-  return result.status === "forfeit" &&
+  if (
+    result.status === "forfeit" &&
     result.forfeitLoserEntryId === loserEntryId &&
     config.forfeitLossPoints !== undefined
-    ? config.forfeitLossPoints
-    : config.lossPoints;
+  )
+    return config.forfeitLossPoints;
+  if (result.defaultLoserEntryId === loserEntryId && config.defaultLossPoints !== undefined)
+    return config.defaultLossPoints;
+  return config.lossPoints;
 }
 
 function safeAdd(left: number, right: number, label: string): number {

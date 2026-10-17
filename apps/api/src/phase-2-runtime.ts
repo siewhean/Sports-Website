@@ -11,6 +11,7 @@ import {
   SPORT_PACKS,
   STANDINGS_SPORT_PACKS,
   applyFederationStandingsRules,
+  defaultResultScore,
   isRegisteredSportPackVersion,
   registeredSportPack,
   assertFiveSportScoreCommandAllowed,
@@ -5051,6 +5052,18 @@ export class Phase2Runtime {
         input.canonical.state.exceptionalOutcome === "walkover" ? input.canonical.state.winner : null;
       const forfeitWinnerScore = Number(input.canonical.settings.forfeitWinnerScore ?? 0);
       const forfeitLoserScore = Number(input.canonical.settings.forfeitLoserScore ?? 0);
+      const defaultWinner =
+        input.canonical.state.exceptionalOutcome === "default" ? input.canonical.state.winner : null;
+      if (defaultWinner) {
+        // FIBA default (OBR Art. 21.2.1): the score stands if the winner leads, otherwise 2-0.
+        const score = defaultResultScore(input.canonical.state.totalPoints, defaultWinner, input.canonical.settings);
+        return {
+          homeScore: score.home,
+          awayScore: score.away,
+          state: input.canonical.resultState,
+          snapshot: input.canonical.state as unknown as Record<string, unknown>,
+        };
+      }
       return {
         homeScore: exceptionalWinner
           ? exceptionalWinner === "home"

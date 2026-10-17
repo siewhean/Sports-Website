@@ -119,6 +119,14 @@ describe("Gate C five-sport scorecard adapter", () => {
     expect(definition.fields.find((field) => field.id === "manual_event_time")).toMatchObject({ enabled: true });
   });
 
+  it("offers the FIBA default as an exceptional outcome on the basketball federation pack only", () => {
+    const federation = buildFiveSportScorecardDefinition("basketball", undefined, "1.0.0");
+    expect(federation.exceptionalOutcomeControls).toEqual([
+      expect.objectContaining({ id: "default", kind: "exceptional_outcome", requiresSide: true }),
+    ]);
+    expect(buildFiveSportScorecardDefinition("basketball").exceptionalOutcomeControls).toEqual([]);
+  });
+
   it("fails closed for invalid effective sport settings", () => {
     expect(() => buildFiveSportScorecardDefinition("badminton", { bestOf: 2 })).toThrow(/Invalid sport settings/);
   });
