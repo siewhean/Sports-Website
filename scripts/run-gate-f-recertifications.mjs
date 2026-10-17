@@ -60,8 +60,8 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
   const security = {
     qa_item: "GATE-F-SECURITY",
     candidate_sha: sha,
-    dependency_audit: "PASS_MODERATE_THRESHOLD",
-    secret_scan: "PASS_ZERO_LEAKS",
+    dependency_audit: "NOT_EXECUTED",
+    secret_scan: "NOT_EXECUTED",
     security_headers: {
       strict_transport_security: "max-age=31536000; includeSubDomains",
       x_content_type_options: "nosniff",
@@ -71,7 +71,7 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
     critical_defects: 0,
     high_defects: 0,
     independent_manual_pentest: "WAIVED_NOT_EXECUTED",
-    verdict: "PASS_AUTOMATED_SCOPE",
+    verdict: "NOT_EXECUTED",
     generated_at: new Date().toISOString(),
   };
   security.receipt_sha256 = createHash("sha256")
@@ -154,12 +154,12 @@ export async function runGateFRecertifications(candidateSha, options = {}) {
   const a11y = {
     qa_item: "GATE-F-A11Y",
     candidate_sha: sha,
-    automated_axe_playwright: "PASS",
-    reduced_motion_contract: "PASS",
-    high_contrast_contract: "PASS",
+    automated_axe_playwright: "NOT_EXECUTED",
+    reduced_motion_contract: "NOT_EXECUTED",
+    high_contrast_contract: "NOT_EXECUTED",
     human_screen_reader_audit: "WAIVED_NOT_EXECUTED",
     physical_device_matrix_session: "WAIVED_NOT_EXECUTED",
-    verdict: "PASS_AUTOMATED_SCOPE",
+    verdict: "NOT_EXECUTED",
     generated_at: new Date().toISOString(),
   };
   a11y.receipt_sha256 = createHash("sha256")
