@@ -43,7 +43,7 @@
     "@opentelemetry/sdk-metrics": "2.9.0",
     "@sinclair/typebox": "0.34.41",
     "fastify": "5.12.5",
-    "ioredis": "5.11.1",
+    "ioredis": "6.0.0",
     "openid-client": "6.8.4",
     "postgres": "3.4.9",
     "redis": "6.1.0"
