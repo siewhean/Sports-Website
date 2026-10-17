@@ -11,8 +11,11 @@ import {
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import postgres, { type Sql } from "postgres";
+import { phase2DomainAdapter } from "../../src/phase-2-domain-adapter.js";
+import { Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../../src/phase-3-runtime.js";
+import { loadCompetitionPlaceholderLabels } from "../../src/placeholder-labels.js";
 
 const describeInfrastructure = process.env.RUN_INFRA_TESTS === "1" ? describe : describe.skip;
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://matchday:matchday@127.0.0.1:5432/matchday";
@@ -2396,7 +2399,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
         randomUUID(),
       )) as { id: string; entries: Array<{ name: string; entry_type: string; seed: number; status: string }> };
       expect(division.entries.map((entry) => [entry.name, entry.entry_type, entry.seed, entry.status])).toEqual(
-        [1, 2, 3, 4, 5, 6].map((n) => [`Women ${n}`, "placeholder", n, "active"]),
+        [1, 2, 3, 4, 5, 6].map((n) => [`Team ${n}`, "placeholder", n, "active"]),
       );
       const stored = await client<{ name: string; entry_type: string }[]>`
         SELECT name,entry_type FROM division_entries WHERE division_id=${division.id} ORDER BY seed`;
@@ -2421,7 +2424,8 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
         randomUUID(),
       )) as { division_id: string; entries: Array<{ name: string; seed: number }> };
       expect(planned.division_id).toBe(open.id);
-      expect(planned.entries.map((entry) => entry.name)).toEqual([...Array(10)].map((_, i) => `Open ${i + 1}`));
+      // A second division switches planned names to the short-code form (D16: "O-1".."O-N").
+      expect(planned.entries.map((entry) => entry.name)).toEqual([...Array(10)].map((_, i) => `O-${i + 1}`));
       await expect(
         runtime.planEntries(actor, competition.id, open.id, { count: 1 }, randomUUID(), randomUUID()),
       ).rejects.toMatchObject({ statusCode: 422, code: "FREE_ENTRY_LIMIT_REACHED" });
@@ -2488,8 +2492,8 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
         randomUUID(),
       )) as { entries: Array<{ name: string; seed: number }> };
       expect(planned.entries.map((entry) => [entry.name, entry.seed])).toEqual([
-        ["Mixed 4", 4],
-        ["Mixed 5", 5],
+        ["Team 4", 4],
+        ["Team 5", 5],
       ]);
       await expect(
         runtime.planEntries(actor, competition.id, division.id, { count: 4 }, randomUUID(), randomUUID()),
@@ -2568,7 +2572,7 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
           LEFT JOIN division_entries home ON home.id=m.home_entry_id
           LEFT JOIN division_entries away ON away.id=m.away_entry_id WHERE m.id=${matchId}`,
       );
-      expect(scheduleRow).toEqual({ home_name: "Kayak Club", away_name: "Open 2" });
+      expect(scheduleRow).toEqual({ home_name: "Kayak Club", away_name: "Team 2" });
       const listed = (await runtime.listEntries(actor, competition.id, division.id)) as Array<{
         id: string;
         entry_type: string;
@@ -2625,6 +2629,159 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       ).toBe(1);
     });
 
+    it("labels placeholders identically on organiser and public surfaces from create through format publish", async () => {
+      // No venue or address: guided start lets organisers add the location later.
+      const competition = await runtime.createCompetition(
+        actor,
+        {
+          organisationId,
+          name: "Label Parity Cup",
+          slug: `label-parity-${randomUUID()}`,
+          sportCode: "canoe_polo",
+          venue: "",
+          address: "",
+          countryCode: "SG",
+          startsOn: "2027-06-05",
+          endsOn: "2027-06-05",
+          timezone: "Asia/Singapore",
+          locale: "en-SG",
+          days: [{ date: "2027-06-05", opens: "06:00", closes: "23:30" }],
+          divisions: [
+            { name: "Men's Open", entryLimit: 8, plannedEntryCount: 8 },
+            { name: "U-16", entryLimit: 8, plannedEntryCount: 3 },
+          ],
+        },
+        randomUUID(),
+      );
+      const stored = required(
+        await client<
+          { venue: string; address: string }[]
+        >`SELECT venue,address FROM competitions WHERE id=${competition.id}`,
+      );
+      expect(stored).toEqual({ venue: "", address: "" });
+      const divisions = await client<{ id: string; name: string; short_code: string }[]>`
+        SELECT id,name,short_code FROM divisions WHERE competition_id=${competition.id} ORDER BY created_at,id`;
+      const men = required(divisions.filter((division) => division.name === "Men's Open"));
+      const youth = required(divisions.filter((division) => division.name === "U-16"));
+      expect([men.short_code, youth.short_code]).toEqual(["M", "U16"]);
+
+      // Two youth placeholders lose their seed (e.g. imported unseeded): they must not collapse onto one label.
+      const youthRows = await client<{ id: string; seed: number }[]>`
+        SELECT id,seed FROM division_entries WHERE division_id=${youth.id} ORDER BY seed`;
+      await client`UPDATE division_entries SET seed=NULL WHERE id IN ${client([youthRows[0]!.id, youthRows[2]!.id])}`;
+
+      const phase2 = new Phase2Runtime(
+        client as unknown as PostgresJsSql,
+        phase2DomainAdapter,
+        undefined,
+        undefined,
+        "phase-3-label-parity-fallback-code-hmac-secret",
+      );
+      const surfaces = async () => {
+        const listed = new Map<string, string>();
+        for (const division of divisions) {
+          for (const entry of (await runtime.listEntries(actor, competition.id, division.id)) as Array<{
+            id: string;
+            name: string;
+          }>) {
+            listed.set(entry.id, entry.name);
+          }
+        }
+        const workspace = (await phase2.competitionWorkspace(actor, competition.id)) as unknown as {
+          divisions: Array<{ entries: Array<{ id: string; name: string }> }>;
+        };
+        const organiser = new Map(
+          workspace.divisions.flatMap((division) => division.entries.map((entry) => [entry.id, entry.name] as const)),
+        );
+        const loaded = await loadCompetitionPlaceholderLabels(client as unknown as PostgresJsSql, competition.id);
+        const publicLabels = new Map([...loaded.labels].map(([id, label]) => [id, label.publicLabel]));
+        return { listed, organiser, publicLabels };
+      };
+      const expectParity = (state: Awaited<ReturnType<typeof surfaces>>) => {
+        expect(state.listed.size).toBe(11);
+        for (const [id, label] of state.listed) {
+          expect(state.organiser.get(id), id).toBe(label);
+          expect(state.publicLabels.get(id), id).toBe(`Team ${label} (TBC)`);
+        }
+      };
+
+      const beforeFormat = await surfaces();
+      expectParity(beforeFormat);
+      const menEntries = await client<{ id: string; seed: number }[]>`
+        SELECT id,seed FROM division_entries WHERE division_id=${men.id} ORDER BY seed`;
+      expect(menEntries.map((entry) => beforeFormat.listed.get(entry.id))).toEqual(
+        [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `M-${n}`),
+      );
+      // Seeded youth placeholder keeps seed 2; the unseeded pair take the lowest free numbers 1 and 3
+      // (ordered by created_at, then id, so they never collapse onto one label).
+      const youthLabels = (state: Awaited<ReturnType<typeof surfaces>>) => ({
+        seeded: state.listed.get(youthRows[1]!.id),
+        unseeded: [state.listed.get(youthRows[0]!.id), state.listed.get(youthRows[2]!.id)].sort(),
+      });
+      expect(youthLabels(beforeFormat)).toEqual({ seeded: "U16-2", unseeded: ["U16-1", "U16-3"] });
+
+      // Publish a pooled format for the men's division: labels switch to graph group + seed position.
+      const graph = createDefaultFormatTemplates(8).find(
+        (template) => template.strategy === "championship_focus",
+      )!.graph;
+      const groupStage = required(graph.stages.filter((stage) => stage.kind === "group"));
+      expect(groupStage.groupIds.length).toBeGreaterThan(1);
+      const format = await runtime.createFormatRevision(actor, competition.id, men.id, graph, randomUUID());
+      await runtime.publishFormat(actor, competition.id, format.id, format.definition_hash, randomUUID());
+
+      const expected = new Map<string, string>();
+      const menBySeed = new Map(menEntries.map((entry) => [entry.seed, entry.id]));
+      groupStage.groupIds.forEach((groupId, groupIndex) => {
+        const seeds = [
+          ...new Set(
+            graph.matches
+              .filter((match) => match.poolId === groupId)
+              .flatMap((match) => [match.home, match.away])
+              .flatMap((source) => (source.type === "entry_seed" ? [source.seed] : [])),
+          ),
+        ].sort((a, b) => a - b);
+        seeds.forEach((seed, index) => {
+          expected.set(menBySeed.get(seed)!, `M-${String.fromCharCode(65 + groupIndex)}${index + 1}`);
+        });
+      });
+      expect(expected.size).toBe(8);
+
+      const afterFormat = await surfaces();
+      expectParity(afterFormat);
+      for (const [entryId, label] of expected) expect(afterFormat.listed.get(entryId)).toBe(label);
+      // The unformatted division is unaffected.
+      expect(youthLabels(afterFormat)).toEqual(youthLabels(beforeFormat));
+    });
+
+    it("maps a short-code collision on division create to 409 instead of a server error", async () => {
+      const competition = await createPlanningCompetition("Short Code Cup");
+      await runtime.createDivision(
+        actor,
+        competition.id,
+        { name: "Men's Open", entryLimit: 8, shortCode: "M" },
+        randomUUID(),
+        randomUUID(),
+      );
+      await expect(
+        runtime.createDivision(
+          actor,
+          competition.id,
+          { name: "Masters", entryLimit: 8, shortCode: "M" },
+          randomUUID(),
+          randomUUID(),
+        ),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      // An auto-suggested code skips the taken one.
+      const masters = (await runtime.createDivision(
+        actor,
+        competition.id,
+        { name: "Men's B", entryLimit: 8 },
+        randomUUID(),
+        randomUUID(),
+      )) as { short_code: string };
+      expect(masters.short_code).toBe("M2");
+    });
+
     it("creates a competition with individual dates, differing hours, and divisions with short codes and placeholders", async () => {
       const input = {
         organisationId,
@@ -2668,9 +2825,9 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
       expect(entries).toHaveLength(8);
       expect(entries.every((e) => e.entry_type === "placeholder")).toBe(true);
 
-      // Check capacity slots per day: Day 1 (8) + Day 2 (14) = 22 total
+      // Badminton's recommended slot is 20 minutes: Day 1 (4h = 12) + Day 2 (7h = 21) = 33 total.
       const cap = await runtime.capacity(actor, result.id);
-      expect(cap.effective.availableMatchSlots).toBe(22);
+      expect(cap.effective.availableMatchSlots).toBe(33);
     });
   });
 });
