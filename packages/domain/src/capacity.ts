@@ -430,18 +430,10 @@ function buildCalendarModel(input: CalendarCapacityInput): {
 
 export function calculateCalendarCapacity(input: CalendarCapacityInput): CalendarCapacitySummary {
   const model = buildCalendarModel(input);
-  const rawTotalSlots = model.intervals.reduce((total, interval) => total + interval.slots, 0);
-  const hasAreaReserves = model.areas.some((area) => area.fixedReserveSlots !== undefined);
-  const configuredAreaReserves = model.areas.reduce((total, area) => total + (area.fixedReserveSlots ?? 0), 0);
-  const fixedReserveSlots = hasAreaReserves ? configuredAreaReserves : model.legacyReserveSlots;
-  const availableMatchSlots = hasAreaReserves
-    ? model.areas.reduce((total, area) => {
-        const rawSlots = model.intervals
-          .filter((interval) => interval.areaId === area.id)
-          .reduce((areaTotal, interval) => areaTotal + interval.slots, 0);
-        return total + Math.max(0, rawSlots - (area.fixedReserveSlots ?? 0));
-      }, 0)
-    : Math.max(0, rawTotalSlots - model.legacyReserveSlots);
+  const slotSet = calendarSlotSet(model);
+  const rawTotalSlots = slotSet.allSlots.length;
+  const fixedReserveSlots = slotSet.requestedReserveSlots;
+  const availableMatchSlots = slotSet.usableSlots.length;
   const remainingMatchSlots = availableMatchSlots - model.requiredSlots;
   const status: CapacityStatus =
     remainingMatchSlots < 0
@@ -496,8 +488,28 @@ export function resolveCalendarCapacityWindows(input: CalendarCapacityInput): Re
   };
 }
 
-export function buildCalendarCapacitySlots(input: CalendarCapacityInput): CalendarCapacitySlot[] {
-  const model = buildCalendarModel(input);
+/**
+ * The canonical capacity grid: every whole slot (`allSlots`), the reserve slots kept empty for
+ * operational recovery (`reserveSlots`) and the slots the solver may use (`usableSlots`).
+ *
+ * Reserve rule (one rule for the capacity count, SQL `phase3_available_match_slots` and the solver):
+ * - When any area carries `fixedReserveSlots`, each area reserves its own latest
+ *   `min(fixedReserveSlots, slots on that area)` slots, ordered by start instant across the whole
+ *   competition (not per day). An over-reserved small area never consumes another area's slots.
+ * - Otherwise the legacy aggregate `input.fixedReserveSlots` reserves the latest slots overall.
+ *
+ * `requestedReserveSlots` is the configured total (it may exceed the slots that exist), matching
+ * the summary's historical `fixedReserveSlots` value.
+ */
+export type CalendarCapacitySlotSet = {
+  intervals: readonly CalendarCapacityIntervalSummary[];
+  allSlots: readonly CalendarCapacitySlot[];
+  reserveSlots: readonly CalendarCapacitySlot[];
+  usableSlots: CalendarCapacitySlot[];
+  requestedReserveSlots: number;
+};
+
+function calendarSlotSet(model: ReturnType<typeof buildCalendarModel>): CalendarCapacitySlotSet {
   const slots: CalendarCapacitySlot[] = [];
   for (const interval of model.intervals) {
     for (let index = 0; index < interval.slots; index += 1) {
@@ -514,19 +526,38 @@ export function buildCalendarCapacitySlots(input: CalendarCapacityInput): Calend
       });
     }
   }
-  // Area reserves are deliberately the latest local slots on each area. This
-  // prevents an over-reserved small area from consuming capacity on another.
+  // Intervals are ordered by start instant, so each candidate list below is chronological and
+  // "latest N" is its tail.
+  const reserved = new Set<string>();
+  let requestedReserveSlots = 0;
+  const reserve = (candidates: readonly CalendarCapacitySlot[], count: number) => {
+    requestedReserveSlots += count;
+    for (const slot of candidates.slice(Math.max(0, candidates.length - count))) reserved.add(slot.id);
+  };
   if (model.areas.some((area) => area.fixedReserveSlots !== undefined)) {
-    const reserved = new Set<string>();
     for (const area of model.areas) {
-      const localSlots = slots.filter((slot) => slot.areaId === area.id);
-      for (const slot of localSlots.slice(Math.max(0, localSlots.length - (area.fixedReserveSlots ?? 0)))) {
-        reserved.add(slot.id);
-      }
+      reserve(
+        slots.filter((slot) => slot.areaId === area.id),
+        area.fixedReserveSlots ?? 0,
+      );
     }
-    return slots.filter((slot) => !reserved.has(slot.id));
+  } else {
+    reserve(slots, model.legacyReserveSlots);
   }
-  // Retain the original aggregate input for callers not yet carrying area
-  // metadata; deterministic ordering still reserves the latest slots.
-  return slots.slice(0, Math.max(0, slots.length - model.legacyReserveSlots));
+  return {
+    intervals: model.intervals,
+    allSlots: slots,
+    reserveSlots: slots.filter((slot) => reserved.has(slot.id)),
+    usableSlots: slots.filter((slot) => !reserved.has(slot.id)),
+    requestedReserveSlots,
+  };
+}
+
+/** Canonical full/reserve/usable grids; see {@link CalendarCapacitySlotSet} for the reserve rule. */
+export function buildCalendarCapacitySlotSet(input: CalendarCapacityInput): CalendarCapacitySlotSet {
+  return calendarSlotSet(buildCalendarModel(input));
+}
+
+export function buildCalendarCapacitySlots(input: CalendarCapacityInput): CalendarCapacitySlot[] {
+  return buildCalendarCapacitySlotSet(input).usableSlots;
 }

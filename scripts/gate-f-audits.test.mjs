@@ -11,8 +11,11 @@ import { runGateFCachePurgeAudit } from "./run-gate-f-cache-purge.mjs";
 import { runGateFOpsAudit } from "./run-gate-f-ops-audit.mjs";
 import { runGateFRecertifications } from "./run-gate-f-recertifications.mjs";
 import { runGateFProductionSimulation } from "./run-gate-f-production-simulation.mjs";
+import { runGateFDrills, deriveOverallVerdict, PENDING_VERDICT } from "./run-gate-f-drills.mjs";
+import { runR8LoadTests, validateLoadTestOptions } from "./run-r8-load-tests.mjs";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
+const silent = () => {};
 
 async function withArtifacts(run) {
   const dir = await mkdtemp(path.join(tmpdir(), "matchday-gate-f-test-"));
@@ -31,12 +34,13 @@ test("certifyGateFMigrations verifies expand-contract compliance", async () => {
   });
 });
 
-test("runGateFRollbackDrill verifies automated rollback steps but stays PENDING without external evidence", async () => {
+test("runGateFRollbackDrill stays PENDING without external evidence and does not report fake execution", async () => {
   await withArtifacts(async (artifactsDir) => {
     const res = await runGateFRollbackDrill(SHA, { artifactsDir });
     assert.equal(res.verdict, "PENDING");
-    assert.equal(res.simulation_result, "SIMULATION_PASS");
-    assert.equal(res.scoring_availability, "PRESERVED");
+    assert.equal(res.drill_executed, false);
+    assert.equal(res.simulation_result, "NOT_EXECUTED_PENDING_PRODUCTION_DRILL");
+    assert.equal(res.scoring_availability, "UNTESTED_PENDING_PRODUCTION_RUN");
   });
 });
 
@@ -259,7 +263,7 @@ test("malformed or unreadable evidence never passes", async () => {
 
 test("runGateFProductionSimulation executes all components", async () => {
   await withArtifacts(async (artifactsDir) => {
-    const res = await runGateFProductionSimulation(SHA, { artifactsDir });
+    const res = await runGateFProductionSimulation(SHA, { artifactsDir, log: silent });
     assert.equal(res.verdict, "PENDING");
     assert.equal(res.production_certification, false);
     assert.equal(res.components.migration_expand_contract, "PASS");
@@ -271,7 +275,11 @@ test("runGateFProductionSimulation executes all components", async () => {
 test("local aggregate never certifies production even with valid backup input", async () => {
   await withArtifacts(async (artifactsDir) => {
     const { evidenceFile } = await productionFixture(artifactsDir);
-    const receipt = await runGateFProductionSimulation(SHA, { artifactsDir, backupEvidenceFile: evidenceFile });
+    const receipt = await runGateFProductionSimulation(SHA, {
+      artifactsDir,
+      log: silent,
+      backupEvidenceFile: evidenceFile,
+    });
     assert.equal(receipt.components.backup_restore, "PASS");
     assert.equal(receipt.verdict, "PENDING");
     assert.equal(receipt.production_certification, false);
@@ -299,6 +307,7 @@ test("cache purge audit returns PENDING without external evidence and validates 
   await withArtifacts(async (artifactsDir) => {
     const unverified = await runGateFCachePurgeAudit(SHA, { artifactsDir });
     assert.equal(unverified.verdict, "PENDING");
+    assert.equal(unverified.protocol_verification, "NOT_EXECUTED");
 
     const validEvidence = {
       schema_version: "2026.09.edge-purge-v1",
@@ -316,6 +325,7 @@ test("cache purge audit returns PENDING without external evidence and validates 
 
     const verified = await runGateFCachePurgeAudit(SHA, { artifactsDir, evidenceFile });
     assert.equal(verified.verdict, "PASS");
+    assert.equal(verified.protocol_verification, "VERIFIED");
   });
 });
 
@@ -323,8 +333,11 @@ test("ops audit returns PENDING for SLO, alert routing, cost controls and PENDIN
   await withArtifacts(async (artifactsDir) => {
     const res = await runGateFOpsAudit(SHA, { artifactsDir });
     assert.equal(res.sloBaseline.verdict, "PENDING");
+    assert.equal(res.sloBaseline.protocol_verification, "NOT_EXECUTED");
     assert.equal(res.alertRouting.verdict, "PENDING");
+    assert.equal(res.alertRouting.protocol_verification, "NOT_EXECUTED");
     assert.equal(res.costControls.verdict, "PENDING");
+    assert.equal(res.costControls.protocol_verification, "NOT_EXECUTED");
     assert.equal(res.featureFlags.verdict, "PENDING_IMPLEMENTATION");
     assert.equal(res.featureFlags.admin_ui_present, false);
   });
@@ -336,8 +349,13 @@ test("recertifications audit returns PENDING for DNS/TLS, SEO, Email when extern
     assert.equal(res.dnsTls.verdict, "PENDING");
     assert.equal(res.seo.verdict, "PENDING");
     assert.equal(res.email.verdict, "PENDING");
-    assert.equal(res.security.verdict, "PASS_AUTOMATED_SCOPE");
-    assert.equal(res.a11y.verdict, "PASS_AUTOMATED_SCOPE");
+    assert.equal(res.security.verdict, "NOT_EXECUTED");
+    assert.equal(res.security.dependency_audit, "NOT_EXECUTED");
+    assert.equal(res.security.secret_scan, "NOT_EXECUTED");
+    assert.equal(res.a11y.verdict, "NOT_EXECUTED");
+    assert.equal(res.a11y.automated_axe_playwright, "NOT_EXECUTED");
+    assert.equal(res.a11y.reduced_motion_contract, "NOT_EXECUTED");
+    assert.equal(res.a11y.high_contrast_contract, "NOT_EXECUTED");
     assert.equal(res.legal.verdict, "PASS_TECHNICAL_PACKAGE_WITH_DEFERMENT");
   });
 });
@@ -397,4 +415,182 @@ test("evidence validator rejects synthetic markers, wrong SHA, wrong env, and st
     const staleResult = await runGateFCachePurgeAudit(SHA, { artifactsDir, evidenceFile: staleFile });
     assert.equal(staleResult.verdict, "PENDING");
   });
+});
+
+function stubRunners(overrides = {}) {
+  const pass = { verdict: "PASS" };
+  return {
+    certifyGateFMigrations: async () => ({ verdict: "PASS", migration_count: 1, expand_contract_compliant: true }),
+    runGateFRollbackDrill: async () => ({
+      verdict: "PASS",
+      drill_executed: true,
+      simulation_result: "PASS",
+      scoring_availability: "PRESERVED",
+    }),
+    runGateFBackupRestoreAudit: async () => ({ ...pass }),
+    runGateFCachePurgeAudit: async () => ({
+      verdict: "PASS",
+      protocol_verification: "PASS",
+      static_asset_hashing: "PASS",
+    }),
+    runGateFOpsAudit: async () => ({
+      alertRouting: { verdict: "PASS", protocol_verification: "PASS" },
+      sloBaseline: { verdict: "PASS", protocol_verification: "PASS" },
+      costControls: { ...pass },
+      featureFlags: { ...pass },
+    }),
+    runGateFRecertifications: async () => ({
+      dnsTls: { ...pass },
+      security: { verdict: "PASS", dependency_audit: "PASS", secret_scan: "PASS", independent_manual_pentest: "PASS" },
+      seo: { ...pass },
+      email: { ...pass },
+      a11y: { ...pass },
+      legal: { verdict: "PASS", disposition: "APPROVED" },
+    }),
+    ...overrides,
+  };
+}
+
+test("deriveOverallVerdict: PASS only when every check passed; pending verdict has no PASS substring", () => {
+  assert.equal(deriveOverallVerdict({ a: "PASS", b: "PASS" }), "PASS");
+  assert.equal(deriveOverallVerdict({ a: "PASS", b: "NOT_EXECUTED" }), "PENDING_PRODUCTION_DRILLS");
+  assert.equal(
+    deriveOverallVerdict({ a: "PASS", b: "PASS_TECHNICAL_PACKAGE_WITH_DEFERMENT" }),
+    "PENDING_PRODUCTION_DRILLS",
+  );
+  assert.equal(deriveOverallVerdict({ a: "NOT_EXECUTED", b: "FAIL" }), "FAIL");
+  assert.equal(deriveOverallVerdict({}), "PENDING_PRODUCTION_DRILLS");
+  assert.equal(PENDING_VERDICT.includes("PASS"), false);
+});
+
+test("runGateFDrills reports PASS only when every check (incl. security, a11y, legal, feature flags) passed", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    const result = await runGateFDrills(SHA, { artifactsDir, log: silent, runners: stubRunners() });
+    assert.equal(result.verdict, "PASS");
+    assert.deepEqual(result.non_passing_checks, []);
+    for (const key of ["security", "accessibility", "legal", "feature_flags"]) {
+      assert.equal(result.checks[key], "PASS");
+    }
+  });
+});
+
+test("runGateFDrills reports PENDING_PRODUCTION_DRILLS when a single non-live check is NOT_EXECUTED", async () => {
+  for (const [label, overrides] of [
+    [
+      "security",
+      {
+        runGateFRecertifications: async () => ({
+          ...(await stubRunners().runGateFRecertifications()),
+          security: { verdict: "NOT_EXECUTED" },
+        }),
+      },
+    ],
+    [
+      "a11y",
+      {
+        runGateFRecertifications: async () => ({
+          ...(await stubRunners().runGateFRecertifications()),
+          a11y: { verdict: "NOT_EXECUTED" },
+        }),
+      },
+    ],
+    [
+      "feature flags",
+      {
+        runGateFOpsAudit: async () => ({
+          ...(await stubRunners().runGateFOpsAudit()),
+          featureFlags: { verdict: "PENDING" },
+        }),
+      },
+    ],
+  ]) {
+    await withArtifacts(async (artifactsDir) => {
+      const result = await runGateFDrills(SHA, { artifactsDir, log: silent, runners: stubRunners(overrides) });
+      assert.equal(result.verdict, "PENDING_PRODUCTION_DRILLS", label);
+      assert.equal(result.non_passing_checks.length, 1, label);
+    });
+  }
+});
+
+test("runGateFDrills derives pending verdict from the real audits without external evidence", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    const result = await runGateFDrills(SHA, { artifactsDir, log: silent });
+    assert.equal(result.verdict, "PENDING_PRODUCTION_DRILLS");
+    assert.equal(result.verdict.includes("PASS"), false);
+    assert.equal(result.checks.security, "NOT_EXECUTED");
+    assert.equal(result.checks.accessibility, "NOT_EXECUTED");
+    assert.notEqual(result.checks.legal, "PASS");
+    assert.notEqual(result.checks.feature_flags, "PASS");
+    assert.equal(result.drills.zero_downtime_rollback.drill_executed, false);
+    assert.equal(result.drills.zero_downtime_rollback.verdict, "PENDING");
+    assert.equal(result.drills.backup_restore.verdict, "PENDING");
+    assert.equal(result.drills.edge_cache_purge.verdict, "PENDING");
+    assert.equal(result.status_summary.zero_downtime_rollback, "NOT_EXECUTED_PENDING_PRODUCTION_RUN");
+    assert.equal(result.status_summary.edge_cache_purge, "CONFIG_AUDIT_ONLY_PURGE_NOT_EXECUTED");
+    assert.equal(typeof result.content_fingerprint_sha256, "string");
+    assert.equal(result.content_fingerprint_sha256.length, 64);
+    const onDisk = JSON.parse(await readFile(path.join(artifactsDir, "gate-f-drills-receipt.json"), "utf8"));
+    assert.equal(onDisk.verdict, "PENDING_PRODUCTION_DRILLS");
+  });
+});
+
+test("runGateFDrills rejects malformed candidate SHA", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    await assert.rejects(
+      async () => runGateFDrills("invalid-sha", { artifactsDir, log: silent }),
+      /Gate F drills require an exact 40-character candidate SHA/,
+    );
+  });
+});
+
+test("runGateFDrills reports FAIL when a stubbed check fails", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    const runners = stubRunners({
+      runGateFRecertifications: async () => ({
+        ...(await stubRunners().runGateFRecertifications()),
+        legal: { verdict: "FAIL", disposition: "REJECTED" },
+      }),
+    });
+    const result = await runGateFDrills(SHA, { artifactsDir, log: silent, runners });
+    assert.equal(result.verdict, "FAIL");
+  });
+});
+
+test("runGateFDrills produces FAIL overall verdict when real rollback evidence reports FAIL", async () => {
+  await withArtifacts(async (artifactsDir) => {
+    const failedRollbackEvidence = {
+      schema_version: "2026.09.rollback-drill-v1",
+      evidence_class: "PROVIDER_RECEIPT",
+      candidate_sha: SHA,
+      environment: "production",
+      observed_at: new Date().toISOString(),
+      rollback_drill_id: "drill-failed-123",
+      simulated_or_observed_result: "FAIL",
+      scoring_availability: "COMPROMISED",
+    };
+    const evidenceFile = path.join(artifactsDir, "rollback-fail.json");
+    await writeFile(evidenceFile, JSON.stringify(failedRollbackEvidence));
+
+    const result = await runGateFDrills(SHA, { artifactsDir, log: silent, rollbackEvidenceFile: evidenceFile });
+    assert.equal(result.drills.zero_downtime_rollback.verdict, "FAIL");
+    assert.equal(result.status_summary.zero_downtime_rollback, "FAIL");
+    assert.equal(result.verdict, "FAIL");
+  });
+});
+
+test("R8 load tests reject unknown --mode values and require explicit TARGET_URL for staging", async () => {
+  assert.throws(() => validateLoadTestOptions("stagin", "https://staging.example"), /Unknown --mode "stagin"/);
+  assert.throws(() => validateLoadTestOptions("production", undefined), /Unknown --mode/);
+  assert.throws(() => validateLoadTestOptions("staging", null), /requires an explicit TARGET_URL/);
+  assert.throws(() => validateLoadTestOptions("staging", "not a url"), /invalid target URL/);
+  assert.deepEqual(validateLoadTestOptions("staging", "https://staging.example"), {
+    mode: "staging",
+    targetUrl: "https://staging.example",
+  });
+  assert.deepEqual(validateLoadTestOptions("component", "https://ignored.example"), {
+    mode: "component",
+    targetUrl: null,
+  });
+  // The runner validates before spawning anything.
+  await assert.rejects(() => runR8LoadTests({ mode: "bogus", candidateSha: SHA }), /Unknown --mode "bogus"/);
 });

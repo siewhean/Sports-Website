@@ -3,12 +3,12 @@
  *
  * Implements deliverables R1.2 and R1.4 from docs/EXECUTION_ROADMAP.md:
  * - Creates organisations, competitions, entries, formats, and officials entirely through the API.
- * - Executes mock-tournament scenarios 1-9 across all five supported sports.
+ * - Executes mock-tournament scenarios 1-10 across all five supported sports.
  * - Enforces zero-5xx budget check and fails on any unexpected 4xx response.
  * - Supports fast and full profiles.
  *
  * Usage:
- *   pnpm simulate:tournament [--profile=fast|full] [--scenario=1..9]
+ *   pnpm simulate:tournament [--profile=fast|full] [--scenario=1..10]
  */
 
 import { randomUUID } from "node:crypto";
@@ -20,6 +20,7 @@ import type { ScheduleJobInput } from "@matchday/contracts";
 import { dropTestSchema, migrateDatabase } from "@matchday/database";
 import {
   SPORT_PACKS,
+  buildCalendarCapacitySlotSet,
   createDefaultFormatTemplates,
   type FormatGraph,
   type FormatTemplateStrategy,
@@ -666,6 +667,51 @@ async function playSportHomeWin(ctx: SimContext, sport: SportId, competitionId: 
 }
 
 // ---------------------------------------------------------------------------
+type PublishedPlacement = { match_id: string; area_id: string; start_epoch_ms: number; end_epoch_ms: number };
+
+async function publishedPlacements(ctx: SimContext, competitionId: string): Promise<PublishedPlacement[]> {
+  const rows = await ctx.sql<{ match_id: string; area_id: string; starts_at: Date; ends_at: Date }[]>`
+    SELECT sm.match_id, sm.playing_area_id AS area_id, sm.starts_at, sm.ends_at
+    FROM competition_publications cp
+    JOIN scheduled_matches sm ON sm.schedule_revision_id=cp.published_schedule_revision_id
+    WHERE cp.competition_id=${competitionId} ORDER BY sm.match_id`;
+  return rows.map((row) => ({
+    match_id: row.match_id,
+    area_id: row.area_id,
+    start_epoch_ms: new Date(row.starts_at).getTime(),
+    end_epoch_ms: new Date(row.ends_at).getTime(),
+  }));
+}
+
+function assertSamePlacements(before: PublishedPlacement[], after: PublishedPlacement[], label: string) {
+  for (const expected of before) {
+    const actual = after.find((row) => row.match_id === expected.match_id);
+    if (
+      !actual ||
+      actual.area_id !== expected.area_id ||
+      actual.start_epoch_ms !== expected.start_epoch_ms ||
+      actual.end_epoch_ms !== expected.end_epoch_ms
+    ) {
+      throw new Error(`${label}: placement changed for ${expected.match_id}: ${JSON.stringify({ expected, actual })}`);
+    }
+  }
+}
+
+async function assertJobPublishedBaseline(ctx: SimContext, jobId: string, published: PublishedPlacement[]) {
+  const rows = await ctx.sql<{ input_snapshot: ScheduleJobInput }[]>`
+    SELECT input_snapshot FROM schedule_generation_jobs WHERE id=${jobId}`;
+  const baseline = rows[0]?.input_snapshot.constraints.preserve_existing_schedule.value.by_match_id;
+  if (!baseline || Object.keys(baseline).length !== published.length)
+    throw new Error("Solver job did not use the complete published baseline");
+  for (const row of published) {
+    const entry = baseline[row.match_id];
+    if (!entry || entry.area_id !== row.area_id || entry.start_epoch_ms !== row.start_epoch_ms) {
+      throw new Error(`Solver baseline diverged from public placement for ${row.match_id}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Scenario 1: Multi-sport lifecycle & group-to-knockout advancement (All 5 sports)
 // ---------------------------------------------------------------------------
 async function runScenario1(ctx: SimContext): Promise<void> {
@@ -1238,8 +1284,23 @@ async function runScenario5(ctx: SimContext): Promise<void> {
     expectedStatuses: [200],
   });
 
+  await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${sched.revisionId}/ready`,
+    payload: { idempotency_key: randomUUID(), expected_revision: sched.revision },
+    expectedStatuses: [200],
+  });
+  await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${sched.revisionId}/publish`,
+    payload: { idempotency_key: randomUUID(), expected_revision: sched.revision },
+    expectedStatuses: [200],
+  });
+  const publishedBaseline = await publishedPlacements(ctx, comp.id);
+
   // 2. Schedule regeneration around locks via solver job
   const regen = await generateScheduleOptionViaJob(ctx, comp.id);
+  await assertJobPublishedBaseline(ctx, regen.jobId, publishedBaseline);
 
   // 2a. Locked match stays fixed; unlocked assignments are unchanged (minimal change), since
   //     capacity and entries are unchanged so every prior placement is still valid.
@@ -1351,6 +1412,117 @@ async function runScenario5(ctx: SimContext): Promise<void> {
     expectedStatuses: [200],
   });
   await assertPublishedScheduleHasNoOverlaps(ctx, comp.id, "Scenario 5 manual move publication");
+
+  // Create a genuinely changed draft while a playable match is still pending. Starting it
+  // afterwards must make publication reject the stale proposal without changing public truth.
+  const raceCandidates = await ctx.sql<{ id: string }[]>`SELECT id FROM matches WHERE competition_id=${comp.id}
+    AND home_entry_id IS NOT NULL AND away_entry_id IS NOT NULL AND id<>${targetMatch.match_id} ORDER BY ordinal`;
+  // The published revision is immutable, so the race starts from a fresh draft of the same plan.
+  const raceBase = await generateScheduleOptionViaJob(ctx, comp.id);
+  const raceInput = (
+    await ctx.sql<
+      { input_snapshot: ScheduleJobInput }[]
+    >`SELECT input_snapshot FROM schedule_generation_jobs WHERE id=${raceBase.jobId}`
+  )[0]!.input_snapshot;
+  let raceDraft: { id: string; revision: number; matchId: string } | undefined;
+  const beforeRace = await publishedPlacements(ctx, comp.id);
+  for (const candidate of raceCandidates) {
+    const previous = beforeRace.find((row) => row.match_id === candidate.id)!;
+    for (const slot of raceInput.slots) {
+      if (slot.area_id === previous.area_id && slot.start_epoch_ms === previous.start_epoch_ms) continue;
+      const move = {
+        match_id: candidate.id,
+        playing_area_id: slot.area_id,
+        slot_id: slot.slot_id,
+        start_epoch_ms: slot.start_epoch_ms,
+        end_epoch_ms: slot.end_epoch_ms,
+      };
+      const validation = await ctx.request({
+        method: "POST",
+        url: `/api/v1/schedule-revisions/${raceBase.revisionId}/moves/validate`,
+        payload: move,
+      });
+      if (!validation.json<{ validation: { valid: boolean } }>().validation.valid) continue;
+      const changed = await ctx.request({
+        method: "POST",
+        url: `/api/v1/schedule-revisions/${raceBase.revisionId}/moves`,
+        payload: { ...move, idempotency_key: randomUUID(), expected_revision: raceBase.revision },
+        expectedStatuses: [201],
+      });
+      raceDraft = { ...changed.json<{ id: string; revision: number }>(), matchId: candidate.id };
+      break;
+    }
+    if (raceDraft) break;
+  }
+  if (!raceDraft) throw new Error("Scenario 5 could not create a changed pending-match race fixture");
+  await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${raceDraft.id}/ready`,
+    payload: { idempotency_key: randomUUID(), expected_revision: raceDraft.revision },
+  });
+  const raceWriter = await scorer(ctx, comp.id, raceDraft.matchId);
+  await raceWriter.append({ type: "match_started" });
+  const stalePublish = await ctx.request({
+    method: "POST",
+    url: `/api/v1/schedule-revisions/${raceDraft.id}/publish`,
+    payload: { idempotency_key: randomUUID(), expected_revision: raceDraft.revision },
+    expectedStatuses: [409],
+  });
+  if (!stalePublish.body.includes("MATCH_NOT_MOVABLE"))
+    throw new Error(`Expected stale publication rejection: ${stalePublish.body}`);
+  assertSamePlacements(beforeRace, await publishedPlacements(ctx, comp.id), "Scenario 5 scoring/publication race");
+
+  // Live scoring states come from real scoring commands, never invented match-state strings.
+  const playable = await ctx.sql<{ id: string }[]>`SELECT id FROM matches WHERE competition_id=${comp.id}
+    AND home_entry_id IS NOT NULL AND away_entry_id IS NOT NULL AND id<>${raceDraft.matchId} ORDER BY ordinal LIMIT 2`;
+  if (playable.length !== 2) throw new Error("Scenario 5 needs two playable historical matches");
+  const started = await scorer(ctx, comp.id, playable[0]!.id);
+  await started.append({ type: "match_started" });
+  await walkover(ctx, comp.id, playable[1]!.id, "home");
+  const immutableIds = new Set(playable.map((match) => match.id));
+  const immutable = (await publishedPlacements(ctx, comp.id)).filter((row) => immutableIds.has(row.match_id));
+  const states = await ctx.sql<
+    { state: string }[]
+  >`SELECT state FROM matches WHERE id IN (${playable[0]!.id},${playable[1]!.id})`;
+  if (!states.some((row) => row.state === "in_progress") || !states.some((row) => row.state === "final")) {
+    throw new Error(`Expected persisted in_progress/final states: ${JSON.stringify(states)}`);
+  }
+  const historicalRegen = await generateScheduleOptionViaJob(ctx, comp.id);
+  await assertJobPublishedBaseline(ctx, historicalRegen.jobId, await publishedPlacements(ctx, comp.id));
+  const historicalDetail = await ctx.request({
+    method: "GET",
+    url: `/api/v1/schedule-revisions/${historicalRegen.revisionId}`,
+    expectedStatuses: [200],
+  });
+  assertSamePlacements(
+    immutable,
+    historicalDetail.json<{ assignments: PublishedPlacement[] }>().assignments,
+    "Scenario 5 historical regeneration",
+  );
+  for (const match of immutable) {
+    const assignment = historicalDetail
+      .json<{ assignments: Array<PublishedPlacement & { slot_id: string }> }>()
+      .assignments.find((row) => row.match_id === match.match_id)!;
+    const move = {
+      match_id: match.match_id,
+      playing_area_id: match.area_id,
+      slot_id: assignment.slot_id,
+      start_epoch_ms: match.start_epoch_ms,
+      end_epoch_ms: match.end_epoch_ms,
+    };
+    for (const suffix of ["/validate", ""]) {
+      const rejected = await ctx.request({
+        method: "POST",
+        url: `/api/v1/schedule-revisions/${historicalRegen.revisionId}/moves${suffix}`,
+        payload: suffix
+          ? move
+          : { ...move, idempotency_key: randomUUID(), expected_revision: historicalRegen.revision },
+        expectedStatuses: [409],
+      });
+      if (!rejected.body.includes("MATCH_NOT_MOVABLE")) throw new Error(`Expected MATCH_NOT_MOVABLE: ${rejected.body}`);
+    }
+  }
+  assertSamePlacements(immutable, await publishedPlacements(ctx, comp.id), "Scenario 5 rejected moves/public truth");
 }
 
 // ---------------------------------------------------------------------------
@@ -1586,6 +1758,17 @@ async function runScenario6(ctx: SimContext): Promise<void> {
   if (vFinal <= lastResultVersion) {
     throw new Error(`Result version did not increase after correction: was ${lastResultVersion}, now ${vFinal}`);
   }
+  const correctedState = await ctx.sql<{ state: string }[]>`SELECT state FROM matches WHERE id=${playable[0]!.id}`;
+  if (correctedState[0]?.state !== "corrected")
+    throw new Error("Scenario 6 correction did not persist corrected state");
+  const immutableBefore = (await publishedPlacements(ctx, comp.id)).filter((row) =>
+    playable.some((match) => match.id === row.match_id),
+  );
+  const correctedRegen = await generateScheduleOptionViaJob(ctx, comp.id);
+  const correctedDetail = (
+    await ctx.request({ method: "GET", url: `/api/v1/schedule-revisions/${correctedRegen.revisionId}` })
+  ).json<{ assignments: PublishedPlacement[] }>();
+  assertSamePlacements(immutableBefore, correctedDetail.assignments, "Scenario 6 corrected/in-progress regeneration");
 }
 
 // ---------------------------------------------------------------------------
@@ -1624,6 +1807,16 @@ async function runScenario7(ctx: SimContext): Promise<void> {
   if (initialCourt1Matches.length === 0 || initialCourt2Matches.length === 0) {
     throw new Error("Expected initial matches on both Court 1 and Court 2");
   }
+
+  const closedCourtPlayable = await ctx.sql<{ id: string }[]>`
+    SELECT m.id FROM matches m JOIN scheduled_matches sm ON sm.match_id=m.id
+    WHERE sm.schedule_revision_id=${sched.revisionId} AND sm.playing_area_id=${court2.id}
+      AND m.home_entry_id IS NOT NULL AND m.away_entry_id IS NOT NULL ORDER BY m.ordinal LIMIT 1`;
+  if (!closedCourtPlayable[0]) throw new Error("Scenario 7 needs a playable match on the closing court");
+  const historicalId = closedCourtPlayable[0].id;
+  const liveWriter = await scorer(ctx, comp.id, historicalId);
+  await liveWriter.append({ type: "match_started" });
+  const historicalPlacement = (await publishedPlacements(ctx, comp.id)).filter((row) => row.match_id === historicalId);
 
   // Mid-day court closure: replace capacity with revision: 2, keeping both Court 1 and Court 2
   // so existing scheduled_matches foreign keys remain valid, but closing Court 2 (availability: [])
@@ -1673,10 +1866,23 @@ async function runScenario7(ctx: SimContext): Promise<void> {
   }
 
   // Re-plan with the workspace's own constraints, exactly as an organiser regenerates. The server
-  // loads the latest revision as the preserve-existing baseline (PR #100), so the client sends no
+  // loads the published revision as the preserve-existing baseline, so the client sends no
   // per-match pins: minimal change has to come from the product, not from this harness.
   const generation = (ws as unknown as { generation: { constraints: Record<string, unknown> } }).generation;
-  await generateAndPublishScheduleViaJob(ctx, comp.id, generation.constraints);
+  const replan = await generateAndPublishScheduleViaJob(ctx, comp.id, generation.constraints);
+  await assertJobPublishedBaseline(
+    ctx,
+    replan.jobId,
+    (await publishedPlacements(ctx, comp.id)).map((row) => {
+      const original = initialPub.schedule.find((match) => getMatchId(match) === row.match_id)!;
+      return { ...row, area_id: getAreaId(original), start_epoch_ms: Date.parse(original.starts_at!) };
+    }),
+  );
+  assertSamePlacements(
+    historicalPlacement,
+    await publishedPlacements(ctx, comp.id),
+    "Scenario 7 closed-court historical placement",
+  );
 
   // Verify public projection no longer schedules matches on Court 2,
   // and Court 2 matches moved to Court 1
@@ -1689,13 +1895,13 @@ async function runScenario7(ctx: SimContext): Promise<void> {
   if (pub.schedule.length === 0) {
     throw new Error("Expected scheduled matches in public projection after replan");
   }
-  const court2Matches = pub.schedule.filter((s) => getAreaId(s) === court2.id);
+  const court2Matches = pub.schedule.filter((s) => getAreaId(s) === court2.id && getMatchId(s) !== historicalId);
   if (court2Matches.length > 0) {
     throw new Error(`Public schedule still contains ${court2Matches.length} matches on closed Court 2`);
   }
 
   // Verify affected matches from Court 2 are now on Court 1
-  for (const m of initialCourt2Matches) {
+  for (const m of initialCourt2Matches.filter((match) => getMatchId(match) !== historicalId)) {
     const moved = pub.schedule.find((s) => getMatchId(s) === getMatchId(m));
     if (!moved || getAreaId(moved) !== court1.id) {
       throw new Error(`Affected match ${getMatchId(m)} was not moved to Court 1`);
@@ -1721,9 +1927,9 @@ async function runScenario7(ctx: SimContext): Promise<void> {
     throw new Error(`Re-plan changed the scheduled match set: ${before.size} before, ${ids.length} after`);
   }
   const courtChanged = pub.schedule.filter((s) => getAreaId(before.get(getMatchId(s))!) !== getAreaId(s));
-  if (courtChanged.length !== initialCourt2Matches.length) {
+  if (courtChanged.length !== initialCourt2Matches.length - 1) {
     throw new Error(
-      `Re-plan changed court for ${courtChanged.length} match(es) but ${initialCourt2Matches.length} were displaced`,
+      `Re-plan changed court for ${courtChanged.length} match(es) but ${initialCourt2Matches.length - 1} were displaced`,
     );
   }
   const replanInput = (
@@ -1752,7 +1958,7 @@ async function runScenario7(ctx: SimContext): Promise<void> {
     forcedShifts += 1;
   }
   console.log(
-    `\n    [s7] displaced=${initialCourt2Matches.length} court-changed=${courtChanged.length} forced-dependant-shifts=${forcedShifts} unaffected-kept=${before.size - initialCourt2Matches.length - forcedShifts}`,
+    `\n    [s7] historical-kept=1 displaced=${initialCourt2Matches.length - 1} court-changed=${courtChanged.length} forced-dependant-shifts=${forcedShifts} unaffected-kept=${before.size - initialCourt2Matches.length - forcedShifts}`,
   );
 
   // R2.2: running late. Push the final Court 1 match back one slot with the schedule delay tool,
@@ -1810,9 +2016,10 @@ async function runScenario7(ctx: SimContext): Promise<void> {
       `Delayed match ${getMatchId(lastOnCourt1)} was not pushed back 60 minutes (one slot) in the public schedule`,
     );
   }
-  if (afterDelay.schedule.some((s) => getAreaId(s) === court2.id)) {
+  if (afterDelay.schedule.some((s) => getAreaId(s) === court2.id && getMatchId(s) !== historicalId)) {
     throw new Error("Delay re-introduced matches on closed Court 2");
   }
+  assertSamePlacements(historicalPlacement, await publishedPlacements(ctx, comp.id), "Scenario 7 delayed publication");
   await assertPublishedScheduleHasNoOverlaps(ctx, comp.id, "Scenario 7 delayed publication");
 }
 
@@ -2101,6 +2308,133 @@ async function runScenario9(ctx: SimContext): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario 10: Reserve slots stay empty. Each court's latest `fixed_reserve_slots` slots are kept
+// free for emergencies: the solver is never offered them, and the capacity count agrees across the
+// API summary, the domain grid and SQL `phase3_available_match_slots`.
+// ---------------------------------------------------------------------------
+async function runScenario10(ctx: SimContext): Promise<void> {
+  const { comp, division } = await createStandardTournament(ctx, "badminton", "s10-reserve-slots");
+  const template = createDefaultFormatTemplates(8).find((item) => item.strategy === "compact_knockout")!;
+  await materializeAndPublishFormatOnly(ctx, comp.id, division.id, template.graph);
+  type CapacityArea = {
+    id: string;
+    name: string;
+    slot_minutes: number;
+    fixed_reserve_slots: number;
+    availability: Array<{ id: string; date: string; start_time: string; end_time: string; cross_midnight: boolean }>;
+  };
+  type Capacity = {
+    revision: number;
+    timezone: string;
+    areas: CapacityArea[];
+    effective: { rawTotalSlots: number; fixedReserveSlots: number; availableMatchSlots: number };
+  };
+  const initial = (
+    await ctx.request({ method: "GET", url: `/api/v1/competitions/${comp.id}/capacity` })
+  ).json<Capacity>();
+  // 2 courts x 2 days x 12 one-hour slots = 48. Reserving most of each court leaves only the early
+  // day-1 slots usable, so a solver that could see reserves would have every reason to spread out.
+  const reserves = new Map(initial.areas.map((area, index) => [area.id, index === 0 ? 18 : 20]));
+  await ctx.request({
+    method: "PUT",
+    url: `/api/v1/competitions/${comp.id}/capacity`,
+    payload: {
+      revision: initial.revision,
+      areas: initial.areas.map((area) => ({
+        id: area.id,
+        name: area.name,
+        slot_minutes: area.slot_minutes,
+        fixed_reserve_slots: reserves.get(area.id)!,
+        availability: area.availability.map((window) => ({
+          id: window.id,
+          date: window.date,
+          start_time: window.start_time,
+          end_time: window.end_time,
+          cross_midnight: window.cross_midnight,
+        })),
+      })),
+    },
+    expectedStatuses: [200],
+  });
+  const loaded = (
+    await ctx.request({ method: "GET", url: `/api/v1/competitions/${comp.id}/capacity` })
+  ).json<Capacity>();
+  const grid = buildCalendarCapacitySlotSet({
+    timeZone: loaded.timezone,
+    slotMinutes: 60,
+    areas: loaded.areas.map((area) => ({ id: area.id, name: area.name, fixedReserveSlots: area.fixed_reserve_slots })),
+    availability: loaded.areas.flatMap((area) =>
+      area.availability.map((window) => ({
+        id: window.id,
+        areaId: area.id,
+        date: window.date,
+        startTime: window.start_time,
+        endTime: window.end_time,
+        crossMidnight: window.cross_midnight,
+      })),
+    ),
+  });
+  const sqlCapacity = await ctx.sql<
+    { available: number }[]
+  >`SELECT phase3_available_match_slots(${comp.id}::uuid) AS available`;
+  const expectedReserve = [...reserves.values()].reduce((total, count) => total + count, 0);
+  const counts = {
+    effective: loaded.effective,
+    sql: Number(sqlCapacity[0]?.available),
+    all: grid.allSlots.length,
+    reserve: grid.reserveSlots.length,
+    usable: grid.usableSlots.length,
+  };
+  if (
+    counts.all !== 48 ||
+    counts.reserve !== expectedReserve ||
+    counts.usable !== 48 - expectedReserve ||
+    loaded.effective.rawTotalSlots !== counts.all ||
+    loaded.effective.fixedReserveSlots !== expectedReserve ||
+    loaded.effective.availableMatchSlots !== counts.usable ||
+    counts.sql !== counts.usable
+  ) {
+    throw new Error(`Scenario 10 SQL/domain/API capacity mismatch: ${JSON.stringify(counts)}`);
+  }
+  for (const area of loaded.areas) {
+    const areaSlots = grid.allSlots.filter((slot) => slot.areaId === area.id);
+    const latest = areaSlots.slice(areaSlots.length - area.fixed_reserve_slots).map((slot) => slot.id);
+    const reserved = grid.reserveSlots.filter((slot) => slot.areaId === area.id).map((slot) => slot.id);
+    if (JSON.stringify(latest) !== JSON.stringify(reserved)) {
+      throw new Error(`Scenario 10 reserve slots are not the latest slots on ${area.name}`);
+    }
+  }
+  const overlapsReserve = (placement: { area_id: string; start_epoch_ms: number; end_epoch_ms: number }) =>
+    grid.reserveSlots.some(
+      (slot) =>
+        slot.areaId === placement.area_id &&
+        slot.startEpochMs < placement.end_epoch_ms &&
+        placement.start_epoch_ms < slot.endEpochMs,
+    );
+  const published = await generateAndPublishScheduleViaJob(ctx, comp.id);
+  const job = (
+    await ctx.sql<
+      { input_snapshot: ScheduleJobInput }[]
+    >`SELECT input_snapshot FROM schedule_generation_jobs WHERE id=${published.jobId}`
+  )[0]!.input_snapshot;
+  const offered = job.slots.filter(overlapsReserve);
+  if (job.slots.length !== counts.usable || offered.length > 0) {
+    throw new Error(
+      `Scenario 10 solver was offered ${offered.length} reserve slot(s) (${job.slots.length} slots, ${counts.usable} usable)`,
+    );
+  }
+  const placements = await publishedPlacements(ctx, comp.id);
+  if (placements.length === 0) throw new Error("Scenario 10 published no matches");
+  const leaked = placements.filter(overlapsReserve);
+  if (leaked.length > 0) {
+    throw new Error(`Scenario 10 published ${leaked.length} match(es) in reserve slots: ${JSON.stringify(leaked)}`);
+  }
+  console.log(
+    `\n    [s10] slots=${counts.all} reserve=${counts.reserve} usable=${counts.usable} sql=${counts.sql} offered-reserve=${offered.length} scheduled=${placements.length} in-reserve=${leaked.length}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Harness Runner
 // ---------------------------------------------------------------------------
 async function main() {
@@ -2108,7 +2442,10 @@ async function main() {
   const profileArg = args.find((a) => a.startsWith("--profile="))?.split("=")[1];
   const profile: Profile = profileArg === "full" ? "full" : "fast";
   const scenarioArg = args.find((a) => a.startsWith("--scenario="))?.split("=")[1];
-  const targetScenario = scenarioArg ? parseInt(scenarioArg, 10) : null;
+  const targetScenario = scenarioArg ? Number(scenarioArg) : null;
+  if (targetScenario !== null && (!Number.isInteger(targetScenario) || targetScenario < 1 || targetScenario > 10)) {
+    throw new Error("--scenario must be an integer from 1 to 10");
+  }
 
   console.log(`\n${col.cyan("====================================================================")}`);
   console.log(`${col.cyan("   MATCHDAY TOURNAMENT SIMULATION HARNESS (Track R1 Baseline)       ")}`);
@@ -2274,6 +2611,7 @@ async function main() {
     { number: 7, name: "Court disruption & schedule re-plan", fn: runScenario7 },
     { number: 8, name: "Walkovers & withdrawals in standings", fn: runScenario8 },
     { number: 9, name: "AI proposal validation & quotas", fn: runScenario9 },
+    { number: 10, name: "Reserve slots stay empty", fn: runScenario10 },
   ];
 
   const results: ScenarioResult[] = [];
@@ -2348,7 +2686,9 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`\n${col.green("SUCCESS: All tournament simulation scenarios passed with ZERO 5xx errors.")}\n`);
+  console.log(
+    `\n${col.green(`SUCCESS: ${results.length} selected tournament simulation scenario(s) passed with ZERO observed 5xx errors.`)}\n`,
+  );
 }
 
 main().catch((err) => {
