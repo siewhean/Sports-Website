@@ -526,6 +526,9 @@ function assertExactScheduleJobInput(input: ScheduleJobInput): void {
         ["reason", "area_id", "slot_id", "start_epoch_ms", "end_epoch_ms"],
         `matches[${index}].fixed_assignment`,
       );
+      if (!["locked", "published_history", "started", "finished"].includes(match.fixed_assignment.reason)) {
+        throw new Error(`matches[${index}].fixed_assignment.reason is unsupported`);
+      }
     }
   }
   for (const [index, slot] of input.slots.entries()) {

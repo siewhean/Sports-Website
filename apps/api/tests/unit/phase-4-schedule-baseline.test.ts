@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   PRESERVE_PREVIOUS_REVISION_WEIGHT,
   withPreviousRevisionBaseline,
+  loadPreviousRevisionBaseline,
   type ScheduleBaseline,
 } from "../../src/phase-4-schedule-baseline.js";
 
@@ -35,7 +36,7 @@ const baseline: ScheduleBaseline = {
 describe("withPreviousRevisionBaseline", () => {
   it("leaves the constraints alone when the competition has no previous revision", () => {
     const input = constraints();
-    expect(withPreviousRevisionBaseline(input, {})).toBe(input);
+    expect(withPreviousRevisionBaseline(input, {})).toEqual(input);
   });
 
   it("promotes an ignored setting to preferred over the previous revision (QA scenario 5)", () => {
@@ -70,5 +71,41 @@ describe("withPreviousRevisionBaseline", () => {
       mode: "required",
       value: { maximum_shift_minutes: 15, by_match_id: baseline },
     });
+  });
+});
+
+describe("published schedule baseline ownership", () => {
+  it("clears client-supplied placements when no published schedule exists", () => {
+    const input = constraints({
+      mode: "preferred",
+      weight: 7,
+      value: { maximum_shift_minutes: 30, by_match_id: baseline },
+    });
+    expect(withPreviousRevisionBaseline(input, {}).preserve_existing_schedule).toEqual({
+      mode: "preferred",
+      weight: 7,
+      value: { maximum_shift_minutes: 30, by_match_id: {} },
+    });
+  });
+
+  it("queries only the latest published revision and filters matches", async () => {
+    let query = "";
+    const tx = {
+      unsafe: async (sql: string) => {
+        query = sql;
+        return [
+          { match_id: "match-1", playing_area_id: "area-1", starts_at: new Date(1000) },
+          { match_id: "removed-match", playing_area_id: "area-2", starts_at: new Date(2000) },
+        ];
+      },
+    };
+    const actual = await loadPreviousRevisionBaseline(
+      tx as unknown as Parameters<typeof loadPreviousRevisionBaseline>[0],
+      "competition-1",
+      new Set(["match-1"]),
+    );
+    expect(query).toContain("status='published'");
+    expect(query).toContain("ORDER BY revision DESC,id DESC LIMIT 1");
+    expect(actual).toEqual({ "match-1": baseline["match-1"] });
   });
 });

@@ -45,7 +45,7 @@ export async function runGateFCachePurgeAudit(candidateSha, options = {}) {
     edge_cache_invalidation_protocol: "purge_on_publish_and_deploy",
     static_asset_hashing: "immutable_content_hash",
     public_projection_version_monotonic: true,
-    protocol_verification: "SOURCE_PASS",
+    protocol_verification: isPass ? "VERIFIED" : "NOT_EXECUTED",
     verdict: isPass ? "PASS" : "PENDING",
     pending_reasons: isPass ? [] : validation.errors,
     ...(validation.evidenceSha256

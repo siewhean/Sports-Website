@@ -472,6 +472,12 @@ export const messages = {
     inputsChanged: "Schedule inputs changed",
     scheduleInputsChangedGuidance:
       "Schedule inputs changed after this schedule was generated. Generate a new schedule before moving or publishing matches.",
+    fixedOutsideCapacityTitle: "Started matches kept in place",
+    fixedOutsideCapacityBody:
+      "{matches} started or finished at a time this court no longer has available. They keep their published court and time.",
+    startedWithoutPlacementTitle: "Started matches without a time",
+    startedWithoutPlacementBody:
+      "{matches} started before any schedule with them was published, so this schedule gives them a time. Check it matches what happened before publishing.",
     freshnessUnverified: "Schedule freshness unverified",
     scheduleFreshnessUnverifiedGuidance:
       "Schedule freshness could not be verified. Refresh or generate a new schedule before moving or publishing matches.",

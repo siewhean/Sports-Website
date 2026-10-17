@@ -47,13 +47,15 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
     });
   }
 
+  const isCompliant = migrationReports.every((m) => m.safe_expand_contract);
+
   const receipt = {
     qa_item: "OPS-003",
     candidate_sha: sha,
     migration_count: files.length,
-    expand_contract_compliant: migrationReports.every((m) => m.safe_expand_contract),
-    backward_compatible: true,
-    verdict: "PASS",
+    expand_contract_compliant: isCompliant,
+    backward_compatible: isCompliant,
+    verdict: isCompliant ? "PASS" : "FAIL",
     generated_at: new Date().toISOString(),
   };
 
@@ -84,7 +86,12 @@ export async function certifyGateFMigrations(candidateSha, options = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sha = process.argv[2] ?? process.env.CANDIDATE_SHA;
   certifyGateFMigrations(sha)
-    .then((r) => console.log(`✓ Gate F migrations certified: ${r.verdict} (${r.migration_count} migrations)`))
+    .then((r) => {
+      console.log(`✓ Gate F migrations certified: ${r.verdict} (${r.migration_count} migrations)`);
+      if (r.verdict !== "PASS") {
+        process.exit(1);
+      }
+    })
     .catch((e) => {
       console.error(e.message);
       process.exit(1);
