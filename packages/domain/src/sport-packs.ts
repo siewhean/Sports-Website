@@ -2323,6 +2323,10 @@ export const TABLE_TENNIS_FEDERATION_SPORT_PACK = definePack({
   settingsSchema: {
     ...TABLE_TENNIS_SPORT_PACK.settingsSchema,
     ...classificationPointsSchema,
+    // ITTF expedite system (Laws 2.15): recorded for officials only; MATCHDAY runs no game clock for it.
+    expediteAfterMinutes: integer("Expedite after (minutes of play in a game)", 1, 60),
+    expediteNotAfterPoints: integer("No expedite once this many points are scored in a game", 1, 60),
+    expediteReturns: integer("Expedite: receiver's returns that win the rally", 1, 50),
     standingsOrder: ordered("Standings order", [
       "points",
       "match_wins",
@@ -2337,6 +2341,9 @@ export const TABLE_TENNIS_FEDERATION_SPORT_PACK = definePack({
   recommendedSettings: {
     ...TABLE_TENNIS_SPORT_PACK.recommendedSettings,
     ...twoOneZero,
+    expediteAfterMinutes: 10,
+    expediteNotAfterPoints: 18,
+    expediteReturns: 13,
     standingsOrder: tableTennisFederationOrder,
   },
 });

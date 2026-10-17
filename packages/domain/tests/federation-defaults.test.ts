@@ -70,6 +70,23 @@ describe("federation defaults (redesign Phase 4)", () => {
     expect(BADMINTON_3X15_SPORT_PACK.matchStructure).toMatchObject({ targetPoints: [15, 15, 15], pointCap: 21 });
   });
 
+  it("records the ITTF expedite rule for officials only (Laws 2.15.1, 2.15.2, 2.15.4)", () => {
+    const rules = federationRulesFor("table_tennis", "1.0.0").filter((rule) => rule.setting.startsWith("expedite"));
+    expect(rules.map((rule) => [rule.setting, rule.value, rule.recordOnly, rule.source.verified])).toEqual([
+      ["expediteAfterMinutes", 10, true, "secondary"],
+      ["expediteNotAfterPoints", 18, true, "secondary"],
+      ["expediteReturns", 13, true, "secondary"],
+    ]);
+    expect(rules.map((rule) => rule.source.clause)).toEqual([
+      "Laws 2.15.1, 2.15.2 Expedite system",
+      "Law 2.15.2 Expedite system",
+      "Law 2.15.4 Expedite system",
+    ]);
+    expect(rules[0]?.source.doc).toMatch(/^ITTF Statutes/u);
+    // The draft pack keeps no expedite settings.
+    expect(Object.keys(SPORT_PACKS.table_tennis.settingsSchema).some((key) => key.startsWith("expedite"))).toBe(false);
+  });
+
   it("leaves the draft packs untouched for existing competitions", () => {
     for (const pack of Object.values(SPORT_PACKS)) expect(pack.version).toBe(DRAFT_SPORT_PACK_VERSION);
     expect(CANOE_POLO_SPORT_PACK.forfeit.winnerScore).toBe(3);

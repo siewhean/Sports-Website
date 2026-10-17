@@ -147,6 +147,12 @@ const table: Readonly<Record<string, readonly FederationRule[]>> = {
     rule("regularTargetPoints", "scoring", 11, ittf("Law 2.11.1 A game")),
     rule("winBy", "scoring", 2, ittf("Law 2.11.1 A game")),
     rule("pointCap", "scoring", null, ittf("Law 2.11.1 A game")),
+    // Expedite starts after 10 minutes of play in a game (or earlier if both sides ask), but not once at least
+    // 18 points have been scored in that game; the server must then win the rally within 13 returns. MATCHDAY
+    // runs no clock for it, so these are shown to officials only.
+    rule("expediteAfterMinutes", "time", 10, ittf("Laws 2.15.1, 2.15.2 Expedite system"), true),
+    rule("expediteNotAfterPoints", "time", 18, ittf("Law 2.15.2 Expedite system"), true),
+    rule("expediteReturns", "time", 13, ittf("Law 2.15.4 Expedite system"), true),
   ],
   [`badminton@${FEDERATION_SPORT_PACK_VERSION}`]: badmintonGames(
     21,

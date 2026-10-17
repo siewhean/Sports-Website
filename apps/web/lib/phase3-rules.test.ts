@@ -64,6 +64,24 @@ describe("Rules page rows (redesign Phase 4)", () => {
     );
   });
 
+  it("shows the table tennis expedite rules as record-only, with labels and the ITTF clauses", () => {
+    const pack = TABLE_TENNIS_FEDERATION_SPORT_PACK;
+    const tableTennis = createCompetitionSportSettings(pack, "cmp_3").recommendedSnapshot;
+    const groups = buildRulesGroups(pack, tableTennis, tableTennis);
+    const expedite = ["expediteAfterMinutes", "expediteNotAfterPoints", "expediteReturns"].map((setting) =>
+      row(groups, setting),
+    );
+    expect(expedite.map((candidate) => [candidate?.groupId, candidate?.valueText, candidate?.recordOnly])).toEqual([
+      ["time", "10", true],
+      ["time", "18", true],
+      ["time", "13", true],
+    ]);
+    expect(expedite[0]?.label).toBe("Expedite after (minutes of play in a game)");
+    expect(expedite[1]?.sourceText).toContain("Law 2.15.2");
+    expect(expedite[2]?.sourceText).toContain(rulesCopy.recordOnly);
+    expect(expedite.every((candidate) => candidate?.sourceText?.includes(rulesCopy.notYetVerified))).toBe(true);
+  });
+
   it("marks a changed rule and Reset puts back only that rule", () => {
     const edited = { ...snapshot, periodDurationMinutes: 7, intervalMinutes: 5 };
     const changed = row(buildRulesGroups(polo, snapshot, edited), "periodDurationMinutes");
