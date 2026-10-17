@@ -75,6 +75,8 @@ export const phase4ScheduleMachine = {
   unknownInputState: "unknown",
   staleScheduleWarningTestId: "stale-schedule-warning",
   unknownScheduleWarningTestId: "unknown-schedule-warning",
+  fixedOutsideCapacityWarningTestId: "fixed-outside-capacity-warning",
+  startedWithoutPlacementWarningTestId: "started-without-placement-warning",
 } as const;
 
 export type ScheduleSurfaceState = "ready" | "read-only" | "permission" | "offline" | "error" | "loading" | "empty";
@@ -220,6 +222,15 @@ export type ScheduleRevision = Readonly<{
   quality: ScheduleQuality | null;
   assignments: readonly ScheduleAssignment[];
   violations: readonly ScheduleViolation[];
+  /** Started/finished matches the re-plan kept in place or left unplaced (detail views only). */
+  placementWarnings?: readonly SchedulePlacementWarning[];
+}>;
+
+export type SchedulePlacementWarningCode = "FIXED_OUTSIDE_CAPACITY" | "STARTED_WITHOUT_PLACEMENT";
+
+export type SchedulePlacementWarning = Readonly<{
+  code: SchedulePlacementWarningCode;
+  matchIds: readonly string[];
 }>;
 
 export type ScheduleRevisionComparison = Readonly<{
@@ -411,6 +422,15 @@ export function matchesForArea(
       Boolean(value.match),
     )
     .sort((left, right) => Date.parse(left.assignment.startsAt) - Date.parse(right.assignment.startsAt));
+}
+
+/** Readable match codes for a placement warning; an unknown ID never leaks into copy. */
+export function placementWarningMatchLabels(document: ScheduleDocument, matchIds: readonly string[]): string {
+  return matchIds
+    .map(
+      (matchId) => document.matches.find((match) => match.id === matchId)?.code ?? phase4ScheduleCopy.anAffectedMatch,
+    )
+    .join(", ");
 }
 
 export function scheduleConflictForMatch(document: ScheduleDocument, matchId: string): boolean {
@@ -856,8 +876,16 @@ export function parseScheduleRevisionView(
     "created_at",
     "updated_at",
   ];
+  // `placement_warnings` is optional so detail views from APIs that predate it still parse.
   const keys = detail
-    ? [...baseKeys, "assignment_hash", "quality", "assignments", ...(allowReplay ? ["idempotent_replay"] : [])]
+    ? [
+        ...baseKeys,
+        "assignment_hash",
+        "quality",
+        "assignments",
+        ...("placement_warnings" in item ? ["placement_warnings"] : []),
+        ...(allowReplay ? ["idempotent_replay"] : []),
+      ]
     : baseKeys;
   if (
     !exact(item, keys) ||
@@ -879,6 +907,7 @@ export function parseScheduleRevisionView(
     return null;
   let quality: ScheduleQuality | null = null;
   let assignments: ScheduleAssignment[] = [];
+  let placementWarnings: SchedulePlacementWarning[] = [];
   if (detail) {
     if ((item.assignment_hash !== null && !nonEmpty(item.assignment_hash)) || !Array.isArray(item.assignments))
       return null;
@@ -887,6 +916,11 @@ export function parseScheduleRevisionView(
       .map(parseAssignment)
       .filter((assignment): assignment is ScheduleAssignment => Boolean(assignment));
     if ((item.quality !== null && !quality) || assignments.length !== item.assignments.length) return null;
+    if (item.placement_warnings !== undefined) {
+      const parsed = parsePlacementWarnings(item.placement_warnings);
+      if (!parsed) return null;
+      placementWarnings = parsed;
+    }
   }
   return {
     id: item.id,
@@ -901,7 +935,34 @@ export function parseScheduleRevisionView(
     quality,
     assignments,
     violations: [],
+    ...(placementWarnings.length > 0 ? { placementWarnings } : {}),
   };
+}
+
+const placementWarningCodes: ReadonlySet<string> = new Set<SchedulePlacementWarningCode>([
+  "FIXED_OUTSIDE_CAPACITY",
+  "STARTED_WITHOUT_PLACEMENT",
+]);
+
+/** Strict shape; codes this client does not know yet are skipped rather than failing the revision. */
+function parsePlacementWarnings(value: unknown): SchedulePlacementWarning[] | null {
+  if (!Array.isArray(value)) return null;
+  const warnings: SchedulePlacementWarning[] = [];
+  for (const entry of value) {
+    const item = record(entry);
+    if (
+      !item ||
+      !exact(item, ["code", "match_ids", "message"]) ||
+      !nonEmpty(item.code) ||
+      typeof item.message !== "string" ||
+      !Array.isArray(item.match_ids) ||
+      !item.match_ids.every(nonEmpty)
+    )
+      return null;
+    if (!placementWarningCodes.has(item.code)) continue;
+    warnings.push({ code: item.code as SchedulePlacementWarningCode, matchIds: item.match_ids });
+  }
+  return warnings;
 }
 
 export function parseSchedulePublishEnvelope(value: unknown): SchedulePublishEnvelope | null {

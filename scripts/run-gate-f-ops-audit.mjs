@@ -54,7 +54,7 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
       result_propagation_target_ms: 2000,
       availability_target_percent: 99.9,
     },
-    protocol_verification: "SOURCE_PASS",
+    protocol_verification: isSloPass ? "VERIFIED" : "NOT_EXECUTED",
     verdict: isSloPass ? "PASS" : "PENDING",
     pending_reasons: isSloPass ? [] : sloValidation.errors,
     ...(sloValidation.evidenceSha256
@@ -88,7 +88,7 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
       { condition: "worker_dead", target: "infra_alerts" },
       { condition: "backup_failed", target: "ops_alerts" },
     ],
-    protocol_verification: "SOURCE_PASS",
+    protocol_verification: isAlertPass ? "VERIFIED" : "NOT_EXECUTED",
     verdict: isAlertPass ? "PASS" : "PENDING",
     pending_reasons: isAlertPass ? [] : alertValidation.errors,
     ...(alertValidation.evidenceSha256
@@ -142,7 +142,7 @@ export async function runGateFOpsAudit(candidateSha, options = {}) {
       "network_egress",
       "transactional_email",
     ],
-    protocol_verification: "SOURCE_PASS",
+    protocol_verification: isCostPass ? "VERIFIED" : "NOT_EXECUTED",
     verdict: isCostPass ? "PASS" : "PENDING",
     pending_reasons: isCostPass ? [] : costValidation.errors,
     ...(costValidation.evidenceSha256

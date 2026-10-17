@@ -931,3 +931,57 @@ describe("Phase 4 golden schedule oracles", () => {
     });
   });
 });
+
+describe("started and finished historical placements", () => {
+  it.each(["started", "finished"] as const)(
+    "retains an outside-grid %s match and keeps its slot exclusive",
+    (reason) => {
+      const historical = {
+        ...slots(1)[0]!,
+        id: "historical:history",
+        startEpochMs: START - 60 * MINUTE_MS,
+        endEpochMs: START - 30 * MINUTE_MS,
+      };
+      const played = simpleMatch("history", ["a", "b"], [], {
+        fixedAssignment: {
+          reason,
+          areaId: historical.areaId,
+          slotId: historical.id,
+          startEpochMs: historical.startEpochMs,
+          endEpochMs: historical.endEpochMs,
+        },
+      });
+      const pending = simpleMatch("pending", ["c", "d"]);
+      const input = problem([played, pending], [historical, ...slots(3)]);
+      const result = generateConstraintAwareSchedule(input);
+      expect(result.find((value) => value.matchId === played.id)).toMatchObject({ slotId: historical.id, fixed: true });
+      expect(result.find((value) => value.matchId === pending.id)?.slotId).not.toBe(historical.id);
+      expect(validateSchedule(input, result).valid).toBe(true);
+      const illegal = result.map((value) => (value.matchId === pending.id ? assignment(pending, historical) : value));
+      expect(validateSchedule(input, illegal).violations.some((value) => value.code === "fixed_match_moved")).toBe(
+        true,
+      );
+    },
+  );
+
+  it("still rejects historical overlap instead of waiving intrinsic constraints", () => {
+    const historical = { ...slots(1)[0]!, id: "historical:history" };
+    const played = simpleMatch("history", ["a", "b"], [], {
+      fixedAssignment: {
+        reason: "started",
+        areaId: historical.areaId,
+        slotId: historical.id,
+        startEpochMs: historical.startEpochMs,
+        endEpochMs: historical.endEpochMs,
+      },
+    });
+    const pending = simpleMatch("pending", ["c", "d"]);
+    const normal = { ...historical, id: "normal-slot" };
+    const result = validateSchedule(problem([played, pending], [historical, normal]), [
+      assignment(played, historical, true),
+      assignment(pending, normal),
+    ]);
+    expect(result.valid).toBe(false);
+    expect(result.violations.some((value) => value.code === "area_overlap")).toBe(true);
+  });
+});

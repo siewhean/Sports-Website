@@ -59,6 +59,7 @@ import {
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
+import { capacityMatchSlots, type CapacityAreaRow, type CapacityWindowRow } from "./phase-4-capacity-slots.js";
 import { loadPreviousRevisionBaseline, withPreviousRevisionBaseline } from "./phase-4-schedule-baseline.js";
 import { assertChildInCompetition, assertDivisionInCompetition } from "./tenant-scope.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
@@ -194,40 +195,8 @@ const RECOMMENDATION_SCHEDULE_CHECK_MAX_SLOTS = 5000;
 /** Largest matches × slots solved in a request (~0.1-0.3 s worst case including relaxation rungs). */
 const RECOMMENDATION_SCHEDULE_CHECK_MAX_SOLVE_CELLS = 60_000;
 const RECOMMENDATION_SCHEDULE_CHECK_MAX_MATCHES = 600;
-
-/** Cuts availability windows into whole match slots, skipping any slot that touches an unavailable interval. */
-function capacityMatchSlots(
-  windows: readonly { id: string; playing_area_id: string; starts_at: Date | string; ends_at: Date | string }[],
-  unavailable: readonly { playing_area_id: string; starts_at: Date | string; ends_at: Date | string }[],
-  durationMinutes: number,
-): ScheduleProblem["slots"][number][] {
-  const durationMs = durationMinutes * 60_000;
-  const slots: ScheduleProblem["slots"][number][] = [];
-  for (const window of windows) {
-    const start = new Date(window.starts_at).getTime();
-    const end = new Date(window.ends_at).getTime();
-    for (let cursor = start, index = 1; cursor + durationMs <= end; cursor += durationMs, index += 1) {
-      const slotEnd = cursor + durationMs;
-      if (
-        unavailable.some(
-          (range) =>
-            range.playing_area_id === window.playing_area_id &&
-            new Date(range.starts_at).getTime() < slotEnd &&
-            new Date(range.ends_at).getTime() > cursor,
-        )
-      )
-        continue;
-      slots.push({
-        id: `${window.id}:${index}`,
-        intervalId: window.id,
-        areaId: window.playing_area_id,
-        startEpochMs: cursor,
-        endEpochMs: slotEnd,
-      });
-    }
-  }
-  return slots;
-}
+/** Persisted match states a schedule change must never move (walkover/forfeit results are `final`). */
+const IMMUTABLE_MATCH_STATES: ReadonlySet<string> = new Set(["in_progress", "final", "corrected"]);
 
 function first<T>(
   rows: readonly T[] | T[] | null | undefined,
@@ -669,6 +638,10 @@ export class Phase4Runtime {
               'end_epoch_ms',floor(extract(epoch FROM l.ends_at)*1000)::bigint
             ) ORDER BY l.match_id)
             FROM schedule_assignment_locks l WHERE l.competition_id=j.competition_id
+              AND NOT EXISTS (
+                SELECT 1 FROM jsonb_array_elements(j.input_snapshot->'matches') started
+                WHERE started->>'match_id'=l.match_id::text
+                  AND started->'fixed_assignment'->>'reason' IN ('started','finished'))
           ),'[]'::jsonb)=COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
               'match_id',item->>'match_id',
@@ -677,7 +650,9 @@ export class Phase4Runtime {
               'end_epoch_ms',(item->'fixed_assignment'->>'end_epoch_ms')::bigint
             ) ORDER BY item->>'match_id')
             FROM jsonb_array_elements(j.input_snapshot->'matches') item
-            WHERE item ? 'fixed_assignment'
+            -- Only organiser locks are compared here; started/finished fixes follow match state and
+            -- are re-checked under match-row locks by assertImmutablePlacementsCompatible.
+            WHERE item ? 'fixed_assignment' AND item->'fixed_assignment'->>'reason'='locked'
           ),'[]'::jsonb))
         ) current
         FROM schedule_generation_jobs j JOIN competitions c ON c.id=j.competition_id WHERE j.id=$1`,
@@ -721,6 +696,99 @@ export class Phase4Runtime {
         ErrorCode.SCHEDULE_LOCK_CONFLICT,
         "Current assignment locks do not match this schedule revision",
       );
+  }
+
+  /**
+   * Started (`in_progress`) and finished (`final`, `corrected`; walkovers and forfeits persist as
+   * `final`) matches, with their placement in the latest PUBLISHED revision: what the public saw
+   * is what happened, so no re-plan, move or delay may change it. A started match that was never
+   * published has no placement to keep; it is reported in `unplacedMatchIds` instead of blocking
+   * (manual moves of it are still refused by `assertMatchMovable`).
+   * With `lock`, match rows are locked in ID order, the same rows scoring locks before changing
+   * state, so a match cannot start between this check and the caller's write.
+   */
+  private async immutablePublishedPlacements(
+    tx: PostgresJsSql,
+    competitionId: string,
+    lock = false,
+  ): Promise<{
+    placed: Array<{
+      matchId: string;
+      reason: "started" | "finished";
+      areaId: string;
+      startEpochMs: number;
+      endEpochMs: number;
+    }>;
+    unplacedMatchIds: string[];
+  }> {
+    const rows = await tx.unsafe<{
+      id: string;
+      state: string;
+      playing_area_id: string | null;
+      starts_at: Date | string | null;
+      ends_at: Date | string | null;
+    }>(
+      `SELECT m.id,m.state,placement.playing_area_id,placement.starts_at,placement.ends_at
+       FROM matches m
+       LEFT JOIN scheduled_matches placement ON placement.match_id=m.id AND placement.schedule_revision_id=(
+         SELECT id FROM schedule_revisions WHERE competition_id=$1 AND status='published'
+         ORDER BY revision DESC,id DESC LIMIT 1
+       )
+       WHERE m.competition_id=$1 ORDER BY m.id ${lock ? "FOR UPDATE OF m" : ""}`,
+      [competitionId],
+    );
+    const placed: Awaited<ReturnType<Phase4Runtime["immutablePublishedPlacements"]>>["placed"] = [];
+    const unplacedMatchIds: string[] = [];
+    for (const row of rows) {
+      if (!IMMUTABLE_MATCH_STATES.has(row.state)) continue;
+      if (!row.playing_area_id || row.starts_at === null || row.ends_at === null) {
+        unplacedMatchIds.push(row.id);
+        continue;
+      }
+      placed.push({
+        matchId: row.id,
+        reason: row.state === "in_progress" ? "started" : "finished",
+        areaId: row.playing_area_id,
+        startEpochMs: new Date(row.starts_at).getTime(),
+        endEpochMs: new Date(row.ends_at).getTime(),
+      });
+    }
+    return { placed, unplacedMatchIds };
+  }
+
+  /**
+   * Under match-row locks: every started/finished match keeps its exact published placement in the
+   * proposal. (A started match that was never published has no placement to protect.)
+   */
+  private async assertImmutablePlacementsCompatible(
+    tx: PostgresJsSql,
+    competitionId: string,
+    assignments: readonly { match_id: string; area_id: string; start_epoch_ms: number; end_epoch_ms: number }[],
+  ): Promise<void> {
+    const { placed } = await this.immutablePublishedPlacements(tx, competitionId, true);
+    const byMatch = new Map(assignments.map((assignment) => [assignment.match_id, assignment]));
+    const stale = () =>
+      new ApiError(
+        409,
+        ErrorCode.MATCH_NOT_MOVABLE,
+        "A match has started or finished since this schedule was prepared; re-plan without moving it",
+      );
+    for (const placement of placed) {
+      const proposed = byMatch.get(placement.matchId);
+      if (
+        !proposed ||
+        proposed.area_id !== placement.areaId ||
+        proposed.start_epoch_ms !== placement.startEpochMs ||
+        proposed.end_epoch_ms !== placement.endEpochMs
+      ) {
+        throw stale();
+      }
+    }
+  }
+
+  private async assertRevisionMatchesImmutableHistory(tx: PostgresJsSql, revisionId: string): Promise<void> {
+    const revision = await this.revisionDetail(tx, revisionId);
+    await this.assertImmutablePlacementsCompatible(tx, revision.competition_id, revision.assignments);
   }
 
   private async rawSetup(tx: PostgresJsSql, competitionId: string, lock = false): Promise<SetupRow> {
@@ -1011,27 +1079,32 @@ export class Phase4Runtime {
     tx: PostgresJsSql,
     access: CompetitionAccess,
   ): Promise<CompetitionFormatRecommendationRequest["checkSchedule"]> {
-    const areaRows = await tx.unsafe<{ id: string; slot_minutes: number }>(
-      `SELECT id,slot_minutes FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
+    const areaRows = await tx.unsafe<CapacityAreaRow>(
+      `SELECT id,slot_minutes,fixed_reserve_slots FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
       [access.id],
     );
     if (areaRows.length === 0 || new Set(areaRows.map((area) => area.slot_minutes)).size !== 1) return undefined;
     const durationMinutes = areaRows[0]!.slot_minutes;
-    const windows = await tx.unsafe<{
-      id: string;
-      playing_area_id: string;
-      starts_at: Date | string;
-      ends_at: Date | string;
-    }>(
-      `SELECT id,playing_area_id,starts_at,ends_at FROM competition_availability_windows
+    const windows = await tx.unsafe<CapacityWindowRow>(
+      `SELECT id,playing_area_id,starts_at,ends_at,source_date::text date,
+         to_char(source_start_time,'HH24:MI') start_time,to_char(source_end_time,'HH24:MI') end_time,source_cross_midnight cross_midnight
+       FROM competition_availability_windows
        WHERE competition_id=$1 ORDER BY starts_at,playing_area_id,id`,
       [access.id],
     );
-    const unavailable = await tx.unsafe<{ playing_area_id: string; starts_at: Date | string; ends_at: Date | string }>(
-      `SELECT playing_area_id,starts_at,ends_at FROM playing_area_unavailable_intervals WHERE competition_id=$1`,
+    const unavailable = await tx.unsafe<CapacityWindowRow>(
+      `SELECT id,playing_area_id,starts_at,ends_at,source_date::text date,
+         to_char(source_start_time,'HH24:MI') start_time,to_char(source_end_time,'HH24:MI') end_time,source_cross_midnight cross_midnight
+       FROM playing_area_unavailable_intervals WHERE competition_id=$1`,
       [access.id],
     );
-    const slots = capacityMatchSlots(windows, unavailable, durationMinutes);
+    const capacityTimeZone = first(
+      await tx.unsafe<{ time_zone: string }>(
+        `SELECT COALESCE(capacity_timezone,timezone) time_zone FROM competitions WHERE id=$1`,
+        [access.id],
+      ),
+    ).time_zone;
+    const slots = capacityMatchSlots(windows, unavailable, durationMinutes, areaRows, capacityTimeZone);
     if (slots.length === 0 || slots.length > RECOMMENDATION_SCHEDULE_CHECK_MAX_SLOTS) return undefined;
     let finalTargetEpochMs = slots[0]!.startEpochMs;
     for (const slot of slots) if (slot.startEpochMs > finalTargetEpochMs) finalTargetEpochMs = slot.startEpochMs;
@@ -3423,8 +3496,8 @@ export class Phase4Runtime {
     ).hash;
     if (!capacityHash)
       throw new ApiError(422, ErrorCode.CAPACITY_NOT_CONFIGURED, "Competition capacity must be configured first");
-    const areaRows = await tx.unsafe<{ id: string; slot_minutes: number }>(
-      `SELECT id,slot_minutes FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
+    const areaRows = await tx.unsafe<CapacityAreaRow>(
+      `SELECT id,slot_minutes,fixed_reserve_slots FROM playing_areas WHERE competition_id=$1 ORDER BY sort_order,id`,
       [competition.id],
     );
     if (areaRows.length === 0)
@@ -3437,23 +3510,26 @@ export class Phase4Runtime {
         "All playing areas must use the same match slot duration",
       );
     const durationMinutes = areaRows[0]!.slot_minutes;
-    const windows = await tx.unsafe<{
-      id: string;
-      playing_area_id: string;
-      starts_at: Date | string;
-      ends_at: Date | string;
-    }>(
-      `SELECT id,playing_area_id,starts_at,ends_at FROM competition_availability_windows
+    const windows = await tx.unsafe<CapacityWindowRow>(
+      `SELECT id,playing_area_id,starts_at,ends_at,source_date::text date,
+         to_char(source_start_time,'HH24:MI') start_time,to_char(source_end_time,'HH24:MI') end_time,source_cross_midnight cross_midnight
+       FROM competition_availability_windows
        WHERE competition_id=$1 ORDER BY starts_at,playing_area_id,id`,
       [competition.id],
     );
-    const unavailable = await tx.unsafe<{ playing_area_id: string; starts_at: Date | string; ends_at: Date | string }>(
-      `SELECT playing_area_id,starts_at,ends_at FROM playing_area_unavailable_intervals WHERE competition_id=$1`,
+    const unavailable = await tx.unsafe<CapacityWindowRow>(
+      `SELECT id,playing_area_id,starts_at,ends_at,source_date::text date,
+         to_char(source_start_time,'HH24:MI') start_time,to_char(source_end_time,'HH24:MI') end_time,source_cross_midnight cross_midnight
+       FROM playing_area_unavailable_intervals WHERE competition_id=$1`,
       [competition.id],
     );
-    const slots = capacityMatchSlots(windows, unavailable, durationMinutes);
-    if (slots.length === 0)
-      throw new ApiError(422, ErrorCode.CAPACITY_HAS_NO_SLOTS, "Capacity has no usable match slots");
+    const capacityTimeZone = first(
+      await tx.unsafe<{ time_zone: string }>(
+        `SELECT COALESCE(capacity_timezone,timezone) time_zone FROM competitions WHERE id=$1`,
+        [competition.id],
+      ),
+    ).time_zone;
+    const slots = capacityMatchSlots(windows, unavailable, durationMinutes, areaRows, capacityTimeZone);
     const formats = await tx.unsafe<{ id: string; division_id: string; definition: FormatGraph | string }>(
       `SELECT DISTINCT ON (division_id) id,division_id,definition FROM format_revisions
        WHERE competition_id=$1 AND status='published' ORDER BY division_id,revision DESC,id DESC`,
@@ -3568,8 +3644,9 @@ export class Phase4Runtime {
       }
     }
 
-    // Minimal-change regeneration: the latest revision is the baseline, so unlocked matches whose
-    // previous slot is still valid stay put and only displaced ones move.
+    // Minimal-change regeneration: the latest PUBLISHED revision (what the public saw) is the
+    // baseline, so unlocked matches whose published slot is still valid stay put and only displaced
+    // ones move. Newer unpublished drafts never become the baseline.
     const effectiveConstraints: ScheduleConstraints = withPreviousRevisionBaseline(
       {
         ...constraints,
@@ -3594,7 +3671,55 @@ export class Phase4Runtime {
     }>(`SELECT match_id,playing_area_id,starts_at,ends_at FROM schedule_assignment_locks WHERE competition_id=$1`, [
       competition.id,
     ]);
+    // Started and finished matches keep their published placement as an immutable fixed
+    // assignment. If capacity no longer offers that exact slot (court closed, hours changed or the
+    // slot became a reserve), the placement is kept as a `historical:<match id>` slot outside the
+    // grid that only that match may occupy; the revision reports FIXED_OUTSIDE_CAPACITY. A started
+    // match that was never published has no placement to keep: regeneration is not blocked, the
+    // match is planned like any other (the authoritative snapshot must keep every format match and
+    // its dependency edges) and the revision reports STARTED_WITHOUT_PLACEMENT for review.
+    const immutable = await this.immutablePublishedPlacements(tx, competition.id);
+    const immutableByMatch = new Map(immutable.placed.map((placement) => [placement.matchId, placement]));
+    for (const placement of immutable.placed) {
+      if (!matchesWithOfficials.some((match) => match.id === placement.matchId)) {
+        throw new ApiError(
+          409,
+          ErrorCode.MATCH_NOT_MOVABLE,
+          "The published format no longer contains a started or finished match",
+        );
+      }
+    }
     const fixedMatches = matchesWithOfficials.map((match) => {
+      const historical = immutableByMatch.get(match.id);
+      if (historical) {
+        let slot = slots.find(
+          (candidate) =>
+            candidate.areaId === historical.areaId &&
+            candidate.startEpochMs === historical.startEpochMs &&
+            candidate.endEpochMs === historical.endEpochMs,
+        );
+        if (!slot) {
+          slot = {
+            id: `historical:${match.id}`,
+            intervalId: match.id,
+            areaId: historical.areaId,
+            startEpochMs: historical.startEpochMs,
+            endEpochMs: historical.endEpochMs,
+          };
+          slots.push(slot);
+        }
+        return {
+          ...match,
+          durationMinutes: (historical.endEpochMs - historical.startEpochMs) / 60_000,
+          fixedAssignment: {
+            reason: historical.reason,
+            areaId: historical.areaId,
+            slotId: slot.id,
+            startEpochMs: historical.startEpochMs,
+            endEpochMs: historical.endEpochMs,
+          },
+        };
+      }
       const lock = locks.find((candidate) => candidate.match_id === match.id);
       if (!lock) return match;
       const startEpochMs = new Date(lock.starts_at).getTime();
@@ -3618,6 +3743,8 @@ export class Phase4Runtime {
         },
       };
     });
+    if (slots.length === 0)
+      throw new ApiError(422, ErrorCode.CAPACITY_HAS_NO_SLOTS, "Capacity has no usable match slots");
     const problem: ScheduleProblem = {
       timeZone: competition.timezone,
       objective,
@@ -4159,34 +4286,86 @@ export class Phase4Runtime {
       match_id: string;
       division_id: string;
       area_id: string;
-      interval_id: string;
-      slot_id: string;
       starts_at: Date | string;
       ends_at: Date | string;
     }>(
-      `SELECT sm.match_id,m.division_id,sm.playing_area_id area_id,w.id interval_id,
-        concat(w.id::text,':',1+floor(extract(epoch FROM (sm.starts_at-w.starts_at))/(a.slot_minutes*60))::int) slot_id,
-        sm.starts_at,sm.ends_at
-       FROM scheduled_matches sm JOIN matches m ON m.id=sm.match_id JOIN playing_areas a ON a.id=sm.playing_area_id
-       JOIN competition_availability_windows w ON w.playing_area_id=sm.playing_area_id
-         AND sm.starts_at>=w.starts_at AND sm.ends_at<=w.ends_at
+      `SELECT sm.match_id,m.division_id,sm.playing_area_id area_id,sm.starts_at,sm.ends_at
+       FROM scheduled_matches sm JOIN matches m ON m.id=sm.match_id
        WHERE sm.schedule_revision_id=$1 ORDER BY sm.starts_at,sm.playing_area_id,sm.match_id`,
       [revisionId],
     );
+    // Slot identity comes from the solver snapshot the revision was built from (the slots the
+    // solver, moves and delays validate against), not from re-deriving the current capacity grid:
+    // a kept historical placement outside today's windows still resolves, and a placement with no
+    // snapshot slot gets a stable `published:<match id>:<start ms>` ID instead of disappearing.
+    const source = row.source_job_id
+      ? (
+          await tx.unsafe<{ input_snapshot: JsonObject | string }>(
+            `SELECT input_snapshot FROM schedule_generation_jobs WHERE id=$1`,
+            [row.source_job_id],
+          )
+        )[0]
+      : undefined;
+    const snapshot = source ? this.problemFromSnapshot(source.input_snapshot) : undefined;
+    const snapshotSlots = new Map(
+      (snapshot?.slots ?? []).map((slot) => [`${slot.areaId}|${slot.startEpochMs}|${slot.endEpochMs}`, slot]),
+    );
+    const fixedByMatch = new Map(
+      (snapshot?.matches ?? [])
+        .filter((match) => match.fixedAssignment)
+        .map((match) => [match.id, match.fixedAssignment!]),
+    );
+    const outsideCapacity = [...fixedByMatch.entries()]
+      .filter(([, fixed]) => fixed.slotId.startsWith("historical:"))
+      .map(([matchId]) => matchId);
+    // Started/finished matches this revision places although the public never saw them placed.
+    const unplaced = await tx.unsafe<{ id: string }>(
+      `SELECT m.id FROM matches m
+       JOIN scheduled_matches sm ON sm.match_id=m.id AND sm.schedule_revision_id=$2
+       WHERE m.competition_id=$1 AND m.state IN ('in_progress','final','corrected')
+         AND NOT EXISTS (
+           SELECT 1 FROM scheduled_matches published
+           WHERE published.match_id=m.id AND published.schedule_revision_id=(
+             SELECT id FROM schedule_revisions WHERE competition_id=$1 AND status='published'
+             ORDER BY revision DESC,id DESC LIMIT 1))
+       ORDER BY m.id`,
+      [row.competition_id, revisionId],
+    );
+    const placementWarnings: NonNullable<ScheduleRevisionView["placement_warnings"]>[number][] = [];
+    if (outsideCapacity.length > 0)
+      placementWarnings.push({
+        code: "FIXED_OUTSIDE_CAPACITY",
+        match_ids: outsideCapacity,
+        message:
+          "Started or finished matches keep their published court and time, even though that time is no longer in the court's available hours.",
+      });
+    if (unplaced.length > 0)
+      placementWarnings.push({
+        code: "STARTED_WITHOUT_PLACEMENT",
+        match_ids: unplaced.map((match) => match.id),
+        message:
+          "Started or finished matches that were never in a published schedule were given a time by this schedule. Check it matches what happened before publishing.",
+      });
     return {
       ...this.revisionView(row),
       assignment_hash: row.assignment_hash,
       quality: decoded<ScheduleQuality | null>(row.quality),
-      assignments: assignments.map((assignment) => ({
-        match_id: assignment.match_id,
-        division_id: assignment.division_id,
-        area_id: assignment.area_id,
-        interval_id: assignment.interval_id,
-        slot_id: assignment.slot_id,
-        start_epoch_ms: new Date(assignment.starts_at).getTime(),
-        end_epoch_ms: new Date(assignment.ends_at).getTime(),
-        fixed: false,
-      })),
+      placement_warnings: placementWarnings,
+      assignments: assignments.map((assignment) => {
+        const startEpochMs = new Date(assignment.starts_at).getTime();
+        const endEpochMs = new Date(assignment.ends_at).getTime();
+        const slot = snapshotSlots.get(`${assignment.area_id}|${startEpochMs}|${endEpochMs}`);
+        return {
+          match_id: assignment.match_id,
+          division_id: assignment.division_id,
+          area_id: assignment.area_id,
+          interval_id: slot?.intervalId ?? assignment.match_id,
+          slot_id: slot?.id ?? `published:${assignment.match_id}:${startEpochMs}`,
+          start_epoch_ms: startEpochMs,
+          end_epoch_ms: endEpochMs,
+          fixed: fixedByMatch.has(assignment.match_id),
+        };
+      }),
     };
   }
 
@@ -4235,6 +4414,19 @@ export class Phase4Runtime {
         if (job.revision !== input.expected_job_revision || job.current_best_option_id !== optionId)
           throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Schedule option is no longer current");
         await this.assertScheduleJobCurrent(tx, jobId);
+        const option = first(
+          await tx.unsafe<{ assignments: ScheduleAssignment[] | string }>(
+            `SELECT assignments FROM schedule_generation_options WHERE id=$1 AND job_id=$2`,
+            [optionId, jobId],
+          ),
+          ErrorCode.SCHEDULE_OPTION_NOT_FOUND,
+          "Schedule option not found",
+        );
+        await this.assertImmutablePlacementsCompatible(
+          tx,
+          job.competition_id,
+          decoded<ScheduleAssignment[]>(option.assignments),
+        );
         const accepted = first(
           await tx.unsafe<{ id: string }>(`SELECT (phase4_accept_schedule_option($1,$2,$3)).id`, [
             optionId,
@@ -4357,7 +4549,7 @@ export class Phase4Runtime {
         official_ids: string[];
         is_championship_final: boolean;
         fixed_assignment?: {
-          reason: "locked" | "published_history";
+          reason: "locked" | "published_history" | "started" | "finished";
           area_id: string;
           slot_id: string;
           start_epoch_ms: number;
@@ -4444,11 +4636,32 @@ export class Phase4Runtime {
     };
   }
 
+  private async assertMatchMovable(
+    tx: PostgresJsSql,
+    competitionId: string,
+    matchId: string,
+    lock = false,
+  ): Promise<void> {
+    const matchState = first(
+      await tx.unsafe<{ state: string }>(
+        `SELECT state FROM matches WHERE id=$1 AND competition_id=$2 ${lock ? "FOR UPDATE" : ""}`,
+        [matchId, competitionId],
+      ),
+      ErrorCode.MATCH_NOT_FOUND,
+      "Scheduled match not found",
+    );
+    if (IMMUTABLE_MATCH_STATES.has(matchState.state)) {
+      throw new ApiError(409, ErrorCode.MATCH_NOT_MOVABLE, "Started or finished matches cannot be moved");
+    }
+  }
+
   private async validateScheduleMoveOn(
     tx: PostgresJsSql,
     revision: Awaited<ReturnType<Phase4Runtime["revisionDetail"]>>,
     input: { match_id: string; playing_area_id: string; slot_id: string; start_epoch_ms: number; end_epoch_ms: number },
+    lockMatch = false,
   ) {
+    await this.assertMatchMovable(tx, revision.competition_id, input.match_id, lockMatch);
     if (!revision.source_job_id)
       throw new ApiError(409, ErrorCode.SCHEDULE_SOURCE_MISSING, "Schedule revision has no solver source");
     if (!["draft", "ready_for_review"].includes(revision.status))
@@ -4645,6 +4858,7 @@ export class Phase4Runtime {
       if (access.status === "archived")
         throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
       await this.lockScheduleMutation(tx, access.id);
+      await this.assertMatchMovable(tx, access.id, input.match_id, true);
       const parent = first(
         await tx.unsafe<{
           id: string;
@@ -4659,13 +4873,18 @@ export class Phase4Runtime {
       );
       if (parent.revision !== input.expected_revision || !["draft", "ready_for_review"].includes(parent.status))
         throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Schedule revision changed; refresh and retry");
-      const preview = await this.validateScheduleMoveOn(tx, await this.revisionDetail(tx, revisionId), {
-        match_id: input.match_id,
-        playing_area_id: input.playing_area_id,
-        slot_id: input.slot_id,
-        start_epoch_ms: input.start_epoch_ms,
-        end_epoch_ms: input.end_epoch_ms,
-      });
+      const preview = await this.validateScheduleMoveOn(
+        tx,
+        await this.revisionDetail(tx, revisionId),
+        {
+          match_id: input.match_id,
+          playing_area_id: input.playing_area_id,
+          slot_id: input.slot_id,
+          start_epoch_ms: input.start_epoch_ms,
+          end_epoch_ms: input.end_epoch_ms,
+        },
+        true,
+      );
       if (!preview.validation.valid)
         throw new ApiError(422, ErrorCode.SCHEDULE_INVALID, "Move violates required schedule constraints");
       const nextId = randomUUID();
@@ -4871,6 +5090,7 @@ export class Phase4Runtime {
       await this.assertScheduleJobCurrent(tx, parent.source_job_id, false);
       const problem = this.problemFromSnapshot(job.input_snapshot);
       const revision = await this.revisionDetail(tx, revisionId);
+      await this.assertImmutablePlacementsCompatible(tx, parent.competition_id, revision.assignments);
 
       const matchRows = await tx.unsafe<{ id: string; code: string; state: string }>(
         `SELECT m.id,m.code,m.state FROM scheduled_matches sm JOIN matches m ON m.id=sm.match_id
@@ -4898,8 +5118,7 @@ export class Phase4Runtime {
       const next = this.domainAssignments(revision.assignments).map((assignment) => {
         const current = { ...assignment, fixed: fixedIds.has(assignment.matchId) };
         const state = matchById.get(assignment.matchId)?.state ?? "pending";
-        const untouchable =
-          current.fixed || lockedIds.has(assignment.matchId) || ["in_progress", "final", "corrected"].includes(state);
+        const untouchable = current.fixed || lockedIds.has(assignment.matchId) || IMMUTABLE_MATCH_STATES.has(state);
         const inScope =
           (!input.playing_area_id || assignment.areaId === input.playing_area_id) &&
           (input.from_epoch_ms === undefined || assignment.startEpochMs >= input.from_epoch_ms);
@@ -5564,6 +5783,7 @@ export class Phase4Runtime {
         if (row.revision !== input.expected_revision)
           throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Schedule revision changed; refresh and retry");
         if (row.source_job_id) await this.assertScheduleJobCurrent(tx, row.source_job_id, false);
+        await this.assertRevisionMatchesImmutableHistory(tx, revisionId);
         await this.assertScheduleRevisionLocksCompatible(tx, revisionId);
         if (row.status === "draft") {
           if (!row.assignment_hash)
@@ -5646,6 +5866,7 @@ export class Phase4Runtime {
             "Only the current review-ready schedule can be published",
           );
         if (row.source_job_id) await this.assertScheduleJobCurrent(tx, row.source_job_id, false);
+        await this.assertRevisionMatchesImmutableHistory(tx, revisionId);
         await this.assertScheduleRevisionLocksCompatible(tx, revisionId);
         await tx.unsafe(`SELECT phase4_publish_schedule_revision($1,$2,$3)`, [revisionId, actor.accountId, requestId]);
         await tx.unsafe(

@@ -22,31 +22,32 @@ function requireSha(value) {
 export async function runGateFProductionSimulation(candidateSha, options = {}) {
   const sha = requireSha(candidateSha);
   const artifactsDir = options.artifactsDir ?? path.join(root, "artifacts");
+  const log = options.log ?? console.log;
 
   await mkdir(artifactsDir, { recursive: true });
 
-  console.log(`[simulation] 1. Executing migration expand-contract safety certification...`);
+  log(`[simulation] 1. Executing migration expand-contract safety certification...`);
   const migrations = await certifyGateFMigrations(sha, { artifactsDir });
 
-  console.log(`[simulation] 2. Executing automated rollback drill...`);
+  log(`[simulation] 2. Executing automated rollback drill...`);
   const rollback = await runGateFRollbackDrill(sha, {
     artifactsDir,
     evidenceFile: options.rollbackEvidenceFile,
   });
 
-  console.log(`[simulation] 3. Executing backup and restore verification...`);
+  log(`[simulation] 3. Executing backup and restore verification...`);
   const backup = await runGateFBackupRestoreAudit(sha, {
     artifactsDir,
     evidenceFile: options.backupEvidenceFile,
   });
 
-  console.log(`[simulation] 4. Executing CDN / edge cache purge audit...`);
+  log(`[simulation] 4. Executing CDN / edge cache purge audit...`);
   const cache = await runGateFCachePurgeAudit(sha, {
     artifactsDir,
     evidenceFile: options.cachePurgeEvidenceFile,
   });
 
-  console.log(`[simulation] 5. Executing operations, monitoring, and alert routing drill...`);
+  log(`[simulation] 5. Executing operations, monitoring, and alert routing drill...`);
   const ops = await runGateFOpsAudit(sha, {
     artifactsDir,
     sloEvidenceFile: options.sloEvidenceFile,
@@ -54,7 +55,7 @@ export async function runGateFProductionSimulation(candidateSha, options = {}) {
     costEvidenceFile: options.costEvidenceFile,
   });
 
-  console.log(`[simulation] 6. Executing production recertifications (DNS/TLS, Security, SEO, Email, A11y, Legal)...`);
+  log(`[simulation] 6. Executing production recertifications (DNS/TLS, Security, SEO, Email, A11y, Legal)...`);
   const recerts = await runGateFRecertifications(sha, {
     artifactsDir,
     dnsTlsEvidenceFile: options.dnsTlsEvidenceFile,

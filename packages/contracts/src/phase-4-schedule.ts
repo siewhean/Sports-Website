@@ -70,7 +70,7 @@ export type ScheduleWorkerMatch = {
   official_ids: readonly string[];
   is_championship_final: boolean;
   fixed_assignment?: {
-    reason: "locked" | "published_history";
+    reason: "locked" | "published_history" | "started" | "finished";
     area_id: string;
     slot_id: string;
     start_epoch_ms: number;
@@ -257,6 +257,16 @@ export type ScheduleRevisionView = {
   expired_at: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * Started/finished matches the re-plan could not treat normally: `FIXED_OUTSIDE_CAPACITY` keeps
+   * a published placement that current capacity no longer offers; `STARTED_WITHOUT_PLACEMENT`
+   * lists matches that started without ever being published, which this revision gave a time.
+   */
+  placement_warnings?: readonly {
+    code: "FIXED_OUTSIDE_CAPACITY" | "STARTED_WITHOUT_PLACEMENT";
+    match_ids: readonly string[];
+    message: string;
+  }[];
 };
 
 /** Server-authored facts used to compare two immutable schedule revisions. */
