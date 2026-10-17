@@ -456,6 +456,31 @@ describeInfrastructure("started and finished matches keep their published placem
     }
   });
 
+  it("regenerates when a slot spans two touching availability windows on one court", async () => {
+    // Court B 08:00-10:15 and 10:15-22:00 merge into one interval, so the 10:00-10:30 slot spans
+    // both windows. The job-input guard used to require a single window and rejected the snapshot.
+    const full = { date: "2027-08-01", startTime: "08:00", endTime: "22:00" };
+    await phase3.replaceCapacity(
+      actor(),
+      competitionId,
+      await capacityInput([
+        { date: "2027-08-01", startTime: "08:00", endTime: "10:15" },
+        { date: "2027-08-01", startTime: "10:15", endTime: "22:00" },
+      ]),
+      randomUUID(),
+    );
+    try {
+      const regenerated = await solveAndAccept();
+      const { snapshot } = await snapshotFixed(regenerated.source_job_id!);
+      const spanStart = Date.parse("2027-08-01T02:00:00Z"); // 10:00 Asia/Singapore
+      expect(snapshot.slots).toContainEqual(
+        expect.objectContaining({ area_id: courtB, start_epoch_ms: spanStart, end_epoch_ms: spanStart + 30 * MINUTE }),
+      );
+    } finally {
+      await phase3.replaceCapacity(actor(), competitionId, await capacityInput([full]), randomUUID());
+    }
+  });
+
   // Runs last: it changes capacity.
   it("keeps a started match whose court closed as a fixed placement outside capacity (FIXED_OUTSIDE_CAPACITY)", async () => {
     const published = await publishedPlacements();

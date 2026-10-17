@@ -72,11 +72,19 @@ export function capacityMatchSlots(
   return canonical.usableSlots.map((slot) => {
     const interval = intervals.get(slot.intervalId)!;
     const sources = [...interval.sourceAvailabilityIds].sort();
+    // Touching windows merge into one interval, so a slot can span two of them; it is then
+    // attributed to the window holding its start (the DB guard accepts any overlapping window
+    // whose area's merged windows contain the slot).
     const sourceId =
       sources.find((id) => {
         const window = windowById.get(id)!;
         return window.startsAt <= slot.startEpochMs && window.endsAt >= slot.endEpochMs;
-      }) ?? sources[0]!;
+      }) ??
+      sources.find((id) => {
+        const window = windowById.get(id)!;
+        return window.startsAt <= slot.startEpochMs && window.endsAt > slot.startEpochMs;
+      }) ??
+      sources[0]!;
     const offset = (slot.startEpochMs - windowById.get(sourceId)!.startsAt) / slotMs;
     return {
       id: Number.isInteger(offset) ? `${sourceId}:${offset + 1}` : `${sourceId}:at:${slot.startEpochMs}`,
