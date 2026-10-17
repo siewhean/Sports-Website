@@ -6,6 +6,7 @@ import {
   isExpectedRscNavigationCancellation,
   isExpectedTeardownFontCancellation,
   isExpectedTeardownIdentityCancellation,
+  isExpectedTeardownNotificationsCancellation,
   isExpectedTeardownIdentityPageError,
   isExpectedTeardownMetadataIconCancellation,
   isExpectedTeardownServiceWorkerCancellation,
@@ -155,6 +156,31 @@ describe("identity teardown cancellation", () => {
     { ...cancellation, pageUrl: "about:blank" },
   ])("keeps genuine or unrelated identity failures observable", (input) => {
     expect(isExpectedTeardownIdentityCancellation(input)).toBe(false);
+  });
+});
+
+describe("notifications teardown cancellation", () => {
+  const cancellation = {
+    failure: "net::ERR_ABORTED",
+    method: "GET",
+    pageUrl: "http://127.0.0.1:3101/organiser/competitions/singapore-open/live",
+    requestUrl: "http://127.0.0.1:3101/api/notifications",
+  };
+
+  it("ignores only the same-origin notification poll cancelled during navigation", () => {
+    expect(isExpectedTeardownNotificationsCancellation(cancellation)).toBe(true);
+    expect(isExpectedTeardownNotificationsCancellation({ ...cancellation, failure: "cancelled" })).toBe(true);
+  });
+
+  it.each([
+    { ...cancellation, failure: "net::ERR_FAILED" },
+    { ...cancellation, method: "POST" },
+    { ...cancellation, requestUrl: "https://cdn.example.com/api/notifications" },
+    { ...cancellation, requestUrl: "http://127.0.0.1:3101/api/notifications?read=all" },
+    { ...cancellation, requestUrl: "http://127.0.0.1:3101/api/notifications/123" },
+    { ...cancellation, pageUrl: "about:blank" },
+  ])("keeps genuine or unrelated notification failures observable", (input) => {
+    expect(isExpectedTeardownNotificationsCancellation(input)).toBe(false);
   });
 });
 
