@@ -22,6 +22,10 @@ export const featureFlags = {
     false,
     "Redesign Phase 2: organiser competition pages use the Setup / Live navigation shell and account menu.",
   ),
+  "organiser.redesign-p3-start": booleanFlag(
+    false,
+    "Redesign Phase 3: guided competition start with 3-question creation, division short codes, and setup checklist.",
+  ),
 } as const;
 
 export type MatchdayFeatureFlags = typeof featureFlags;

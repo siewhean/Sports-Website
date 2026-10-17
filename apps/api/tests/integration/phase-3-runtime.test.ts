@@ -2624,5 +2624,53 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
         ).divisions,
       ).toBe(1);
     });
+
+    it("creates a competition with individual dates, differing hours, and divisions with short codes and placeholders", async () => {
+      const input = {
+        organisationId,
+        name: "Guided Start Cup",
+        slug: `guided-cup-${randomUUID()}`,
+        sportCode: "badminton" as const,
+        venue: "National Arena",
+        address: "1 Sports Way",
+        countryCode: "SG",
+        startsOn: "2027-05-01",
+        endsOn: "2027-05-02",
+        timezone: "Asia/Singapore",
+        locale: "en-SG",
+        days: [
+          { date: "2027-05-01", opens: "09:00", closes: "13:00" }, // 4h = 8 slots of 30 min
+          { date: "2027-05-02", opens: "09:00", closes: "17:00", breaks: [{ start: "12:00", end: "13:00" }] }, // 7h = 14 slots
+        ],
+        divisions: [
+          { name: "Men's Open", entryLimit: 8, plannedEntryCount: 4 },
+          { name: "Women's Open", entryLimit: 8, plannedEntryCount: 4 },
+        ],
+      };
+
+      const result = await runtime.createCompetition(actor, input, randomUUID());
+      expect(result.id).toBeDefined();
+
+      // Check divisions and auto-suggested short_codes
+      const divs = await client<{ id: string; name: string; short_code: string }[]>`
+        SELECT id, name, short_code FROM divisions WHERE competition_id = ${result.id} ORDER BY name
+      `;
+      expect(divs).toHaveLength(2);
+      expect(divs.find((d) => d.name === "Men's Open")?.short_code).toBe("M");
+      expect(divs.find((d) => d.name === "Women's Open")?.short_code).toBe("W");
+
+      // Check planned entries
+      const entries = await client<{ id: string; entry_type: string }[]>`
+        SELECT e.id, e.entry_type FROM division_entries e
+        JOIN divisions d ON d.id = e.division_id
+        WHERE d.competition_id = ${result.id}
+      `;
+      expect(entries).toHaveLength(8);
+      expect(entries.every((e) => e.entry_type === "placeholder")).toBe(true);
+
+      // Check capacity slots per day: Day 1 (8) + Day 2 (14) = 22 total
+      const cap = await runtime.capacity(actor, result.id);
+      expect(cap.effective.availableMatchSlots).toBe(22);
+    });
   });
 });

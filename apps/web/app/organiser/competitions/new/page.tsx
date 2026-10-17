@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { messages } from "@matchday/ui";
 import { ProductionShell } from "@/components/foundation/ProductionShell";
 import { CompetitionCreateForm } from "@/components/phase3/CompetitionCreateForm";
+import { organiserRedesignP3StartEnabled } from "@/lib/organiser-p3.server";
 import { requestPublicOrigin } from "@/lib/phase3-origin";
 
 export const metadata: Metadata = {
@@ -11,6 +12,7 @@ export const metadata: Metadata = {
 };
 
 export default async function CompetitionCreatePage() {
+  const isGuidedStart = await organiserRedesignP3StartEnabled();
   const origin = requestPublicOrigin(await headers(), process.env.MATCHDAY_PUBLIC_ORIGIN);
   const signInHref = origin
     ? `/api/v1/identity/authorize?return_to=${encodeURIComponent(`${origin}/organiser/competitions/new`)}`
@@ -22,7 +24,7 @@ export default async function CompetitionCreatePage() {
       title={messages.organiserCreate.title}
       subtitle={messages.organiserCreate.subtitle}
     >
-      <CompetitionCreateForm signInHref={signInHref} />
+      <CompetitionCreateForm signInHref={signInHref} isGuidedStart={isGuidedStart} />
     </ProductionShell>
   );
 }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Phase3SportCode } from "@matchday/contracts";
 import {
   competitionDomain,
+  generateDivisionShortCode,
   type AdvancementRule,
   type AdvancementSlot,
   type FormatGraph,
@@ -36,6 +37,21 @@ export type Phase3OrganisationOption = {
   role: "owner" | "organiser";
 };
 
+export type Phase3CompetitionCreateDay = {
+  date: string;
+  opens: string;
+  closes: string;
+  breaks?: Array<{ start: string; end: string }>;
+};
+
+export type Phase3CompetitionCreateDivision = {
+  name: string;
+  shortCode?: string | null | undefined;
+  entryLimit?: 8 | 12 | 16 | 24 | 48 | number | undefined;
+  teamLimit?: 8 | 12 | 16 | 24 | 48 | number | undefined;
+  plannedEntryCount?: number | undefined;
+};
+
 export type Phase3CompetitionCreateInput = {
   organisationId: string;
   name: string;
@@ -43,12 +59,14 @@ export type Phase3CompetitionCreateInput = {
   sportCode: Phase3SportCode;
   venue: string;
   address: string;
-  locality?: string | null;
+  locality?: string | null | undefined;
   countryCode: string;
   startsOn: string;
   endsOn: string;
   timezone: string;
   locale: string;
+  days?: readonly Phase3CompetitionCreateDay[] | undefined;
+  divisions?: readonly Phase3CompetitionCreateDivision[] | undefined;
 };
 
 export type Phase3CompetitionUpdateInput = {
@@ -693,7 +711,13 @@ export class Phase3Runtime {
   async createDivision(
     actor: Phase3Actor,
     competitionId: string,
-    input: { name: string; code?: string; entryLimit: 8 | 12 | 16 | 24 | 48; plannedEntryCount?: number },
+    input: {
+      name: string;
+      code?: string;
+      shortCode?: string;
+      entryLimit: 8 | 12 | 16 | 24 | 48;
+      plannedEntryCount?: number;
+    },
     requestId: string,
     idempotencyKey: string,
   ) {
@@ -714,10 +738,16 @@ export class Phase3Runtime {
         const issue = plannedEntryCountIssue(input.plannedEntryCount, input.entryLimit, 0);
         if (issue) throw new ApiError(422, ErrorCode.VALIDATION_ERROR, issue);
       }
+      const existingDivs = await tx.unsafe<{ short_code: string | null }>(
+        `SELECT short_code FROM divisions WHERE competition_id=$1`,
+        [competitionId],
+      );
+      const existingCodes = existingDivs.map((d) => d.short_code).filter((code): code is string => Boolean(code));
+      const shortCode = input.shortCode ?? generateDivisionShortCode(input.name, existingCodes);
       const rows = await tx.unsafe<Record<string, unknown>>(
-        `INSERT INTO divisions (competition_id,name,code,team_limit) VALUES ($1,$2,$3,$4)
-         RETURNING id,competition_id,name,code,team_limit,revision`,
-        [competitionId, input.name.trim(), input.code ?? null, input.entryLimit],
+        `INSERT INTO divisions (competition_id,name,code,short_code,team_limit) VALUES ($1,$2,$3,$4,$5)
+         RETURNING id,competition_id,name,code,short_code,team_limit,revision`,
+        [competitionId, input.name.trim(), input.code ?? null, shortCode, input.entryLimit],
       );
       const created = required(rows, "Division was not created");
       await tx.unsafe(
@@ -1607,6 +1637,116 @@ export class Phase3Runtime {
           sport_code: input.sportCode,
         },
       );
+
+      if (input.days && input.days.length > 0) {
+        const areaId = randomUUID();
+        const slotMinutes = (pack.recommendedSettings as Record<string, unknown> | undefined)?.slotMinutes
+          ? Number((pack.recommendedSettings as Record<string, unknown>).slotMinutes)
+          : 30;
+        const availability = input.days.map((d) => ({
+          id: randomUUID(),
+          areaId,
+          date: d.date,
+          startTime: d.opens,
+          endTime: d.closes,
+          crossMidnight: false,
+        }));
+        const unavailable = input.days.flatMap((d) =>
+          (d.breaks ?? []).map((b) => ({
+            id: randomUUID(),
+            areaId,
+            date: d.date,
+            startTime: b.start,
+            endTime: b.end,
+          })),
+        );
+        const resolved = this.domain.resolveCapacityWindows({
+          timeZone: input.timezone,
+          areas: [{ id: areaId, name: "Court 1", sortOrder: 0, fixedReserveSlots: 0 }],
+          availability,
+          unavailable,
+          slotMinutes,
+        });
+        await tx.unsafe(
+          `INSERT INTO playing_areas (id,competition_id,name,sort_order,slot_minutes,fixed_reserve_slots)
+           VALUES ($1,$2,'Court 1',0,$3,0)`,
+          [areaId, competition.id, slotMinutes],
+        );
+        for (const window of resolved.availability) {
+          const source = required(
+            availability.filter((v) => v.id === window.id),
+            "Availability source not found",
+          );
+          await tx.unsafe(
+            `INSERT INTO competition_availability_windows
+             (id,competition_id,playing_area_id,starts_at,ends_at,source_date,source_start_time,source_end_time,source_cross_midnight)
+             VALUES ($1,$2,$3,$4::timestamptz,$5::timestamptz,$6::date,$7::time,$8::time,$9)`,
+            [
+              window.id,
+              competition.id,
+              window.areaId,
+              window.startIso,
+              window.endIso,
+              source.date,
+              source.startTime,
+              source.endTime,
+              source.crossMidnight ?? false,
+            ],
+          );
+        }
+        for (const window of resolved.unavailable) {
+          const source = required(
+            unavailable.filter((v) => v.id === window.id),
+            "Unavailable source not found",
+          );
+          await tx.unsafe(
+            `INSERT INTO playing_area_unavailable_intervals
+             (id,competition_id,playing_area_id,starts_at,ends_at,source_date,source_start_time,source_end_time,source_cross_midnight)
+             VALUES ($1,$2,$3,$4::timestamptz,$5::timestamptz,$6::date,$7::time,$8::time,false)`,
+            [
+              window.id,
+              competition.id,
+              window.areaId,
+              window.startIso,
+              window.endIso,
+              source.date,
+              source.startTime,
+              source.endTime,
+            ],
+          );
+        }
+      }
+
+      if (input.divisions && input.divisions.length > 0) {
+        const existingCodes = new Set<string>();
+        for (const div of input.divisions) {
+          const divisionId = randomUUID();
+          const shortCode = div.shortCode ?? generateDivisionShortCode(div.name, existingCodes);
+          existingCodes.add(shortCode);
+          const entryLimit = Number(div.teamLimit ?? div.entryLimit ?? 16);
+          await tx.unsafe(
+            `INSERT INTO divisions (id,competition_id,name,short_code,team_limit)
+             VALUES ($1,$2,$3,$4,$5)`,
+            [divisionId, competition.id, div.name.trim(), shortCode, entryLimit],
+          );
+          await tx.unsafe(
+            `INSERT INTO division_sport_settings (division_id,competition_id,sport_code,pack_version,settings_override,updated_by)
+             SELECT $1,competition_id,sport_code,pack_version,'{}'::jsonb,$2
+             FROM competition_sport_settings WHERE competition_id=$3`,
+            [divisionId, actor.accountId, competition.id],
+          );
+          if (div.plannedEntryCount && div.plannedEntryCount > 0) {
+            await this.insertPlannedEntries(tx, actor, input.organisationId, requestId, {
+              competitionId: competition.id,
+              divisionId,
+              divisionName: div.name.trim(),
+              entryLimit,
+              count: div.plannedEntryCount,
+            });
+          }
+        }
+      }
+
       const response = {
         id: competition.id,
         status: "draft" as const,

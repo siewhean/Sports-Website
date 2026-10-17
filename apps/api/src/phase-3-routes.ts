@@ -57,6 +57,38 @@ const SportSettingsResponse = Type.Object(
   },
   { additionalProperties: false },
 );
+
+const CreateCompetitionDay = Type.Object(
+  {
+    date: Type.String({ format: "date" }),
+    opens: Type.String({ pattern: "^[0-2][0-9]:[0-5][0-9]$" }),
+    closes: Type.String({ pattern: "^[0-2][0-9]:[0-5][0-9]$" }),
+    breaks: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            start: Type.String({ pattern: "^[0-2][0-9]:[0-5][0-9]$" }),
+            end: Type.String({ pattern: "^[0-2][0-9]:[0-5][0-9]$" }),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const CreateCompetitionDivision = Type.Object(
+  {
+    name: Type.String({ minLength: 1 }),
+    short_code: Type.Optional(Type.String({ pattern: "^[A-Z0-9]{1,4}$" })),
+    entry_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 128 })),
+    team_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 128 })),
+    planned_entry_count: Type.Optional(Type.Integer({ minimum: 0, maximum: 48 })),
+  },
+  { additionalProperties: false },
+);
+
 const CapacityWindowRequest = Type.Object(
   {
     id: Type.Optional(Id),
@@ -444,7 +476,6 @@ export async function registerPhase3Routes(
     },
     async (request) => options.runtime.readCompetition(await readActor(request), request.params.competitionId),
   );
-
   app.post<{
     Headers: { origin?: string; "x-csrf-token"?: string };
     Body: {
@@ -461,6 +492,14 @@ export async function registerPhase3Routes(
       timezone: string;
       locale: string;
       idempotency_key: string;
+      days?: Array<{ date: string; opens: string; closes: string; breaks?: Array<{ start: string; end: string }> }>;
+      divisions?: Array<{
+        name: string;
+        short_code?: string;
+        entry_limit?: number;
+        team_limit?: number;
+        planned_entry_count?: number;
+      }>;
     };
   }>(
     "/api/v1/competitions/phase3",
@@ -483,6 +522,8 @@ export async function registerPhase3Routes(
             timezone: Type.String(),
             locale: Type.String(),
             idempotency_key: Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" }),
+            days: Type.Optional(Type.Array(CreateCompetitionDay)),
+            divisions: Type.Optional(Type.Array(CreateCompetitionDivision)),
           },
           { additionalProperties: false },
         ),
@@ -507,6 +548,18 @@ export async function registerPhase3Routes(
             endsOn: request.body.ends_on,
             timezone: request.body.timezone,
             locale: request.body.locale,
+            ...(request.body.days ? { days: request.body.days } : {}),
+            ...(request.body.divisions
+              ? {
+                  divisions: request.body.divisions.map((d) => ({
+                    name: d.name,
+                    shortCode: d.short_code,
+                    entryLimit: d.entry_limit,
+                    teamLimit: d.team_limit,
+                    plannedEntryCount: d.planned_entry_count,
+                  })),
+                }
+              : {}),
           },
           request.id,
           request.body.idempotency_key,
@@ -727,6 +780,7 @@ export async function registerPhase3Routes(
       Body: {
         name: string;
         code?: string;
+        short_code?: string;
         entry_limit: 8 | 12 | 16 | 24 | 48;
         planned_entry_count?: number;
         idempotency_key: string;
@@ -742,6 +796,7 @@ export async function registerPhase3Routes(
             {
               name: Type.String({ minLength: 1 }),
               code: Type.Optional(Type.String()),
+              short_code: Type.Optional(Type.String({ pattern: "^[A-Z0-9]{1,4}$" })),
               entry_limit: Type.Union([8, 12, 16, 24, 48].map((value) => Type.Literal(value))),
               planned_entry_count: Type.Optional(Type.Integer({ minimum: 1, maximum: 48 })),
               idempotency_key: Type.String({ pattern: "^[A-Za-z0-9._:-]{8,200}$" }),
@@ -760,6 +815,7 @@ export async function registerPhase3Routes(
             {
               name: request.body.name,
               ...(request.body.code ? { code: request.body.code } : {}),
+              ...(request.body.short_code ? { shortCode: request.body.short_code } : {}),
               entryLimit: request.body.entry_limit,
               ...(request.body.planned_entry_count === undefined
                 ? {}

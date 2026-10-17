@@ -125,7 +125,10 @@ export function isPhase3CompetitionSport(value: unknown): value is Phase3Competi
 }
 
 export function isCompetitionCreateRequest(value: unknown): value is CompetitionCreateCommand {
-  if (!isRecord(value) || !hasExactKeys(value, [...competitionCreateFieldOrder, "idempotency_key"])) return false;
+  if (!isRecord(value)) return false;
+  const allowedExtra = new Set(["days", "divisions"]);
+  const keys = Object.keys(value).filter((k) => !allowedExtra.has(k));
+  if (keys.sort().join(",") !== [...competitionCreateFieldOrder, "idempotency_key"].sort().join(",")) return false;
   if (!competitionCreateFieldOrder.every((field) => typeof value[field] === "string")) return false;
   const draft = value as CompetitionCreateDraft;
   return (

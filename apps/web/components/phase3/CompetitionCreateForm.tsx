@@ -16,6 +16,8 @@ import {
   type CompetitionCreateField,
   type CompetitionOrganisationOption,
 } from "@/lib/phase3-competition-create";
+import { DayHoursEditor, type DaySchedule } from "@/components/venue/DayHoursEditor";
+import { generateDivisionShortCode } from "@matchday/domain";
 import styles from "./CompetitionCreateForm.module.css";
 
 const initialDraft = (): CompetitionCreateDraft => ({
@@ -123,7 +125,13 @@ function upstreamMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
-export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
+export function CompetitionCreateForm({
+  signInHref,
+  isGuidedStart = false,
+}: {
+  signInHref: string;
+  isGuidedStart?: boolean;
+}) {
   const router = useRouter();
   const [draft, setDraft] = useState<CompetitionCreateDraft>(() => ({
     ...initialDraft(),
@@ -140,6 +148,16 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   const [announcement, setAnnouncement] = useState("");
   const [activeStep, setActiveStep] = useState(0);
   const [slugEdited, setSlugEdited] = useState(loadSlugEdited);
+  const [days, setDays] = useState<DaySchedule[]>(() => [
+    {
+      date: "2027-05-01",
+      opens: "09:00",
+      closes: "18:00",
+      breaks: [],
+    },
+  ]);
+  const [divisionName, setDivisionName] = useState<string>(messages.organiserCreate.defaultDivision);
+  const [teamCount, setTeamCount] = useState<number>(8);
   const formRef = useRef<HTMLFormElement>(null);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
@@ -328,6 +346,132 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
     }
   }
 
+  async function submitGuided(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy || organisationsLoading || organisationsAuthRequired) return;
+
+    if (!draft.sport_code) {
+      setFieldErrors({
+        [phase3CompetitionCreateMachine.fields.sportCode]: fieldErrorMessage(
+          phase3CompetitionCreateMachine.fields.sportCode,
+        ),
+      });
+      setCommandError(messages.organiserCreate.validationSummary);
+      requestAnimationFrame(() => focusField(phase3CompetitionCreateMachine.fields.sportCode));
+      return;
+    }
+    if (!draft.name.trim()) {
+      setFieldErrors({
+        [phase3CompetitionCreateMachine.fields.name]: fieldErrorMessage(phase3CompetitionCreateMachine.fields.name),
+      });
+      setCommandError(messages.organiserCreate.validationSummary);
+      requestAnimationFrame(() => focusField(phase3CompetitionCreateMachine.fields.name));
+      return;
+    }
+
+    setBusy(true);
+    setCommandError("");
+    setAnnouncement(messages.organiserCreate.saving);
+
+    try {
+      let organisationId = draft.organisation_id;
+      const bootstrapRequired = organisations.length === 0;
+      if (bootstrapRequired) {
+        const bootstrapResponse = await fetch(phase3CompetitionCreateMachine.bootstrapRoute, {
+          method: phase3CompetitionCreateMachine.post,
+        });
+        const bootstrapPayload: unknown = await bootstrapResponse.json().catch(() => null);
+        const bootstrapReceipt = bootstrapResponse.ok
+          ? parseCompetitionOrganisationBootstrapReceipt(bootstrapPayload)
+          : null;
+        if (!bootstrapReceipt) {
+          setCommandError(
+            bootstrapResponse.status === 401 || bootstrapResponse.status === 403
+              ? messages.organiserCreate.organisationsSignInRequired
+              : messages.organiserCreate.organisationsSetupFailed,
+          );
+          setOrganisationsAuthRequired(bootstrapResponse.status === 401 || bootstrapResponse.status === 403);
+          setAnnouncement("");
+          requestAnimationFrame(() => errorRef.current?.focus());
+          return;
+        }
+        organisationId = bootstrapReceipt.id;
+        const option = {
+          id: bootstrapReceipt.id,
+          name: bootstrapReceipt.name,
+          role: bootstrapReceipt.role,
+        } satisfies CompetitionOrganisationOption;
+        setOrganisations([option]);
+        setDraft((current) => {
+          const next = { ...current, organisation_id: organisationId };
+          persistDraft(next);
+          return next;
+        });
+      }
+
+      const daysPayload =
+        days.length > 0
+          ? days
+          : [
+              {
+                date: draft.starts_on || "2027-05-01",
+                opens: "09:00",
+                closes: "18:00",
+                breaks: [],
+              },
+            ];
+
+      const divName = divisionName.trim() || "Open";
+      const shortCode = generateDivisionShortCode(divName, new Set());
+      const divisionsPayload = [
+        {
+          name: divName,
+          short_code: shortCode,
+          planned_entry_count: Math.max(2, teamCount),
+        },
+      ];
+
+      const startsOn = draft.starts_on || daysPayload[0]!.date;
+      const endsOn = draft.ends_on || daysPayload[daysPayload.length - 1]!.date;
+      const slug = draft.slug || slugify(draft.name);
+
+      const response = await fetch("/api/phase3/competitions", {
+        method: phase3CompetitionCreateMachine.post,
+        headers: { "content-type": phase3CompetitionCreateMachine.applicationJson },
+        body: JSON.stringify({
+          ...draft,
+          organisation_id: organisationId,
+          slug,
+          venue: draft.venue.trim() || "Main Venue",
+          address: draft.address.trim() || "Main Venue",
+          starts_on: startsOn,
+          ends_on: endsOn,
+          days: daysPayload,
+          divisions: divisionsPayload,
+          [phase3CompetitionCreateMachine.idempotencyKey]: idempotencyKeyRef.current,
+        }),
+      });
+
+      const payload: unknown = await response.json().catch(() => null);
+      const receipt = response.ok ? parseCompetitionCreateReceipt(payload) : null;
+      if (!receipt) {
+        setCommandError(upstreamMessage(payload, messages.organiserCreate.commandFailed));
+        setAnnouncement("");
+        requestAnimationFrame(() => errorRef.current?.focus());
+        return;
+      }
+      clearSavedDraft();
+      setAnnouncement(messages.organiserCreate.created);
+      router.push(`/organiser/competitions/${encodeURIComponent(receipt.id)}/setup`);
+    } catch {
+      setCommandError(messages.organiserCreate.commandFailed);
+      setAnnouncement("");
+      requestAnimationFrame(() => errorRef.current?.focus());
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const field = (
     name: CompetitionCreateField,
     label: string,
@@ -380,6 +524,238 @@ export function CompetitionCreateForm({ signInHref }: { signInHref: string }) {
   };
 
   const showOrganisationSelector = organisations.length > 1;
+
+  if (isGuidedStart) {
+    const estimatedMatchesMin = Math.floor(teamCount * 1.5);
+    const estimatedMatchesMax = teamCount * 2;
+    const showFreePlanNotice = teamCount > 16;
+
+    return (
+      <form ref={formRef} className={styles.form} noValidate onSubmit={submitGuided}>
+        <div className="md-label-row">
+          <strong>{messages.organiserCreate.afterCreateTitle}</strong>
+          <InfoTip label={`${messages.organiser.moreAbout} ${messages.organiserCreate.afterCreateTitle.toLowerCase()}`}>
+            {messages.organiserCreate.intro} {messages.organiserCreate.afterCreate}
+          </InfoTip>
+        </div>
+
+        {commandError ? (
+          <div ref={errorRef} className={styles.summary} role="alert" tabIndex={-1}>
+            {commandError}
+          </div>
+        ) : null}
+        {organisationsError ? (
+          <div className={styles.summary} role={organisationsAuthRequired ? "alert" : "status"}>
+            <p>{organisationsError}</p>
+            <button
+              className={styles.retry}
+              type="button"
+              onClick={() => setOrganisationLoadAttempt((attempt) => attempt + 1)}
+            >
+              {messages.organiserCreate.retryOrganisations}
+            </button>
+          </div>
+        ) : null}
+        {organisationsAuthRequired ? (
+          <a className={styles.retry} href={signInHref}>
+            {messages.organiserCreate.signInToLoadOrganisations}
+          </a>
+        ) : null}
+
+        {showOrganisationSelector ? (
+          <div className={styles.guidedCard}>
+            <div className={styles.field}>
+              <label htmlFor={phase3CompetitionCreateMachine.fields.organisationId}>
+                {messages.organiserCreate.organisation}
+              </label>
+              <select
+                id={phase3CompetitionCreateMachine.fields.organisationId}
+                name={phase3CompetitionCreateMachine.fields.organisationId}
+                value={draft.organisation_id}
+                required={organisations.length > 0}
+                disabled={organisationsLoading || organisations.length === 0}
+                aria-invalid={Boolean(fieldErrors.organisation_id || organisationsError)}
+                aria-describedby={
+                  fieldErrors.organisation_id || organisationsError
+                    ? `${phase3CompetitionCreateMachine.fields.organisationId}-error`
+                    : undefined
+                }
+                onChange={(event) =>
+                  update(phase3CompetitionCreateMachine.fields.organisationId, event.currentTarget.value)
+                }
+              >
+                <option value="" disabled>
+                  {organisationsLoading
+                    ? messages.organiserCreate.loadingOrganisations
+                    : messages.organiserCreate.chooseOrganisation}
+                </option>
+                {organisations.map((organisation) => (
+                  <option key={organisation.id} value={organisation.id}>
+                    {organisation.name} ·{" "}
+                    {organisation.role === "owner"
+                      ? messages.organiserCreate.ownerRole
+                      : messages.organiserCreate.organiserRole}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Question 1: Sport */}
+        <section className={styles.guidedCard} aria-labelledby="guided-step-1">
+          <div className={styles.guidedCardHeading}>
+            <h2 id="guided-step-1">{messages.organiserCreate.guidedStep1Title}</h2>
+            <p>{messages.organiserCreate.guidedStep1Description}</p>
+          </div>
+          <div className={styles.field}>
+            <label htmlFor={phase3CompetitionCreateMachine.fields.sportCode}>{messages.organiserCreate.sport}</label>
+            <select
+              id={phase3CompetitionCreateMachine.fields.sportCode}
+              name={phase3CompetitionCreateMachine.fields.sportCode}
+              value={draft.sport_code}
+              required
+              aria-invalid={Boolean(fieldErrors.sport_code)}
+              aria-describedby={
+                fieldErrors.sport_code ? `${phase3CompetitionCreateMachine.fields.sportCode}-error` : undefined
+              }
+              onChange={(event) => update(phase3CompetitionCreateMachine.fields.sportCode, event.currentTarget.value)}
+            >
+              <option value="" disabled>
+                {messages.organiserCreate.chooseSport}
+              </option>
+              {phase3CompetitionSports.map((sport) => (
+                <option key={sport.code} value={sport.code}>
+                  {messages.organiserCreate.sports[sport.code]}
+                </option>
+              ))}
+            </select>
+            {fieldErrors.sport_code ? (
+              <p id={`${phase3CompetitionCreateMachine.fields.sportCode}-error`} className={styles.error}>
+                {fieldErrors.sport_code}
+              </p>
+            ) : null}
+            {draft.sport_code ? <p className={styles.hint}>{messages.organiserCreate.sportLockNote}</p> : null}
+          </div>
+        </section>
+
+        {/* Question 2: Competition name & dates */}
+        <section className={styles.guidedCard} aria-labelledby="guided-step-2">
+          <div className={styles.guidedCardHeading}>
+            <h2 id="guided-step-2">{messages.organiserCreate.guidedStep2Title}</h2>
+            <p>{messages.organiserCreate.guidedStep2Description}</p>
+          </div>
+          <div className={styles.field}>
+            <span className="md-label-row">
+              <label htmlFor={phase3CompetitionCreateMachine.fields.name}>{messages.organiserCreate.name}</label>
+            </span>
+            <input
+              id={phase3CompetitionCreateMachine.fields.name}
+              name={phase3CompetitionCreateMachine.fields.name}
+              value={draft.name}
+              type="text"
+              required
+              maxLength={160}
+              aria-invalid={Boolean(fieldErrors.name)}
+              aria-describedby={fieldErrors.name ? `${phase3CompetitionCreateMachine.fields.name}-error` : undefined}
+              onChange={(event) => {
+                setSlugEdited(true);
+                update(phase3CompetitionCreateMachine.fields.name, event.currentTarget.value);
+              }}
+            />
+            {fieldErrors.name ? (
+              <p id={`${phase3CompetitionCreateMachine.fields.name}-error`} className={styles.error}>
+                {fieldErrors.name}
+              </p>
+            ) : null}
+          </div>
+
+          <DayHoursEditor
+            days={days}
+            onChange={setDays}
+            startDate={draft.starts_on || (days[0]?.date ?? "2027-05-01")}
+            endDate={draft.ends_on || (days[days.length - 1]?.date ?? "2027-05-01")}
+            onRangeChange={(start, end) => {
+              update(phase3CompetitionCreateMachine.fields.startsOn, start);
+              update(phase3CompetitionCreateMachine.fields.endsOn, end);
+            }}
+          />
+
+          <details className={styles.venueDetails}>
+            <summary>{messages.organiserCreate.guidedVenueDetails}</summary>
+            <div className={styles.venueGrid}>
+              {field(phase3CompetitionCreateMachine.fields.venue, messages.organiserCreate.venue, {
+                hint: messages.organiserCreate.venueHint,
+              })}
+              {field(phase3CompetitionCreateMachine.fields.address, messages.organiserCreate.address)}
+              {field(phase3CompetitionCreateMachine.fields.locality, messages.organiserCreate.locality)}
+              {field(phase3CompetitionCreateMachine.fields.countryCode, messages.organiserCreate.country, {
+                maxLength: 2,
+                hint: messages.organiserCreate.countryHint,
+              })}
+            </div>
+          </details>
+        </section>
+
+        {/* Question 3: Divisions and teams */}
+        <section className={styles.guidedCard} aria-labelledby="guided-step-3">
+          <div className={styles.guidedCardHeading}>
+            <h2 id="guided-step-3">{messages.organiserCreate.guidedStep3Title}</h2>
+            <p>{messages.organiserCreate.guidedStep3Description}</p>
+          </div>
+          <div className={styles.grid}>
+            <div className={styles.field}>
+              <label htmlFor="division_name">{messages.organiserCreate.divisionName}</label>
+              <input
+                id="division_name"
+                name="division_name"
+                value={divisionName}
+                type="text"
+                onChange={(event) => setDivisionName(event.currentTarget.value)}
+              />
+            </div>
+            <div className={styles.field}>
+              <label htmlFor="planned_teams">{messages.organiserCreate.plannedTeams}</label>
+              <input
+                id="planned_teams"
+                name="planned_teams"
+                type="number"
+                min={2}
+                max={64}
+                value={teamCount}
+                onChange={(event) => setTeamCount(Math.max(2, parseInt(event.currentTarget.value, 10) || 2))}
+              />
+            </div>
+          </div>
+
+          <div className={styles.estimateNotice}>
+            {messages.organiserCreate.estimatedMatchesPrefix} ~{estimatedMatchesMin}–{estimatedMatchesMax}
+          </div>
+
+          {showFreePlanNotice ? (
+            <p className={styles.planNotice} role="status">
+              {messages.organiserCreate.freePlanNotice}
+            </p>
+          ) : null}
+        </section>
+
+        <div className={styles.actions}>
+          <button
+            className={styles.submit}
+            type="submit"
+            disabled={busy || organisationsLoading || organisationsAuthRequired}
+            data-busy={busy}
+          >
+            {busy ? messages.organiserCreate.saving : messages.organiserCreate.submit}
+          </button>
+        </div>
+
+        <p className={styles.live} aria-live="polite" aria-atomic="true">
+          {announcement}
+        </p>
+      </form>
+    );
+  }
 
   return (
     <form ref={formRef} className={styles.form} noValidate onSubmit={submit}>

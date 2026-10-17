@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { messages } from "@matchday/ui";
-import { ArrowRight, Check } from "@phosphor-icons/react/dist/ssr";
+import { ArrowRight } from "@phosphor-icons/react/dist/ssr";
 import type { CompetitionView } from "@/lib/phase2";
 import { publicCompetitionPhase } from "@/lib/phase2-public-phase";
 import { modeHref, organiserBasePath } from "@/lib/organiser-navigation";
+import { Checklist } from "@/components/workspace/Checklist";
 
 const copy = messages.organiserShell;
 
@@ -46,7 +47,6 @@ export function competitionIsRunning(competition: CompetitionView, now = new Dat
  */
 export function SetupOverview({ competition }: { competition: CompetitionView }) {
   const steps = setupSteps(competition);
-  const done = steps.filter((step) => step.done).length;
   return (
     <div className="p2-overview">
       {competitionIsRunning(competition) ? (
@@ -58,30 +58,15 @@ export function SetupOverview({ competition }: { competition: CompetitionView })
           </Link>
         </p>
       ) : null}
-      <section className="p2-checklist" aria-labelledby="p2-checklist-title">
-        <header>
-          <h2 id="p2-checklist-title">{copy.checklistTitle}</h2>
-          <span>
-            {done} / {steps.length}
-          </span>
-        </header>
-        <ol>
-          {steps.map((step, index) => (
-            <li key={step.id} data-done={step.done}>
-              <span className="p2-checklist__mark" aria-hidden="true">
-                {step.done ? <Check weight="bold" /> : index + 1}
-              </span>
-              <span className="p2-checklist__text">
-                <strong>{copy.steps[step.id]}</strong>
-                <small>{step.done ? copy.stepDone : copy.stepToDo}</small>
-              </span>
-              <Link href={step.href} aria-label={`${copy.open}: ${copy.steps[step.id]}`}>
-                {copy.open}
-              </Link>
-            </li>
-          ))}
-        </ol>
-      </section>
+      <Checklist
+        title={copy.checklistTitle}
+        steps={steps.map((step) => ({
+          id: step.id,
+          label: copy.steps[step.id],
+          done: step.done,
+          href: step.href,
+        }))}
+      />
     </div>
   );
 }
