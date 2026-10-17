@@ -5,7 +5,9 @@ describe("Gate C C2 scoring UI source guards", () => {
   it("renders one authoritative five-sport control surface without the Canoe-only write controls", async () => {
     const source = await readFile(new URL("../../components/phase2/PhoneScoring.tsx", import.meta.url), "utf8");
 
-    expect(source).toContain("buildFiveSportScorecardDefinition(session.sportId, session.sportSettings)");
+    expect(source).toContain(
+      "buildFiveSportScorecardDefinition(session.sportId, session.sportSettings, session.sportPackVersion)",
+    );
     expect(source).toContain("<FiveSportScoreControls");
     expect(source).toContain("[...scoreState.actions].reverse().map");
     expect(source).toContain("eventType: pendingAction.control.id");

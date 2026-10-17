@@ -2,6 +2,7 @@
 
 import {
   SPORT_PACKS,
+  isRegisteredSportPackVersion,
   reduceFiveSportScoreEvents,
   type FiveSportScoreEvent,
   type SportId,
@@ -222,7 +223,7 @@ function eventType(event: ApiSessionState["events"][number]): string | null {
 }
 
 export function scoringSessionView(state: ApiSessionState): ScoringSessionView {
-  if (state.sport.pack_version !== SPORT_PACKS[state.competition.sport_code].version) {
+  if (!isRegisteredSportPackVersion(state.competition.sport_code, state.sport.pack_version)) {
     throw new ScoringTransportError("unavailable");
   }
   const reversed = new Set(

@@ -42,6 +42,8 @@ export type StandingsRow = Readonly<{
   sportingTie: boolean;
   resolvedBy: Exclude<StandingsMetric, "terminal_fallback"> | "entry_id" | "unresolved";
   explanations: readonly StandingsTrace[];
+  /** The entry did not complete its matches and all its results were deleted (BWF federation packs). */
+  resultsDeleted?: true;
 }>;
 
 export type StandingsGroup = Readonly<{
@@ -216,7 +218,8 @@ function parseRow(value: unknown): StandingsRow | null {
     "resolvedBy",
     "explanations",
   ] as const;
-  if (!item || !exact(item, keys)) return null;
+  if (!item || !(exact(item, keys) || (exact(item, [...keys, "resultsDeleted"]) && item.resultsDeleted === true)))
+    return null;
   const numeric = [
     "rank",
     "displayOrder",
@@ -635,6 +638,7 @@ export const phase3ResultsCopy = {
   protected: "Protected or manual",
   explanation: "Ranking explanation",
   withdrawn: "Withdrawn",
+  resultsDeleted: "Withdrawn — results deleted",
   ineligible: "Not eligible to advance",
   tie: "Sporting tie",
   sourceOwned: "Server calculated",

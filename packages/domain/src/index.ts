@@ -31,6 +31,7 @@ export * from "./results.js";
 export * from "./publication.js";
 export * from "./sport-packs.js";
 export * from "./federation-defaults.js";
+export * from "./federation-standings.js";
 export * from "./result-repair-contract.js";
 export * from "./repair-publication.js";
 export * from "./public-truth.js";

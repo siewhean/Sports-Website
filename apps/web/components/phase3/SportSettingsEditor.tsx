@@ -355,7 +355,7 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
   );
 }
 
-function SettingField({
+export function SettingField({
   id,
   definition,
   value,
@@ -485,7 +485,7 @@ function moveItem(values: readonly string[], from: number, to: number): readonly
   return next;
 }
 
-function SettingsState({
+export function SettingsState({
   state,
   compact = false,
   onConflictRetry,

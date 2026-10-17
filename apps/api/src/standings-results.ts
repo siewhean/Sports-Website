@@ -1,4 +1,4 @@
-import type { StandingsEngineConfig, StandingsMatchResult } from "@matchday/domain";
+import { disciplinePointsFromActions, type StandingsEngineConfig, type StandingsMatchResult } from "@matchday/domain";
 
 export type PersistedStandingsResultRow = {
   match_id: string;
@@ -13,6 +13,7 @@ export type PersistedStandingsResultRow = {
 
 type CanonicalSnapshot = {
   segments?: Array<{ home?: number; away?: number }>;
+  actions?: Array<{ eventType?: unknown; side?: unknown; reversed?: unknown }>;
   totalPoints?: { home?: number; away?: number };
   exceptionalOutcome?: string | null;
   winner?: "home" | "away" | null;
@@ -30,7 +31,8 @@ type GeneratedSnapshot = {
  * Converts one persisted match_result_snapshots row into a standings result.
  *
  * Two snapshot shapes are persisted: the canonical five-sport scoring state
- * written on finalisation (segments, totalPoints, winner, exceptionalOutcome)
+ * written on finalisation (segments, totalPoints, winner, exceptionalOutcome;
+ * a FIBA default keeps its default result in home_score/away_score)
  * and the generated shape written for withdrawal forfeits (homeSegments,
  * awaySegments, forfeitLoserEntryId). Every standings reader must understand
  * both, or a set sport fails segment validation and a walkover is scored as
@@ -71,9 +73,23 @@ export function standingsResultFromSnapshot(
   const snapshot = detail as CanonicalSnapshot;
   const segments = Array.isArray(snapshot.segments) ? snapshot.segments : [];
   const forfeit = snapshot.exceptionalOutcome === "walkover" && Boolean(snapshot.winner);
+  // FIBA default (basketball federation pack): finalisation already stored the default result as the score.
+  const defaulted = snapshot.exceptionalOutcome === "default" && Boolean(snapshot.winner);
+  // Packs that delete an incomplete entry's results (BWF GCR 16.2.5) need to know who retired; others do not.
+  const retiredEntryId =
+    config.incompleteEntryResults && snapshot.exceptionalOutcome === "retirement" && snapshot.winner
+      ? snapshot.winner === "home"
+        ? row.away_entry_id
+        : row.home_entry_id
+      : undefined;
   const homeWonForfeit = forfeit && snapshot.winner === "home";
   const forfeitHomeSegments = homeWonForfeit ? config.forfeitScore.homeSegments : config.forfeitScore.awaySegments;
   const forfeitAwaySegments = homeWonForfeit ? config.forfeitScore.awaySegments : config.forfeitScore.homeSegments;
+  // Federation packs with honourable play count each finalised match's cards; other packs leave discipline out.
+  const discipline =
+    config.disciplineWeights && Array.isArray(snapshot.actions)
+      ? disciplinePointsFromActions(snapshot.actions, config.disciplineWeights)
+      : null;
   return {
     matchId: row.match_id,
     homeEntryId: row.home_entry_id,
@@ -82,26 +98,36 @@ export function standingsResultFromSnapshot(
       ? homeWonForfeit
         ? config.forfeitScore.homeScore
         : config.forfeitScore.awayScore
-      : Number(snapshot.totalPoints?.home ?? row.home_score),
+      : defaulted
+        ? row.home_score
+        : Number(snapshot.totalPoints?.home ?? row.home_score),
     awayScore: forfeit
       ? homeWonForfeit
         ? config.forfeitScore.awayScore
         : config.forfeitScore.homeScore
-      : Number(snapshot.totalPoints?.away ?? row.away_score),
-    ...(!forfeit
-      ? {
-          homeSegments: segments.map((segment) => Number(segment.home ?? 0)),
-          awaySegments: segments.map((segment) => Number(segment.away ?? 0)),
-        }
-      : forfeitHomeSegments && forfeitAwaySegments
+      : defaulted
+        ? row.away_score
+        : Number(snapshot.totalPoints?.away ?? row.away_score),
+    // A default's 2-0 no longer matches the period scores, so its periods are left out.
+    ...(forfeit
+      ? forfeitHomeSegments && forfeitAwaySegments
         ? { homeSegments: forfeitHomeSegments, awaySegments: forfeitAwaySegments }
-        : {}),
+        : {}
+      : defaulted
+        ? {}
+        : {
+            homeSegments: segments.map((segment) => Number(segment.home ?? 0)),
+            awaySegments: segments.map((segment) => Number(segment.away ?? 0)),
+          }),
+    ...(discipline ? { homeDisciplinePoints: discipline.home, awayDisciplinePoints: discipline.away } : {}),
     status: forfeit ? ("forfeit" as const) : row.state,
     ...(forfeit
       ? {
           forfeitLoserEntryId: snapshot.winner === "home" ? row.away_entry_id : row.home_entry_id,
         }
       : {}),
+    ...(retiredEntryId ? { retiredEntryId } : {}),
+    ...(defaulted ? { defaultLoserEntryId: snapshot.winner === "home" ? row.away_entry_id : row.home_entry_id } : {}),
     version: row.result_version,
   };
 }

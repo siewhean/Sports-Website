@@ -8,6 +8,7 @@ import type {
 } from "@matchday/contracts";
 import {
   assertOfflineQueueIntegrity,
+  isRegisteredSportPackVersion,
   reduceFiveSportScoreEvents,
   type FiveSportScoreEvent,
   type SportPackSettings,
@@ -140,7 +141,12 @@ function projectedSession(
     );
   }
   const settings = matchPackage.settings as SportPackSettings;
-  const reduced = reduceFiveSportScoreEvents(matchPackage.sport_code, events, settings);
+  const reduced = reduceFiveSportScoreEvents(matchPackage.sport_code, events, settings, {
+    // A registered pack version (draft or federation) drives the reducer; anything else keeps the draft pack.
+    packVersion: isRegisteredSportPackVersion(matchPackage.sport_code, matchPackage.sport_pack_version)
+      ? matchPackage.sport_pack_version
+      : undefined,
+  });
   const home = matchPackage.participants.find(({ side }) => side === "home");
   const away = matchPackage.participants.find(({ side }) => side === "away");
   return {

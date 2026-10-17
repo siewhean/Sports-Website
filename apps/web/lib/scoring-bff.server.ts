@@ -1,5 +1,12 @@
 import { apiFetch } from "./client-ip.server";
-import { SPORT_PACKS, parseFiveSportScoreCommand, validateSportSettings, type SportId } from "@matchday/domain";
+import {
+  SPORT_PACKS,
+  isRegisteredSportPackVersion,
+  parseFiveSportScoreCommand,
+  registeredSportPack,
+  validateSportSettings,
+  type SportId,
+} from "@matchday/domain";
 import {
   expiredScoringSessionCookie,
   InvalidScoringSessionError,
@@ -443,11 +450,12 @@ function scoringState(value: unknown): Record<string, unknown> | null {
     !SPORT_IDS.has(competition.sport_code) ||
     !sport ||
     typeof sport.pack_version !== "string" ||
-    sport.pack_version !== SPORT_PACKS[competition.sport_code as SportId].version ||
+    !isRegisteredSportPackVersion(competition.sport_code as SportId, sport.pack_version) ||
     !sport.settings ||
     typeof sport.settings !== "object" ||
     Array.isArray(sport.settings) ||
-    validateSportSettings(SPORT_PACKS[competition.sport_code as SportId], sport.settings).length > 0 ||
+    validateSportSettings(registeredSportPack(competition.sport_code as SportId, sport.pack_version), sport.settings)
+      .length > 0 ||
     !match ||
     !access ||
     !writer ||

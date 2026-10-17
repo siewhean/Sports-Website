@@ -22,6 +22,10 @@ export const featureFlags = {
     false,
     "Redesign Phase 2: organiser competition pages use the Setup / Live navigation shell and account menu.",
   ),
+  "organiser.redesign-p4-rules": booleanFlag(
+    false,
+    "Redesign Phase 4 (redesign_p4_rules): new competitions start from the federation sport packs and organisers see the Rules page.",
+  ),
 } as const;
 
 export type MatchdayFeatureFlags = typeof featureFlags;

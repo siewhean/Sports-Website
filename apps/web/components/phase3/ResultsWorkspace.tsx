@@ -401,7 +401,11 @@ function StandingsTableRow({ row }: { row: StandingsRow }) {
       </td>
       <th scope={phase3ResultsMachine.rowScope}>
         <span>{row.entryName}</span>
-        {row.status === "withdrawn" ? <small>{phase3ResultsCopy.withdrawn}</small> : null}
+        {row.resultsDeleted ? (
+          <small>{phase3ResultsCopy.resultsDeleted}</small>
+        ) : row.status === "withdrawn" ? (
+          <small>{phase3ResultsCopy.withdrawn}</small>
+        ) : null}
         {!row.eligibleForAdvancement ? <small>{phase3ResultsCopy.ineligible}</small> : null}
       </th>
       <td>

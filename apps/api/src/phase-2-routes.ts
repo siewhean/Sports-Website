@@ -200,6 +200,20 @@ export async function registerPhase2Routes(
   const readActor = async (request: FastifyRequest): Promise<Phase2Actor> => ({
     accountId: (await options.identityRequests.authenticate(request)).account.id,
   });
+  /** Rules writes (D23): a request without an organiser session is refused with 403, as on the Phase 3 routes. */
+  const rulesActor = async (request: FastifyRequest): Promise<Phase2Actor> => {
+    try {
+      return await actor(request);
+    } catch (error) {
+      if (error instanceof ApiError && error.statusCode === 401)
+        throw new ApiError(
+          403,
+          ErrorCode.COMPETITION_ACCESS_DENIED,
+          "Only the competition's owners and organisers can change its rules",
+        );
+      throw error;
+    }
+  };
 
   app.get<{ Params: { competitionId: string } }>(
     "/api/v1/competitions/:competitionId",
@@ -288,7 +302,7 @@ export async function registerPhase2Routes(
       },
     },
     async (request) =>
-      options.runtime.updateSettings(await actor(request), request.params.competitionId, request.body, request.id),
+      options.runtime.updateSettings(await rulesActor(request), request.params.competitionId, request.body, request.id),
   );
 
   app.post<{

@@ -53,9 +53,12 @@ describe("federation defaults (redesign Phase 4)", () => {
     const pending = rulesNeedingVerification();
     expect(pending.every(({ rule }) => rule.source.verified !== "primary")).toBe(true);
     const sports = new Set(pending.map(({ pack }) => pack.split("@")[0]));
-    expect([...sports].sort()).toEqual(["badminton", "basketball", "table_tennis"]);
-    // Canoe polo and volleyball are read from the federations' own documents.
-    expect(pending.some(({ pack }) => pack.startsWith("canoe_polo") || pack.startsWith("volleyball"))).toBe(false);
+    expect([...sports].sort()).toEqual(["badminton", "table_tennis"]);
+    // Canoe polo, volleyball and basketball are read from the federations' own documents.
+    expect(
+      pending.some(({ pack }) => ["canoe_polo", "volleyball", "basketball"].some((sport) => pack.startsWith(sport))),
+    ).toBe(false);
+    expect(pending.some(({ rule }) => rule.source.verified === "unverified")).toBe(false);
   });
 
   it("applies the federation corrections the plan calls for", () => {
@@ -65,6 +68,23 @@ describe("federation defaults (redesign Phase 4)", () => {
     expect(VOLLEYBALL_FEDERATION_SPORT_PACK.matchStructure.targetPoints).toEqual([25, 25, 25, 25, 15]);
     expect(VOLLEYBALL_FEDERATION_SPORT_PACK.forfeit.awardedSegments).toBe(3);
     expect(BADMINTON_3X15_SPORT_PACK.matchStructure).toMatchObject({ targetPoints: [15, 15, 15], pointCap: 21 });
+  });
+
+  it("records the ITTF expedite rule for officials only (Laws 2.15.1, 2.15.2, 2.15.4)", () => {
+    const rules = federationRulesFor("table_tennis", "1.0.0").filter((rule) => rule.setting.startsWith("expedite"));
+    expect(rules.map((rule) => [rule.setting, rule.value, rule.recordOnly, rule.source.verified])).toEqual([
+      ["expediteAfterMinutes", 10, true, "secondary"],
+      ["expediteNotAfterPoints", 18, true, "secondary"],
+      ["expediteReturns", 13, true, "secondary"],
+    ]);
+    expect(rules.map((rule) => rule.source.clause)).toEqual([
+      "Laws 2.15.1, 2.15.2 Expedite system",
+      "Law 2.15.2 Expedite system",
+      "Law 2.15.4 Expedite system",
+    ]);
+    expect(rules[0]?.source.doc).toMatch(/^ITTF Statutes/u);
+    // The draft pack keeps no expedite settings.
+    expect(Object.keys(SPORT_PACKS.table_tennis.settingsSchema).some((key) => key.startsWith("expedite"))).toBe(false);
   });
 
   it("leaves the draft packs untouched for existing competitions", () => {

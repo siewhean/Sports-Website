@@ -2,8 +2,15 @@ import "server-only";
 import { apiFetch } from "./client-ip.server";
 
 import { cookies, headers } from "next/headers";
-import { SPORT_PACKS, type SportId, type SportPackOverride } from "@matchday/domain";
+import {
+  CANOE_POLO_FEDERATION_SPORT_PACK,
+  SPORT_PACKS,
+  type SportId,
+  type SportPack,
+  type SportPackOverride,
+} from "@matchday/domain";
 import { demoFixturesEnabled } from "@/lib/demo-fixtures.server";
+import { redesignRulesEnabled } from "@/lib/redesign-rules.server";
 import { requestCanForwardSessionCookie } from "@/lib/phase3-origin";
 import {
   parseSportSettingsResponse,
@@ -11,6 +18,7 @@ import {
   type SportSettingsDocument,
   type SportSettingsSurfaceState,
 } from "@/lib/phase3-sport-settings";
+import { parseRulesHistory, type RulesHistory } from "@/lib/phase3-rules";
 import {
   parseSportPackAdminIndex,
   parseSportPackAdminRead,
@@ -64,8 +72,11 @@ async function adminAuthState(response: Response): Promise<SportPackAdminState> 
       : "permission";
 }
 
-function documentForState(context: SportSettingsContext, state: SportSettingsSurfaceState): SportSettingsDocument {
-  const pack = SPORT_PACKS.canoe_polo;
+function documentForState(
+  context: SportSettingsContext,
+  state: SportSettingsSurfaceState,
+  pack: SportPack = SPORT_PACKS.canoe_polo,
+): SportSettingsDocument {
   const override: SportPackOverride = state === "ready" && context.scope === "competition" ? { slotMinutes: 35 } : {};
   const recommended = { ...pack.recommendedSettings };
   return {
@@ -84,7 +95,7 @@ function documentForState(context: SportSettingsContext, state: SportSettingsSur
     override,
     mode: Object.keys(override).length ? "customised" : "recommended",
     revision: 4,
-    definitionHash: "demo-canoe-polo-draft-1",
+    definitionHash: `demo-canoe-polo-${pack.version}`,
     packDefinition: pack,
     canEdit: state === "ready",
     capabilities:
@@ -159,9 +170,30 @@ export async function getSportSettingsDocument(input: {
   const preview = safePreviewState(input.previewState);
   if (demoFixturesEnabled()) {
     if (context.scope === "division" && preview === "ready") return documentForState(context, "unavailable");
-    return documentForState(context, preview);
+    // The Rules page preview shows a federation pack, so its sources and "Federation default" labels can be seen.
+    const pack = (await redesignRulesEnabled()) ? CANOE_POLO_FEDERATION_SPORT_PACK : SPORT_PACKS.canoe_polo;
+    return documentForState(context, preview, pack);
   }
   return readSettings(context);
+}
+
+/** Redesign Phase 4 "Rules changes" list for the Rules page. Demo builds have no saved changes. */
+export async function getRulesHistory(competitionId: string): Promise<RulesHistory> {
+  if (demoFixturesEnabled()) return { state: "ready", items: [] };
+  const base = apiBaseUrl();
+  if (!base) return { state: "unavailable", items: [] };
+  const cookie = await sessionCookie(base);
+  if (!cookie) return { state: "unavailable", items: [] };
+  try {
+    const response = await apiFetch(
+      new URL(`/api/v1/competitions/${encodeURIComponent(competitionId)}/settings/history`, base),
+      { cache: "no-store", headers: { accept: "application/json", cookie } },
+    );
+    if (!response.ok) return { state: "unavailable", items: [] };
+    return parseRulesHistory(await response.json().catch(() => null));
+  } catch {
+    return { state: "unavailable", items: [] };
+  }
 }
 
 export async function getSportDefaultsAdminDocument(

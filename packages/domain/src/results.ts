@@ -395,6 +395,7 @@ export type StandingsMetric =
   | "segment_ratio"
   | "score_ratio"
   | "head_to_head"
+  | "head_to_head_two_way"
   | "discipline"
   | "seed";
 
@@ -418,6 +419,13 @@ export type StandingsMatchResult = {
   status: "final" | "corrected" | "forfeit";
   version: number;
   forfeitLoserEntryId?: string;
+  /**
+   * The entry that retired during this match (redesign Phase 4). Only set for packs whose standings delete an
+   * incomplete entry's results (`incompleteEntryResults`); other packs score a retirement as before.
+   */
+  retiredEntryId?: string;
+  /** The team that lost by default (FIBA OBR Art. 21), not by forfeit; the score is already the default result. */
+  defaultLoserEntryId?: string;
 };
 
 export type ForfeitScore = {
@@ -438,6 +446,28 @@ export type StandingsEngineConfig = {
   terminalFallback: "seed_then_entry_id" | "entry_id" | "unresolved";
   forfeitScore: ForfeitScore;
   withdrawalPolicy: "completed_results_stand" | "void_all_results";
+  /**
+   * Classification points for the team that forfeits (redesign Phase 4: FIBA and ITTF give 0, not the loss
+   * points). Absent means a forfeit loss earns `lossPoints`, as before.
+   */
+  forfeitLossPoints?: number;
+  /**
+   * Classification points for a team that loses by default (redesign Phase 4: FIBA OBR Art. 21.2.1 gives 1, like
+   * a loss). Absent means a default loss earns `lossPoints`.
+   */
+  defaultLossPoints?: number;
+  /**
+   * Points per card type for the `discipline` criterion, counted from each finalised match's card events
+   * (redesign Phase 4: ICF honourable play). Absent means discipline points come only from generated results.
+   */
+  disciplineWeights?: Readonly<Record<string, number>>;
+  /**
+   * What happens to an entry that could not complete all its matches (redesign Phase 4, BWF General Competition
+   * Regulations 16.2.5). `delete_all`: an entry that lost a match by forfeit (walkover, or a remaining fixture
+   * forfeited on withdrawal) or retired from a match has all its results deleted, for every other entry too, and
+   * is listed after the ranked entries, marked `resultsDeleted`. Absent means every result counts, as before.
+   */
+  incompleteEntryResults?: "delete_all";
 };
 
 function freezeStandingsConfig(config: StandingsEngineConfig): StandingsEngineConfig {
@@ -553,6 +583,8 @@ export type ConfigurableStandingsRow = {
   sportingTie: boolean;
   resolvedBy: StandingsMetric | "seed" | "entry_id" | "unresolved";
   explanations: readonly StandingsCriterionTrace[];
+  /** True when the entry did not complete its matches and all its results were deleted (BWF GCR 16.2.5). */
+  resultsDeleted?: true;
 };
 
 type EngineRow = Omit<
@@ -575,6 +607,8 @@ function validateEngineConfig(config: StandingsEngineConfig): void {
     ["winPoints", config.winPoints],
     ["drawPoints", config.drawPoints],
     ["lossPoints", config.lossPoints],
+    ...(config.forfeitLossPoints === undefined ? [] : ([["forfeitLossPoints", config.forfeitLossPoints]] as const)),
+    ...(config.defaultLossPoints === undefined ? [] : ([["defaultLossPoints", config.defaultLossPoints]] as const)),
   ] as const) {
     assertNonNegativeInteger(value, label);
   }
@@ -651,6 +685,35 @@ function validateStandingsResult(
   } else if (result.forfeitLoserEntryId !== undefined) {
     throw new Error(`Non-forfeit result ${result.matchId} cannot identify a forfeit loser`);
   }
+  if (result.defaultLoserEntryId !== undefined) {
+    if (result.defaultLoserEntryId !== result.homeEntryId && result.defaultLoserEntryId !== result.awayEntryId)
+      throw new Error(`Default result ${result.matchId} must identify a participating loser`);
+    if (result.status === "forfeit") throw new Error(`Forfeit result ${result.matchId} cannot also be a default`);
+    const loserScore = result.defaultLoserEntryId === result.homeEntryId ? result.homeScore : result.awayScore;
+    const winnerScore = result.defaultLoserEntryId === result.homeEntryId ? result.awayScore : result.homeScore;
+    if (winnerScore <= loserScore)
+      throw new Error(`Default result ${result.matchId} must leave the team awarded the game ahead`);
+  }
+  if (
+    result.retiredEntryId !== undefined &&
+    result.retiredEntryId !== result.homeEntryId &&
+    result.retiredEntryId !== result.awayEntryId
+  ) {
+    throw new Error(`Retirement result ${result.matchId} must identify a participating entry`);
+  }
+}
+
+/**
+ * Entries that could not complete all their matches: they lost a match by forfeit or retired from one. Only
+ * used when the configuration deletes such an entry's results (BWF GCR 16.2.5).
+ */
+export function incompleteEntryIds(results: readonly StandingsMatchResult[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const result of results) {
+    if (result.status === "forfeit" && result.forfeitLoserEntryId) ids.add(result.forfeitLoserEntryId);
+    if (result.retiredEntryId) ids.add(result.retiredEntryId);
+  }
+  return ids;
 }
 
 function segmentRecord(result: StandingsMatchResult): { homeWins: number; awayWins: number } {
@@ -675,6 +738,22 @@ function matchOutcome(result: StandingsMatchResult, config: StandingsEngineConfi
   if (result.homeScore > result.awayScore) return "home";
   if (result.homeScore < result.awayScore) return "away";
   return "draw";
+}
+
+/**
+ * Classification points a losing entry earns: `forfeitLossPoints` when it forfeited, `defaultLossPoints` when it
+ * lost by default, each only when the config sets one; otherwise the loss points.
+ */
+function losingPoints(result: StandingsMatchResult, loserEntryId: string, config: StandingsEngineConfig): number {
+  if (
+    result.status === "forfeit" &&
+    result.forfeitLoserEntryId === loserEntryId &&
+    config.forfeitLossPoints !== undefined
+  )
+    return config.forfeitLossPoints;
+  if (result.defaultLoserEntryId === loserEntryId && config.defaultLossPoints !== undefined)
+    return config.defaultLossPoints;
+  return config.lossPoints;
 }
 
 function safeAdd(left: number, right: number, label: string): number {
@@ -707,12 +786,12 @@ function addResultToRows(
     home.won += 1;
     away.lost += 1;
     home.tablePoints += config.winPoints;
-    away.tablePoints += config.lossPoints;
+    away.tablePoints += losingPoints(result, away.entryId, config);
   } else if (outcome === "away") {
     away.won += 1;
     home.lost += 1;
     away.tablePoints += config.winPoints;
-    home.tablePoints += config.lossPoints;
+    home.tablePoints += losingPoints(result, home.entryId, config);
   } else {
     home.drawn += 1;
     away.drawn += 1;
@@ -795,7 +874,7 @@ function headToHeadValue(
     const won = (isHome && outcome === "home") || (isAway && outcome === "away");
     const drawn = outcome === "draw";
     if (config.headToHeadMetric === "match_wins") value += won ? 1 : 0;
-    else value += won ? config.winPoints : drawn ? config.drawPoints : config.lossPoints;
+    else value += won ? config.winPoints : drawn ? config.drawPoints : losingPoints(result, row.entryId, config);
   }
   return { kind: "integer", value };
 }
@@ -824,6 +903,9 @@ function metricValue(
       return { kind: "rational", value: rational(row.scoreFor, row.scoreAgainst) };
     case "head_to_head":
       return headToHeadValue(row, scope, results, config);
+    case "head_to_head_two_way":
+      // BWF: the result between the two tied entries decides only a two-way tie; larger ties skip it.
+      return scope.length === 2 ? headToHeadValue(row, scope, results, config) : { kind: "integer", value: 0 };
     case "discipline":
       return { kind: "integer", value: row.disciplinePoints };
     case "seed":
@@ -849,9 +931,11 @@ function refineTiedGroups(
         value: displayRankedValue(value),
         comparedWithinEntryIds: scopeIds,
         summary:
-          criterion === "head_to_head"
+          criterion === "head_to_head" || (criterion === "head_to_head_two_way" && group.length === 2)
             ? `${config.headToHeadMetric.replaceAll("_", " ")} from matches only among the tied entries`
-            : `${criterion.replaceAll("_", " ")}: ${String(displayRankedValue(value))}`,
+            : criterion === "head_to_head_two_way"
+              ? "head to head applies only to a two-way tie; skipped"
+              : `${criterion.replaceAll("_", " ")}: ${String(displayRankedValue(value))}`,
       });
       const bucket = buckets.get(valueKey(value));
       if (bucket) bucket.rows.push(row);
@@ -909,16 +993,24 @@ export function calculateStandings(
     validateStandingsResult(result, ids, config);
     if (resultIds.has(result.matchId)) throw new Error(`Multiple active results supplied for ${result.matchId}`);
     resultIds.add(result.matchId);
+  }
+  // BWF GCR 16.2.5: an entry that could not complete its matches has all its results deleted, for everyone.
+  const deletedIds = config.incompleteEntryResults === "delete_all" ? incompleteEntryIds(results) : new Set<string>();
+  const countedResults =
+    deletedIds.size === 0
+      ? results
+      : results.filter((result) => !deletedIds.has(result.homeEntryId) && !deletedIds.has(result.awayEntryId));
+  for (const result of countedResults) {
     const home = rows.get(result.homeEntryId);
     const away = rows.get(result.awayEntryId);
     if (!home || !away) throw new Error(`Result ${result.matchId} references an unknown entry`);
     addResultToRows(home, away, result, config);
   }
 
-  let groups: EngineRow[][] = [[...rows.values()]];
+  let groups: EngineRow[][] = [[...rows.values()].filter((row) => !deletedIds.has(row.entryId))];
   const resolvedBy = new Map<string, ConfigurableStandingsRow["resolvedBy"]>();
   for (const criterion of config.criteria) {
-    groups = refineTiedGroups(groups, criterion, results, config, resolvedBy);
+    groups = refineTiedGroups(groups, criterion, countedResults, config, resolvedBy);
   }
   const sportingTies = new Set(
     groups.filter((group) => group.length > 1).flatMap((group) => group.map((row) => row.entryId)),
@@ -986,6 +1078,44 @@ export function calculateStandings(
       displayOrder += 1;
     });
     nextRank += group.length;
+  }
+  const deletedRows = [...rows.values()]
+    .filter((row) => deletedIds.has(row.entryId))
+    .sort((left, right) => left.seed - right.seed || left.entryId.localeCompare(right.entryId));
+  for (const row of deletedRows) {
+    output.push({
+      rank: nextRank,
+      displayOrder,
+      entryId: row.entryId,
+      entryName: row.entryName,
+      seed: row.seed,
+      status: "withdrawn",
+      eligibleForAdvancement: false,
+      played: 0,
+      won: 0,
+      drawn: 0,
+      lost: 0,
+      tablePoints: 0,
+      scoreFor: 0,
+      scoreAgainst: 0,
+      scoreDifference: 0,
+      segmentsWon: 0,
+      segmentsLost: 0,
+      disciplinePoints: 0,
+      sportingTie: false,
+      resolvedBy: "entry_id",
+      explanations: [
+        {
+          criterion: "terminal_fallback",
+          value: "results_deleted",
+          comparedWithinEntryIds: [row.entryId],
+          summary: "Did not complete all matches; all of this entry's results were deleted",
+        },
+      ],
+      resultsDeleted: true,
+    });
+    displayOrder += 1;
+    nextRank += 1;
   }
   return output;
 }

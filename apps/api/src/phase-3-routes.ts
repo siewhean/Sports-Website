@@ -394,6 +394,31 @@ const FormatGraphRequest = Type.Object(
 );
 type FormatGraphRequest = Static<typeof FormatGraphRequest>;
 
+const SettingsHistoryResponse = Type.Object(
+  {
+    items: Type.Array(
+      Type.Object(
+        {
+          id: Type.String(),
+          action: Type.Union([Type.Literal("sport_settings.updated"), Type.Literal("sport_settings.copied")]),
+          occurred_at: Type.String({ format: "date-time" }),
+          actor_name: Type.Union([Type.String(), Type.Null()]),
+          division_id: Type.Union([Type.String(), Type.Null()]),
+          revision: Type.Union([Type.Integer(), Type.Null()]),
+          changes: Type.Array(
+            Type.Object(
+              { setting: Type.String(), before: Type.Unknown(), after: Type.Unknown() },
+              { additionalProperties: false },
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export async function registerPhase3Routes(
   app: FastifyInstance,
   options: {
@@ -418,6 +443,24 @@ export async function registerPhase3Routes(
       throw new ApiError(403, ErrorCode.CSRF_INVALID, "CSRF validation failed");
     }
     return { accountId: session.account.id };
+  };
+  /**
+   * Rules (sport-settings) writes, owner decision D23: only the competition's owners and organisers change rules.
+   * Viewers and officials are refused by the runtime; a request without an organiser session (anonymous, or a
+   * captain or scorer magic link) is refused with 403 as well, never 401.
+   */
+  const rulesActor = async (request: FastifyRequest): Promise<Phase3Actor> => {
+    try {
+      return await actor(request);
+    } catch (error) {
+      if (error instanceof ApiError && error.statusCode === 401)
+        throw new ApiError(
+          403,
+          ErrorCode.COMPETITION_ACCESS_DENIED,
+          "Only the competition's owners and organisers can change its rules",
+        );
+      throw error;
+    }
   };
 
   app.get(
@@ -1289,11 +1332,27 @@ export async function registerPhase3Routes(
     },
     async (request) =>
       options.runtime.updateSettings(
-        await actor(request),
+        await rulesActor(request),
         request.params.competitionId,
         { packVersion: request.body.pack_version, revision: request.body.revision, override: request.body.override },
         request.id,
       ),
+  );
+
+  app.get<{ Params: { competitionId: string } }>(
+    "/api/v1/competitions/:competitionId/settings/history",
+    {
+      schema: {
+        description: "Rules changes: every sport-settings save for the competition and its divisions, newest first.",
+        security: [{ sessionCookie: [] }],
+        params: Type.Object({ competitionId: Id }),
+        response: { 200: SettingsHistoryResponse, 401: ErrorResponse, 403: ErrorResponse },
+        tags: ["phase3-settings"],
+      },
+    },
+    async (request) => ({
+      items: await options.runtime.settingsHistory(await readActor(request), request.params.competitionId),
+    }),
   );
 
   app.get<{ Params: { competitionId: string; divisionId: string } }>(
@@ -1330,7 +1389,7 @@ export async function registerPhase3Routes(
     },
     async (request) =>
       options.runtime.updateSettings(
-        await actor(request),
+        await rulesActor(request),
         request.params.competitionId,
         {
           packVersion: request.body.pack_version,
@@ -1353,7 +1412,7 @@ export async function registerPhase3Routes(
       },
     },
     async (request) =>
-      options.runtime.copyPreviousSettings(await actor(request), request.params.competitionId, request.id),
+      options.runtime.copyPreviousSettings(await rulesActor(request), request.params.competitionId, request.id),
   );
 
   app.get<{ Params: { sportCode: "canoe_polo" | "badminton" | "table_tennis" | "volleyball" | "basketball" } }>(

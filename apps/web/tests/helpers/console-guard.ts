@@ -135,6 +135,24 @@ export function isExpectedTeardownIdentityCancellation(input: {
   }
 }
 
+// The notification bell polls /api/notifications on every organiser page, so a
+// navigation can cancel its GET mid-flight. Only that same-origin GET is accepted.
+export function isExpectedTeardownNotificationsCancellation(input: {
+  failure: string;
+  method: string;
+  pageUrl: string;
+  requestUrl: string;
+}): boolean {
+  if (!standardCancellationFailures.includes(input.failure) || input.method !== "GET") return false;
+  try {
+    const pageUrl = new URL(input.pageUrl);
+    const requestUrl = new URL(input.requestUrl);
+    return pageUrl.origin === requestUrl.origin && requestUrl.pathname === "/api/notifications" && !requestUrl.search;
+  } catch {
+    return false;
+  }
+}
+
 export function isExpectedTeardownIdentityPageError(message: string): boolean {
   return message.includes("/api/identity/current") && message.endsWith("due to access control checks.");
 }
@@ -249,6 +267,15 @@ export function installConsoleGuard(page: Page) {
     if (isExpectedTeardownServiceWorkerCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
     if (isExpectedTeardownMetadataIconCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
     if (isExpectedTeardownIdentityCancellation({ failure, pageUrl: page.url(), requestUrl: url })) return;
+    if (
+      isExpectedTeardownNotificationsCancellation({
+        failure,
+        method: request.method(),
+        pageUrl: page.url(),
+        requestUrl: url,
+      })
+    )
+      return;
     if (
       isExpectedTeardownStaticAssetCancellation({
         failure,

@@ -2230,24 +2230,158 @@ export const VOLLEYBALL_FEDERATION_SPORT_PACK = definePack({
   },
 });
 
+/*
+ * Standings for the federation packs (redesign Phase 4). Basketball (FIBA) and table tennis (ITTF) rank groups by
+ * classification points, 2 for a win, 1 for a loss and 0 for a forfeit (owner decision D29), with the result between
+ * the tied entries first. Badminton (BWF) uses that result only for a two-way tie. These standings rules are not yet
+ * cited in `federation-defaults.ts`; they are secondary-source values awaiting checkpoint F-1 like the rest of those
+ * sports, so the Rules page shows them without a federation citation until the table cites them.
+ */
+const classificationPointsSchema = {
+  winPoints: integer("Points for a win", 0, 20),
+  lossPoints: integer("Points for a loss", 0, 20),
+  forfeitLossPoints: integer("Points for a forfeit", 0, 20),
+} as const;
+const twoOneZero = { winPoints: 2, lossPoints: 1, forfeitLossPoints: 0 } as const;
+
+const basketballFederationOrder = ["points", "head_to_head", "point_difference", "points_for"] as const;
+/*
+ * FIBA default (OBR Art. 21), separate from a forfeit (Art. 20): a team with fewer than two players on court loses
+ * by default. The score stands if the other team leads, otherwise it is 2-0; the defaulting team still gets 1
+ * classification point. The scorer records it with the `default` event, naming the team awarded the game.
+ */
 export const BASKETBALL_FEDERATION_SPORT_PACK = definePack({
   ...BASKETBALL_SPORT_PACK,
   version: FEDERATION_SPORT_PACK_VERSION,
+  eventTypes: [
+    ...BASKETBALL_SPORT_PACK.eventTypes.filter((definition) => !["reversal", "finalisation"].includes(definition.id)),
+    event("default", "Default (fewer than 2 players)", 0, "none", true),
+    ...sharedFinalEvents,
+  ],
+  validationRules: [
+    ...BASKETBALL_SPORT_PACK.validationRules,
+    {
+      id: "default_score_orientation",
+      description: "The default winner score must exceed the loser score.",
+      severity: "error",
+      settingsConstraint: {
+        kind: "greater_than",
+        greaterField: "defaultWinnerScore",
+        lesserField: "defaultLoserScore",
+      },
+    },
+  ],
+  standings: {
+    ...BASKETBALL_SPORT_PACK.standings,
+    points: { win: 2, draw: 1, loss: 1 }, // No draws in these sports; the validator needs win ≥ draw ≥ loss.
+    defaultOrder: basketballFederationOrder,
+    availableCriteria: [
+      criterion("points", "Classification points"),
+      ...BASKETBALL_SPORT_PACK.standings.availableCriteria,
+    ],
+  },
+  settingsSchema: {
+    ...BASKETBALL_SPORT_PACK.settingsSchema,
+    ...classificationPointsSchema,
+    defaultLossPoints: integer("Points for a default", 0, 20),
+    defaultWinnerScore: integer("Default winner score", 0, 300),
+    defaultLoserScore: integer("Default loser score", 0, 300),
+    standingsOrder: ordered("Standings order", [
+      "points",
+      "wins",
+      "head_to_head",
+      "point_difference",
+      "points_for",
+      "seed",
+    ]),
+  },
+  recommendedSettings: {
+    ...BASKETBALL_SPORT_PACK.recommendedSettings,
+    ...twoOneZero,
+    defaultLossPoints: 1,
+    defaultWinnerScore: 2,
+    defaultLoserScore: 0,
+    standingsOrder: basketballFederationOrder,
+  },
 });
 
+const tableTennisFederationOrder = ["points", "head_to_head", "game_ratio", "point_ratio"] as const;
 export const TABLE_TENNIS_FEDERATION_SPORT_PACK = definePack({
   ...TABLE_TENNIS_SPORT_PACK,
   version: FEDERATION_SPORT_PACK_VERSION,
+  standings: {
+    ...TABLE_TENNIS_SPORT_PACK.standings,
+    points: { win: 2, draw: 1, loss: 1 }, // No draws in these sports; the validator needs win ≥ draw ≥ loss.
+    defaultOrder: tableTennisFederationOrder,
+    availableCriteria: [
+      criterion("points", "Match points"),
+      ...TABLE_TENNIS_SPORT_PACK.standings.availableCriteria,
+      criterion("game_ratio", "Game ratio", "higher", "infinity_when_numerator_positive"),
+      criterion("point_ratio", "Point ratio", "higher", "infinity_when_numerator_positive"),
+    ],
+  },
+  settingsSchema: {
+    ...TABLE_TENNIS_SPORT_PACK.settingsSchema,
+    ...classificationPointsSchema,
+    // ITTF expedite system (Laws 2.15): recorded for officials only; MATCHDAY runs no game clock for it.
+    expediteAfterMinutes: integer("Expedite after (minutes of play in a game)", 1, 60),
+    expediteNotAfterPoints: integer("No expedite once this many points are scored in a game", 1, 60),
+    expediteReturns: integer("Expedite: receiver's returns that win the rally", 1, 50),
+    standingsOrder: ordered("Standings order", [
+      "points",
+      "match_wins",
+      "head_to_head",
+      "game_ratio",
+      "point_ratio",
+      "game_difference",
+      "point_difference",
+      "seed",
+    ]),
+  },
+  recommendedSettings: {
+    ...TABLE_TENNIS_SPORT_PACK.recommendedSettings,
+    ...twoOneZero,
+    expediteAfterMinutes: 10,
+    expediteNotAfterPoints: 18,
+    expediteReturns: 13,
+    standingsOrder: tableTennisFederationOrder,
+  },
 });
+
+const badmintonFederationOrder = ["match_wins", "head_to_head_two_way", "game_difference", "point_difference"] as const;
+const badmintonFederationStandings = {
+  ...BADMINTON_SPORT_PACK.standings,
+  defaultOrder: badmintonFederationOrder,
+  availableCriteria: [
+    ...BADMINTON_SPORT_PACK.standings.availableCriteria,
+    criterion("head_to_head_two_way", "Head-to-head (two-way tie)", "resolution"),
+  ],
+} as const;
+const badmintonFederationSchema = {
+  ...BADMINTON_SPORT_PACK.settingsSchema,
+  standingsOrder: ordered("Standings order", [
+    "match_wins",
+    "head_to_head_two_way",
+    "game_difference",
+    "point_difference",
+    "head_to_head",
+    "seed",
+  ]),
+} as const;
 
 export const BADMINTON_FEDERATION_SPORT_PACK = definePack({
   ...BADMINTON_SPORT_PACK,
   version: FEDERATION_SPORT_PACK_VERSION,
+  standings: badmintonFederationStandings,
+  settingsSchema: badmintonFederationSchema,
+  recommendedSettings: { ...BADMINTON_SPORT_PACK.recommendedSettings, standingsOrder: badmintonFederationOrder },
 });
 
 export const BADMINTON_3X15_SPORT_PACK = definePack({
   ...BADMINTON_SPORT_PACK,
   version: BADMINTON_3X15_SPORT_PACK_VERSION,
+  standings: badmintonFederationStandings,
+  settingsSchema: badmintonFederationSchema,
   matchStructure: { ...BADMINTON_SPORT_PACK.matchStructure, targetPoints: [15, 15, 15], winBy: 2, pointCap: 21 },
   forfeit: { ...BADMINTON_SPORT_PACK.forfeit, winnerScore: 15, loserScore: 0 },
   recommendedSettings: {
@@ -2256,6 +2390,7 @@ export const BADMINTON_3X15_SPORT_PACK = definePack({
     pointCap: 21,
     forfeitWinnerScore: 15,
     forfeitLoserScore: 0,
+    standingsOrder: badmintonFederationOrder,
   },
 });
 
@@ -2282,4 +2417,30 @@ export function federationSportPackFor(sportId: SportId, startDate: string): Spo
   );
   if (!pack) throw new Error(`No federation pack for ${sportId}`);
   return pack;
+}
+
+/**
+ * Every pack version a competition may be on: the draft packs (`0.1.0-draft.1`) and the federation packs
+ * (`1.0.0`, badminton `1.1.0`). The scoring runtime and pack lookups accept any version listed here for the
+ * competition's sport; a competition keeps the version it was created with.
+ */
+export const SPORT_PACK_REGISTRY: SportPackRegistry = createSportPackRegistry([
+  ...Object.values(SPORT_PACKS),
+  ...FEDERATION_SPORT_PACKS,
+]);
+
+/** True when `version` is a registered pack version for the sport. */
+export function isRegisteredSportPackVersion(sportId: SportId, version: string): boolean {
+  return SPORT_PACK_REGISTRY.has(sportId, version);
+}
+
+/**
+ * The registered pack for a sport and version. Without a version it is the sport's draft pack, which is what
+ * every caller used before multi-version support, so existing competitions behave exactly as before.
+ */
+export function registeredSportPack(sportId: SportId, version?: string | null): SportPack {
+  const draft = SPORT_PACKS[sportId];
+  if (!draft) throw new Error(`Unknown sport ${String(sportId)}`);
+  if (version === undefined || version === null || version === draft.version) return draft;
+  return resolveSportPack(SPORT_PACK_REGISTRY, sportId, version);
 }
