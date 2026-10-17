@@ -1,9 +1,7 @@
 .page {
-  --ink: #171918;
-  --muted: #646863;
-  --line: #d3d4ce;
-  --paper: #f7f6f0;
-  --signal: #b7dc22;
+  --muted: var(--ink-muted);
+  --line: var(--hairline);
+  --paper: var(--canvas);
   width: min(100%, 52rem);
   min-height: 100dvh;
   margin: 0 auto;
@@ -31,7 +29,7 @@
 
 .topbar > a {
   display: inline-flex;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   align-items: center;
   gap: 0.5rem;
   color: var(--ink);
@@ -90,10 +88,10 @@
 
 .heading > span {
   display: inline-flex;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   align-items: center;
   gap: 0.45rem;
-  color: #aa4a06;
+  color: var(--warning-ink);
   font-size: 0.78rem;
 }
 
@@ -105,7 +103,7 @@
 .slotSummary {
   border: 1px solid var(--line);
   border-radius: 0.55rem;
-  background: #fff;
+  background: var(--surface);
   padding: 0 1rem;
 }
 
@@ -136,7 +134,7 @@
 }
 
 .slotSummary > div:last-child strong {
-  color: #526b00;
+  color: var(--success-ink);
 }
 
 .boundary,
@@ -147,9 +145,9 @@
   align-items: flex-start;
   margin-top: 1.2rem;
   padding: 0.9rem 1rem;
-  border: 1px solid #d49b5f;
+  border: 1px solid var(--warning-line);
   border-radius: 0.45rem;
-  color: #914507;
+  color: var(--warning-ink);
   font-size: 0.8rem;
   line-height: 1.4;
 }
@@ -157,7 +155,7 @@
 .boundary,
 .error {
   border-color: #bc8d82;
-  color: #842f26;
+  color: var(--danger-ink);
 }
 
 .boundary svg,
@@ -209,7 +207,7 @@
   place-items: center;
   border-radius: 50%;
   background: #89ad00;
-  color: #171918;
+  color: var(--ink);
   font:
     700 1rem/1 var(--font-geist-mono),
     monospace;
@@ -237,7 +235,7 @@
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 0.55rem;
-  background: #fff;
+  background: var(--surface);
 }
 
 .dayChoices label,
@@ -267,7 +265,7 @@
   height: 1.35rem;
   flex: 0 0 1.35rem;
   margin: 0;
-  accent-color: #789700;
+  accent-color: var(--field-accent);
 }
 
 .dayChoices > label > svg {
@@ -307,8 +305,8 @@
 
 .choices label[data-disabled="true"] {
   cursor: not-allowed;
-  color: #777974;
-  background: #f3f2ed;
+  color: var(--ink-muted);
+  background: var(--surface-subtle);
 }
 
 .slotDisclosure {
@@ -341,7 +339,7 @@
 
 .consequences p {
   margin: 0;
-  color: #464944;
+  color: var(--ink-muted);
   font-size: 0.79rem;
   line-height: 1.45;
 }
@@ -359,9 +357,9 @@
 .consequences .valid {
   border: 1px solid #a8bf42;
   border-radius: 0.45rem;
-  background: #f4f7e7;
+  background: var(--success-surface);
   padding-inline: 0.8rem;
-  color: #587000;
+  color: var(--success-ink);
 }
 
 .validating {
@@ -377,7 +375,7 @@
   width: 2.5rem;
   height: 0.35rem;
   border-radius: 1rem;
-  background: linear-gradient(90deg, #cbd2ad 20%, #89ad00 50%, #cbd2ad 80%);
+  background: linear-gradient(90deg, var(--surface-subtle) 20%, #89ad00 50%, var(--surface-subtle) 80%);
   background-size: 200% 100%;
   animation: move-check 1.1s ease-in-out infinite;
 }
@@ -395,7 +393,7 @@
   margin: 0 auto;
   padding: 0.8rem clamp(1rem, 4vw, 2rem) max(0.8rem, env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
-  background: rgb(247 246 240 / 96%);
+  background: color-mix(in srgb, var(--canvas) 96%, transparent);
   backdrop-filter: blur(10px);
 }
 
@@ -419,6 +417,7 @@
 .actions button {
   border-color: #759400;
   background: var(--signal);
+  color: var(--signal-ink);
 }
 
 .actions button:disabled {

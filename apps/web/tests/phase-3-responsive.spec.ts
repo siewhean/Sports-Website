@@ -54,7 +54,11 @@ test("results tables retain a contained scroll region on phone", async ({ page }
   );
   expect(overflow).toBe(false);
   await expect(page.getByRole("region", { name: "group a standings table" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Recalculate from final results" })).toHaveCSS("min-height", "44px");
+  const recalculate = page.getByRole("button", { name: "Recalculate from final results" });
+  await expect(recalculate).toBeVisible();
+  const minHeight = await recalculate.evaluate((element) => Number.parseFloat(getComputedStyle(element).minHeight));
+  expect(minHeight).toBeGreaterThanOrEqual(44);
+  expect((await recalculate.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
 });
 
 test("capacity controls preserve touch targets while the hydrated source stays revision-safe", async ({ page }) => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, type KeyboardEvent } from "react";
+import { NumberField } from "@matchday/ui/react";
 import { Info, Plus, Trash, X } from "@phosphor-icons/react";
 import type { Phase4FormatGraphStage } from "@matchday/contracts";
 import {
@@ -114,19 +115,13 @@ export function ManualBuilder({
               </label>
               <label>
                 <span>{t("prototype.cb04725bcb62")}</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={64}
+                <NumberField
                   value={stage.outputRanks}
                   disabled={!editable}
-                  onChange={(event) =>
-                    dispatch({
-                      type: "update_stage",
-                      stageId: stage.id,
-                      patch: { outputRanks: Number(event.target.value) },
-                    })
-                  }
+                  onValueChange={(next) => {
+                    if (next !== null)
+                      dispatch({ type: "update_stage", stageId: stage.id, patch: { outputRanks: next } });
+                  }}
                 />
               </label>
               <label>

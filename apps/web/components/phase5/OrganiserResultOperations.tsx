@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { NumberField } from "@matchday/ui/react";
 import { ArrowClockwise, ClockCounterClockwise, ShieldWarning, X } from "@phosphor-icons/react";
 import type { MatchView } from "@/lib/phase2";
 import {
@@ -917,16 +918,12 @@ export function OrganiserResultOperations({
                   ) : null}
                   <label>
                     <span>{copy.replacementPoints}</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={10}
-                      step={1}
+                    <NumberField
                       value={replacementPointCount}
-                      onChange={(event) => {
+                      onValueChange={(count) => {
+                        if (count === null) return;
                         invalidatePendingResultCommand();
-                        const count = Number(event.target.value);
-                        setReplacementPointCount(Number.isInteger(count) ? Math.min(10, Math.max(1, count)) : 1);
+                        setReplacementPointCount(Math.min(10, Math.max(1, count)));
                       }}
                     />
                   </label>

@@ -59,12 +59,12 @@
   padding: 4px;
   border: 1px solid var(--p3-line);
   border-radius: var(--radius-md);
-  background: #ebe8df;
+  background: var(--surface-subtle);
 }
 
 .p3-settings-context nav a {
   display: grid;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0 16px;
   place-items: center;
   border-radius: 7px;
@@ -142,7 +142,7 @@
   min-height: 28px;
   padding: 2px 9px;
   border-radius: 999px;
-  background: #e5e4de;
+  background: var(--surface-subtle);
   font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 700;
@@ -154,11 +154,11 @@
 }
 
 .p3-mode--recommended {
-  background: color-mix(in srgb, var(--signal) 30%, white);
+  background: color-mix(in srgb, var(--signal) 30%, var(--surface));
 }
 
 .p3-mode--customised {
-  background: #e5e4de;
+  background: var(--surface-subtle);
 }
 
 .p3-text-action {
@@ -166,7 +166,7 @@
   align-items: center;
   align-self: start;
   gap: 8px;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0 6px;
   border: 0;
   border-bottom: 1px solid currentColor;
@@ -212,7 +212,7 @@
   line-height: 1.45;
 }
 
-.p3-field input[type="number"],
+.p3-field input[inputmode="numeric"],
 .p3-field select,
 .p3-decision-rail select {
   width: 100%;
@@ -220,7 +220,7 @@
   height: 48px;
   min-height: var(--touch-target-min);
   padding: 0 12px;
-  border: 1px solid #aaa99f;
+  border: 1px solid var(--field-border);
   border-radius: 7px;
   background: var(--surface);
   color: var(--ink);
@@ -235,8 +235,8 @@
 .p3-toggle-target {
   display: grid;
   justify-self: end;
-  width: 44px;
-  height: 44px;
+  width: var(--touch-target-min);
+  height: var(--touch-target-min);
   border: 1px solid transparent;
   border-radius: 7px;
   place-items: center;
@@ -259,7 +259,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--danger);
+  color: var(--danger-ink);
   font-size: 0.72rem;
 }
 
@@ -307,8 +307,8 @@
 
 .p3-field--ordered button {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: var(--touch-target-min);
+  height: var(--touch-target-min);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -335,7 +335,7 @@
 
 .p3-command-error {
   flex-basis: 100%;
-  color: var(--danger);
+  color: var(--danger-ink);
   font-size: 0.75rem;
 }
 
@@ -439,7 +439,7 @@
   padding: 28px;
   border: 1px solid #c59d37;
   border-left: 5px solid var(--warning);
-  background: #fffaf0;
+  background: var(--warning-surface);
 }
 
 .p3-state--compact {
@@ -489,7 +489,7 @@
 .p3-skeleton-context > span {
   display: block;
   border-radius: 5px;
-  background: #e4e1d8;
+  background: var(--field-bg);
   animation: p3-skeleton-pulse 1.4s ease-in-out infinite alternate;
 }
 

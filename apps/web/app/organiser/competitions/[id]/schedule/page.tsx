@@ -72,6 +72,9 @@ export default async function SchedulePage({
           officials={toScheduleOfficialsProjection(officialWorkspace)}
           initialSelectedMatchId={query.match}
           initialNotice={query.notice === phase4ScheduleMachine.moveNotice ? phase4ScheduleMachine.moveNotice : null}
+          placeholderNames={(result.competition.divisions ?? []).flatMap((division) =>
+            (division.entries ?? []).flatMap((entry) => (entry.entryType === "placeholder" ? [entry.name] : [])),
+          )}
         />
       }
     />

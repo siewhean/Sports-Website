@@ -49,6 +49,10 @@ function runtime() {
     listEntries: vi.fn(async () => []),
     mutateEntry: vi.fn(async () => ({ id: randomUUID(), status: "active" })),
     updateEntry: vi.fn(async () => ({ revision: 2 })),
+    planEntries: vi.fn(async (_actor, _competitionId, divisionId: string) => ({
+      division_id: divisionId,
+      entries: [],
+    })),
     deleteEntry: vi.fn(async () => ({ deleted: true })),
     importEntries: vi.fn(async () => ({ ok: true, import_id: randomUUID(), inserted: 1, entries: [] })),
     rollbackEntryImport: vi.fn(async () => ({ rolled_back: true, idempotent_replay: false, removed: 1 })),
@@ -662,6 +666,99 @@ describe("Phase 3 authenticated route boundary", () => {
       importId,
       expect.any(String),
     );
+  });
+
+  it("forwards planned team counts, placeholder planning, and placeholder renames", async () => {
+    const phase3Runtime = runtime();
+    const app = await buildApp({
+      config: testConfig(),
+      probes: healthyProbes,
+      identityRuntime: identityRuntime(),
+      phase3Runtime,
+    });
+    apps.push(app);
+    const headers = { cookie: "matchday_session=session", origin: "http://127.0.0.1:3000", "x-csrf-token": "csrf-ok" };
+    const competitionId = randomUUID();
+    const divisionId = randomUUID();
+    const entryId = randomUUID();
+
+    const planned = await app.inject({
+      method: "POST",
+      url: `/api/v1/competitions/${competitionId}/divisions`,
+      headers,
+      payload: { name: "Women", entry_limit: 8, planned_entry_count: 6, idempotency_key: randomUUID() },
+    });
+    expect(planned.statusCode).toBe(201);
+    expect(phase3Runtime.createDivision).toHaveBeenCalledWith(
+      expect.anything(),
+      competitionId,
+      { name: "Women", entryLimit: 8, plannedEntryCount: 6 },
+      expect.any(String),
+      expect.any(String),
+    );
+    for (const planned_entry_count of [0, 49, 2.5, "six"]) {
+      const rejected = await app.inject({
+        method: "POST",
+        url: `/api/v1/competitions/${competitionId}/divisions`,
+        headers,
+        payload: { name: "Women", entry_limit: 8, planned_entry_count, idempotency_key: randomUUID() },
+      });
+      expect(rejected.statusCode).toBe(400);
+    }
+
+    const plan = await app.inject({
+      method: "POST",
+      url: `/api/v1/competitions/${competitionId}/divisions/${divisionId}/entries/plan`,
+      headers,
+      payload: { count: 4, idempotency_key: randomUUID() },
+    });
+    expect(plan.statusCode).toBe(201);
+    expect(plan.json()).toEqual({ division_id: divisionId, entries: [] });
+    expect(phase3Runtime.planEntries).toHaveBeenCalledWith(
+      expect.anything(),
+      competitionId,
+      divisionId,
+      { count: 4 },
+      expect.any(String),
+      expect.any(String),
+    );
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/competitions/${competitionId}/divisions/${divisionId}/entries/plan`,
+          headers: { ...headers, "x-csrf-token": "wrong" },
+          payload: { count: 4, idempotency_key: randomUUID() },
+        })
+      ).statusCode,
+    ).toBe(403);
+
+    const rename = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/competitions/${competitionId}/divisions/${divisionId}/entries/${entryId}`,
+      headers,
+      payload: { revision: 1, name: "Kayak Club", entry_type: "team", idempotency_key: "rename-0001" },
+    });
+    expect(rename.statusCode).toBe(200);
+    expect(phase3Runtime.updateEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      competitionId,
+      divisionId,
+      entryId,
+      { revision: 1, name: "Kayak Club", entryType: "team", idempotency_key: "rename-0001" },
+      expect.any(String),
+      "rename-0001",
+    );
+    expect(
+      (
+        await app.inject({
+          method: "PATCH",
+          url: `/api/v1/competitions/${competitionId}/divisions/${divisionId}/entries/${entryId}`,
+          headers,
+          payload: { revision: 1, entry_type: "squad", idempotency_key: randomUUID() },
+        })
+      ).statusCode,
+    ).toBe(400);
   });
 
   it("rejects malformed format graph bodies before invoking persistence", async () => {

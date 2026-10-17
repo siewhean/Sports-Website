@@ -64,7 +64,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 0 18px;
   border-radius: 999px;
   font-size: 0.84rem;
@@ -96,7 +96,7 @@
 }
 
 .status[data-error="true"] {
-  color: var(--danger, #8b1e1e);
+  color: var(--danger, var(--danger-ink));
 }
 
 .empty {

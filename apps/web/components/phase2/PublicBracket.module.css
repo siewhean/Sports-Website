@@ -75,7 +75,7 @@
 .card {
   display: grid;
   gap: 6px;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   padding: 12px 14px;
   border: 1px solid var(--hairline);
   border-radius: 12px;

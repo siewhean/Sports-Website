@@ -1,7 +1,7 @@
 .page {
   min-height: 100dvh;
-  background: var(--canvas, #f7f6f0);
-  color: var(--ink, #171918);
+  background: var(--canvas, var(--surface-subtle));
+  color: var(--ink, var(--ink));
   padding: clamp(24px, 4vw, 64px) max(16px, env(safe-area-inset-right)) calc(32px + env(safe-area-inset-bottom));
 }
 .container {
@@ -33,7 +33,7 @@
 .hero p,
 .history p {
   max-width: 36rem;
-  color: var(--ink-muted, #646863);
+  color: var(--ink-muted, var(--ink-muted));
   font-size: clamp(1rem, 1.4vw, 1.2rem);
   line-height: 1.55;
 }
@@ -54,8 +54,8 @@
   height: 23px;
 }
 .formCard {
-  background: var(--surface, #fff);
-  border: 1px solid var(--hairline, #d3d4ce);
+  background: var(--surface, var(--surface));
+  border: 1px solid var(--hairline, var(--hairline));
   border-radius: 24px;
   padding: clamp(18px, 3vw, 40px);
   box-shadow: var(--shadow-soft, 0 24px 70px rgb(26 28 24 / 8%));
@@ -68,11 +68,11 @@
   gap: 12px;
   margin-bottom: 30px;
   padding-bottom: 17px;
-  border-bottom: 1px solid var(--hairline, #d3d4ce);
+  border-bottom: 1px solid var(--hairline, var(--hairline));
 }
 .formHead span {
   font: 600 0.76rem var(--font-mono, monospace);
-  color: var(--ink-muted, #646863);
+  color: var(--ink-muted, var(--ink-muted));
 }
 .formHead strong {
   font-size: 1.05rem;
@@ -95,11 +95,11 @@
   margin-top: 11px;
 }
 .sportChoice {
-  border: 1px solid var(--hairline, #d3d4ce);
+  border: 1px solid var(--hairline, var(--hairline));
   border-radius: 999px;
   padding: 11px 17px;
   min-height: var(--touch-target-min);
-  background: var(--surface, #fff);
+  background: var(--surface, var(--surface));
   color: inherit;
   font: inherit;
   font-weight: 600;
@@ -107,11 +107,11 @@
 }
 .sportChoice:hover,
 .sportChoice:focus-visible {
-  border-color: var(--ink, #171918);
+  border-color: var(--ink, var(--line-strong));
 }
 .sportChoice.selected {
   background: var(--ink, #171918);
-  border-color: var(--ink, #171918);
+  border-color: var(--ink, var(--line-strong));
   color: var(--surface, #fff);
 }
 .fieldsTwo {
@@ -130,10 +130,10 @@
   min-width: 0;
   width: 100%;
   height: 50px;
-  border: 1px solid var(--hairline, #d3d4ce);
+  border: 1px solid var(--hairline, var(--field-border));
   border-radius: var(--radius-md);
-  background: var(--surface, #fff);
-  color: var(--ink, #171918);
+  background: var(--surface, var(--field-bg));
+  color: var(--ink, var(--ink));
   padding: 0 14px;
   font: 500 1rem var(--font-sans, sans-serif);
 }
@@ -159,7 +159,7 @@
   border: 0;
   border-radius: var(--radius-md);
   background: var(--signal, #b7dc22);
-  color: var(--signal-ink, #12150b);
+  color: var(--signal-ink, var(--signal-ink));
   font: 750 1rem var(--font-sans, sans-serif);
   text-decoration: none;
   cursor: pointer;
@@ -184,13 +184,13 @@
 }
 .finePrint {
   margin: 24px 0 0;
-  color: var(--ink-muted, #646863);
+  color: var(--ink-muted, var(--ink-muted));
   font-size: 0.83rem;
   line-height: 1.5;
 }
 .notice {
   border-left: 4px solid var(--signal-strong, #97bc0d);
-  background: var(--surface-subtle, #efeee8);
+  background: var(--surface-subtle, var(--surface-subtle));
   padding: 13px 16px;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -199,7 +199,7 @@
   display: grid;
   grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
   gap: 32px;
-  border-top: 1px solid var(--hairline, #d3d4ce);
+  border-top: 1px solid var(--hairline, var(--hairline));
   margin-top: clamp(50px, 8vw, 100px);
   padding-top: 32px;
 }
@@ -218,9 +218,9 @@
   justify-content: space-between;
   gap: 12px;
   padding: 18px;
-  border: 1px solid var(--hairline, #d3d4ce);
+  border: 1px solid var(--hairline, var(--hairline));
   border-radius: 12px;
-  background: var(--surface, #fff);
+  background: var(--surface, var(--surface));
   color: inherit;
   text-decoration: none;
 }
@@ -279,7 +279,7 @@
   background: currentColor;
 }
 .finalBadge {
-  background: var(--surface-subtle, #efeee8);
+  background: var(--surface-subtle, var(--surface-subtle));
 }
 .scoreStage {
   overflow: hidden;
@@ -420,9 +420,9 @@ button.scoreSide.away:hover {
   min-width: 0;
   min-height: 56px;
   padding: 8px 12px;
-  border: 1px solid var(--hairline, #d3d4ce);
+  border: 1px solid var(--hairline, var(--hairline));
   border-radius: var(--radius-md);
-  background: var(--surface, #fff);
+  background: var(--surface, var(--surface));
   color: inherit;
   font: 650 0.9rem var(--font-sans, sans-serif);
   cursor: pointer;
@@ -441,29 +441,29 @@ button.scoreSide.away:hover {
   justify-content: space-between;
   gap: 15px;
   padding-top: 18px;
-  color: var(--ink-muted, #646863);
+  color: var(--ink-muted, var(--ink-muted));
   font-size: 0.85rem;
 }
 .boardFooter button {
   border: 0;
   background: none;
   padding: 10px 0;
-  color: var(--ink, #171918);
+  color: var(--ink, var(--ink));
   font: 650 0.88rem var(--font-sans, sans-serif);
   text-decoration: underline;
   cursor: pointer;
 }
 .viewerInfo {
   text-align: center;
-  color: var(--ink-muted, #646863);
+  color: var(--ink-muted, var(--ink-muted));
 }
 .loadingCard {
   display: grid;
   place-items: center;
   min-height: 45vh;
-  border: 1px solid var(--hairline, #d3d4ce);
+  border: 1px solid var(--hairline, var(--hairline));
   border-radius: 20px;
-  background: var(--surface, #fff);
+  background: var(--surface, var(--surface));
 }
 .modalBackdrop {
   position: fixed;
@@ -481,8 +481,8 @@ button.scoreSide.away:hover {
   overflow: auto;
   padding: 28px;
   border-radius: 20px;
-  background: var(--surface, #fff);
-  color: var(--ink, #171918);
+  background: var(--surface, var(--surface));
+  color: var(--ink, var(--ink));
 }
 .sharePanel h2 {
   font-size: 2rem;
@@ -491,13 +491,13 @@ button.scoreSide.away:hover {
 }
 .sharePanel p {
   line-height: 1.5;
-  color: var(--ink-muted, #646863);
+  color: var(--ink-muted, var(--ink-muted));
 }
 .closeButton {
   position: absolute;
   right: 18px;
   top: 18px;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   border: 0;
   background: none;
   font: 650 0.9rem var(--font-sans, sans-serif);
@@ -514,10 +514,10 @@ button.scoreSide.away:hover {
 .friendsList button {
   min-height: var(--touch-target-min);
   text-align: left;
-  border: 1px solid var(--hairline, #d3d4ce);
+  border: 1px solid var(--hairline, var(--hairline));
   border-radius: 8px;
   padding: 9px;
-  background: var(--surface, #fff);
+  background: var(--surface, var(--surface));
   cursor: pointer;
 }
 .page button:focus-visible,

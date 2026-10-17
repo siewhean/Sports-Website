@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { RefObject, ReactNode } from "react";
+import { useId, type RefObject, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -18,6 +18,7 @@ import {
 } from "@phosphor-icons/react";
 import type { Phase4SetupDocument, Phase4SetupStepId } from "@matchday/contracts";
 import { opaqueId, translate as t } from "@matchday/ui";
+import { InfoTip, NumberField, fieldControlId, withFieldControl, type FieldControl } from "@matchday/ui/react";
 import {
   assistedSetupSteps,
   phase4SetupCopy,
@@ -45,6 +46,8 @@ const stateCopy: Record<
 };
 
 const copy = {
+  moreAbout: opaqueId("More about"),
+  aboutStep: opaqueId("About this step"),
   sportReset: opaqueId(
     "Changing sport resets the pinned recommended settings and invalidates dependent capacity, format, and schedule evidence.",
   ),
@@ -272,10 +275,12 @@ export function AssistedSetupJourneyView({
             <p>
               {currentMilestone.label} / {currentStep.short}
             </p>
-            <h1 ref={headingRef} tabIndex={-1}>
-              {stepTitle(setup.current_step)}
-            </h1>
-            <span>{stepIntro(setup.current_step)}</span>
+            <div className={styles.titleRow}>
+              <h1 ref={headingRef} tabIndex={-1}>
+                {stepTitle(setup.current_step)}
+              </h1>
+              <InfoTip label={copy.aboutStep}>{stepIntro(setup.current_step)}</InfoTip>
+            </div>
           </div>
           <aside className={styles.contextHelp} aria-label={copy.currentTask}>
             <strong>{copy.currentTask}</strong>
@@ -457,7 +462,7 @@ function BasicsStep({
         </div>
       </section>
       <div className={styles.fieldGrid}>
-        <Field id="setup-name" label={t("prototype.f01e63d85488")} helper={t("prototype.0f7d370ba0b0")}>
+        <Field id="setup-name" wide label={t("prototype.f01e63d85488")} helper={t("prototype.0f7d370ba0b0")}>
           <input
             value={value.name}
             onChange={(event) => patch({ name: event.target.value })}
@@ -465,7 +470,7 @@ function BasicsStep({
             required
           />
         </Field>
-        <Field id="setup-sport" label={t("prototype.9a085dd854f0")} helper={copy.sportReset}>
+        <Field id="setup-sport" label={t("prototype.9a085dd854f0")} info={copy.sportReset}>
           <select
             value={value.sport_code}
             onChange={(event) => patch({ sport_code: event.target.value as BasicsDraft["sport_code"] })}
@@ -486,7 +491,7 @@ function BasicsStep({
             required
           />
         </Field>
-        <Field id="setup-address" label={t("prototype.56ef8f20955f")}>
+        <Field id="setup-address" wide label={t("prototype.56ef8f20955f")}>
           <input
             value={value.location.address}
             onChange={(event) => patch({ location: { ...value.location, address: event.target.value } })}
@@ -545,22 +550,20 @@ function BasicsStep({
           />
         </Field>
         <Field id="setup-entry-count" label={t("prototype.338ec01dd683")}>
-          <input
-            type="number"
-            min={1}
-            max={10000}
+          <NumberField
             value={value.entry_count}
-            onChange={(event) => patch({ entry_count: Number(event.target.value) })}
+            onValueChange={(next) => {
+              if (next !== null) patch({ entry_count: next });
+            }}
             disabled={disabled}
           />
         </Field>
         <Field id="setup-division-count" label={t("prototype.442a06547692")}>
-          <input
-            type="number"
-            min={1}
-            max={1000}
+          <NumberField
             value={value.division_count}
-            onChange={(event) => patch({ division_count: Number(event.target.value) })}
+            onValueChange={(next) => {
+              if (next !== null) patch({ division_count: next });
+            }}
             disabled={disabled}
           />
         </Field>
@@ -719,13 +722,12 @@ function PreferencesStep({
   return (
     <div className={styles.preferences}>
       <Field label={t("prototype.325eaefc3daf")} helper={t("prototype.10b678fb92e3")}>
-        <input
-          type="number"
-          min={1}
-          max={100}
+        <NumberField
           value={value.minimum_matches.per_entry}
           disabled={disabled}
-          onChange={(event) => onChange({ ...value, minimum_matches: { per_entry: Number(event.target.value) } })}
+          onValueChange={(next) => {
+            if (next !== null) onChange({ ...value, minimum_matches: { per_entry: next } });
+          }}
         />
       </Field>
       <fieldset>
@@ -1042,13 +1044,38 @@ function formatSchedulingStatus(status: "feasible" | "infeasible" | "not_checked
   return copy.scheduleNotChecked;
 }
 
-function Field({ id, label, helper, children }: { id?: string; label: string; helper?: string; children: ReactNode }) {
+/**
+ * Label, control and optional short helper. Longer secondary explanations go in
+ * `info`, which renders an InfoTip beside the label (outside the <label>, so it
+ * never becomes part of the control's accessible name).
+ */
+function Field({
+  id,
+  label,
+  helper,
+  info,
+  wide = false,
+  children,
+}: {
+  id?: string;
+  label: string;
+  helper?: string;
+  info?: string;
+  wide?: boolean;
+  children: FieldControl;
+}) {
+  const generated = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const controlId = fieldControlId(children, `${id ?? `field-${generated}`}-control`);
+  const helperId = helper ? `${controlId}-helper` : undefined;
   return (
-    <label id={id} className={styles.field}>
-      <span>{label}</span>
-      {children}
-      {helper ? <small>{helper}</small> : null}
-    </label>
+    <div id={id} className={wide ? `${styles.field} ${styles.fieldWide}` : styles.field}>
+      <span className={styles.fieldLabel}>
+        <label htmlFor={controlId}>{label}</label>
+        {info ? <InfoTip label={`${copy.moreAbout} ${label.toLowerCase()}`}>{info}</InfoTip> : null}
+      </span>
+      {withFieldControl(children, { id: controlId, describedBy: [helperId] })}
+      {helper ? <small id={helperId}>{helper}</small> : null}
+    </div>
   );
 }
 

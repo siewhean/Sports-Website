@@ -4,3 +4,4 @@ export * from "./legal.js";
 export * from "./tokens.js";
 export * from "./translate.js";
 export * from "./live-messages.js";
+export * from "./number-input.js";

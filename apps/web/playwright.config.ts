@@ -63,7 +63,7 @@ export default defineConfig({
     {
       name: "tablet-webkit",
       testMatch:
-        /phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts|responsive-pages-accessibility\.spec\.ts/,
+        /phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts|responsive-pages-accessibility\.spec\.ts|info-tip-accessibility\.spec\.ts/,
       use: {
         ...devices["iPad Pro 11"],
         baseURL: `https://127.0.0.1:${httpsProxyPort}`,
@@ -73,7 +73,7 @@ export default defineConfig({
     {
       name: "phone-webkit",
       testMatch:
-        /gate-c-c2-scoring\.spec\.ts|phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts|responsive-pages-accessibility\.spec\.ts/,
+        /gate-c-c2-scoring\.spec\.ts|phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts|responsive-pages-accessibility\.spec\.ts|info-tip-accessibility\.spec\.ts/,
       use: {
         ...devices["iPhone 13"],
         baseURL: `https://127.0.0.1:${httpsProxyPort}`,
@@ -83,7 +83,7 @@ export default defineConfig({
     {
       name: "phone-chromium",
       testMatch:
-        /gate-c-c2-scoring\.spec\.ts|phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts|responsive-pages-accessibility\.spec\.ts/,
+        /gate-c-c2-scoring\.spec\.ts|phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts|responsive-pages-accessibility\.spec\.ts|info-tip-accessibility\.spec\.ts/,
       use: { ...devices["Pixel 7"] },
     },
   ],

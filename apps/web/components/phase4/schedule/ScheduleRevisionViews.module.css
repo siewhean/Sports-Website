@@ -2,10 +2,8 @@
 .detail,
 .comparison,
 .empty {
-  --ink: #171918;
-  --muted: #646863;
-  --line: #d3d4ce;
-  --signal: #b7dc22;
+  --muted: var(--ink-muted);
+  --line: var(--hairline);
   color: var(--ink);
 }
 
@@ -45,7 +43,7 @@
 .detailActions a,
 .empty a {
   display: inline-flex;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   align-items: center;
   gap: 0.45rem;
   border: 1px solid var(--ink);
@@ -134,7 +132,7 @@
 
 .history li > a {
   display: inline-flex;
-  min-height: 44px;
+  min-height: var(--touch-target-min);
   align-items: center;
   color: var(--ink);
   font-size: 0.74rem;
@@ -482,7 +480,7 @@
   }
 
   .assignmentSide {
-    min-height: 44px;
+    min-height: var(--touch-target-min);
   }
 
   .empty {

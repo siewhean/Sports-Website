@@ -105,7 +105,14 @@ export type CompetitionView = {
     id: string;
     name: string;
     entryLimit?: number;
-    entries?: ReadonlyArray<{ id: string; name: string; seed: number | null; status: string }>;
+    entries?: ReadonlyArray<{
+      id: string;
+      name: string;
+      seed: number | null;
+      status: string;
+      entryType?: "team" | "individual" | "placeholder";
+      revision?: number;
+    }>;
   }>;
   teams: string[];
   areas: string[];
