@@ -14,6 +14,7 @@ import { Phase2Runtime } from "../../src/phase-2-runtime.js";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
 import { Phase3Runtime } from "../../src/phase-3-runtime.js";
 import { Phase4Runtime } from "../../src/phase-4-runtime.js";
+import { loadPreviousRevisionBaseline } from "../../src/phase-4-schedule-baseline.js";
 
 // Track R2.2: the delay tool must run through the same schedule validation as a manual move.
 const runInfrastructure = process.env.RUN_INFRA_TESTS === "1";
@@ -431,6 +432,65 @@ describeInfrastructure("schedule delay tool validation (Track R2.2)", () => {
     expect(OPENS_AT).toBeLessThan(pivot);
   });
 
+  it("uses the published baseline despite a newer unpublished delayed revision", async () => {
+    await phase4.publishScheduleRevision(
+      actor(),
+      accepted.id,
+      { idempotency_key: randomUUID(), expected_revision: accepted.revision },
+      randomUUID(),
+    );
+    const newer = await delay({
+      delay_minutes: 30,
+      from_epoch_ms: Math.max(...accepted.assignments.map((assignment) => assignment.start_epoch_ms)),
+    });
+    expect(newer.revision).toBeGreaterThan(accepted.revision);
+    const baseline = await loadPreviousRevisionBaseline(
+      client as unknown as PostgresJsSql,
+      competitionId,
+      new Set(accepted.assignments.map((assignment) => assignment.match_id)),
+    );
+    for (const assignment of accepted.assignments) {
+      expect(baseline[assignment.match_id]).toEqual({
+        area_id: assignment.area_id,
+        start_epoch_ms: assignment.start_epoch_ms,
+      });
+    }
+  });
+
+  it.each(["in_progress", "final", "corrected"])(
+    "refuses both preview and committed moves of a %s match",
+    async (state) => {
+      const assignment = accepted.assignments[0]!;
+      const previous = (
+        await client<{ state: string }[]>`SELECT state FROM matches WHERE id=${assignment.match_id}`
+      )[0]!.state;
+      await client`UPDATE matches SET state=${state} WHERE id=${assignment.match_id}`;
+      const target = {
+        match_id: assignment.match_id,
+        playing_area_id: assignment.area_id,
+        slot_id: "unused",
+        start_epoch_ms: assignment.start_epoch_ms,
+        end_epoch_ms: assignment.end_epoch_ms,
+      };
+      try {
+        await expect(phase4.validateScheduleMove(actor(), accepted.id, target)).rejects.toMatchObject({
+          statusCode: 409,
+          code: "MATCH_NOT_MOVABLE",
+        });
+        await expect(
+          phase4.moveScheduleMatch(
+            actor(),
+            accepted.id,
+            { ...target, idempotency_key: randomUUID(), expected_revision: accepted.revision },
+            randomUUID(),
+          ),
+        ).rejects.toMatchObject({ statusCode: 409 });
+      } finally {
+        await client`UPDATE matches SET state=${previous} WHERE id=${assignment.match_id}`;
+      }
+    },
+  );
+
   // Runs last: changing capacity makes the accepted solver input stale for later delays.
   it("renames courts in place by id and keeps removed courts with scheduled matches visible", async () => {
     const view = await phase3.capacity(actor(), competitionId);
@@ -469,6 +529,12 @@ describeInfrastructure("schedule delay tool validation (Track R2.2)", () => {
     expect(removed.replan_required).toBe(true);
     expect(removed.affected_matches!.length).toBeGreaterThan(0);
     expect(removed.affected_matches!.every((match) => match.reason === "playing_area_removed")).toBe(true);
+    const preserved = await phase4.readScheduleRevision(actor(), accepted.id);
+    expect(preserved.assignments).toHaveLength(accepted.assignments.length);
+    expect(preserved.assignments.filter((assignment) => assignment.area_id === courtB)).toHaveLength(
+      accepted.assignments.filter((assignment) => assignment.area_id === courtB).length,
+    );
+
     const reread = await phase3.capacity(actor(), competitionId);
     expect(reread.areas.map((area) => area.id).sort()).toEqual([courtA, courtB].sort());
   });
