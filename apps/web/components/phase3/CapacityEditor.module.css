@@ -439,3 +439,15 @@
     transition: none;
   }
 }
+
+.reserveFields {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.reserveFields > button {
+  justify-self: start;
+}
+.reserveFields p {
+  margin: 0;
+}

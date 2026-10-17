@@ -1675,6 +1675,215 @@ describeInfrastructure("Phase 3 PostgreSQL runtime", () => {
     expect((await runtime.capacity(actor, competition.id)).revision).toBe(4);
   });
 
+  it("round-trips daily buffers, preserves omitted old-client fields, and agrees with SQL and setup seeds", async () => {
+    const actor = { accountId };
+    const competition = await runtime.createCompetition(
+      actor,
+      {
+        organisationId,
+        name: "Daily buffer cup",
+        slug: `daily-buffer-${randomUUID()}`,
+        sportCode: "badminton",
+        venue: "Hall",
+        address: "7 Road",
+        countryCode: "SG",
+        startsOn: "2027-10-30",
+        endsOn: "2027-10-31",
+        timezone: "Europe/London",
+        locale: "en-GB",
+      },
+      randomUUID(),
+    );
+    const first = await runtime.replaceCapacity(
+      actor,
+      competition.id,
+      {
+        revision: 1,
+        areas: [
+          {
+            name: "A",
+            slotMinutes: 30,
+            fixedReserveSlots: 7,
+            dailyReserveSlots: { "2027-10-30": 1, "2027-10-31": 2 },
+            availability: [{ date: "2027-10-30", startTime: "23:00", endTime: "03:00", crossMidnight: true }],
+            unavailable: [{ date: "2027-10-31", startTime: "01:30", endTime: "02:00" }],
+          },
+          {
+            name: "B",
+            slotMinutes: 30,
+            fixedReserveSlots: 0,
+            dailyReserveSlots: {},
+            availability: [{ date: "2027-10-31", startTime: "09:00", endTime: "10:00" }],
+          },
+        ],
+      },
+      randomUUID(),
+    );
+    expect(first.effective).toMatchObject({
+      rawTotalSlots: 9,
+      fixedReserveSlots: 3,
+      availableMatchSlots: 6,
+      reserveOverflows: [],
+    });
+    const agreement = async (expected: typeof first) => {
+      const row = required(
+        await client<{ slots: number; seed: { capacity: { effective: Record<string, unknown> } } }[]>`
+        SELECT phase3_available_match_slots(${competition.id}) AS slots,phase4_setup_seed_values(${competition.id}) AS seed`,
+      );
+      expect(row.slots).toBe(expected.effective.availableMatchSlots);
+      expect(row.seed.capacity.effective).toMatchObject({
+        rawTotalSlots: expected.effective.rawTotalSlots,
+        fixedReserveSlots: expected.effective.fixedReserveSlots,
+        availableMatchSlots: expected.effective.availableMatchSlots,
+      });
+    };
+    await agreement(first);
+    const input = {
+      revision: first.revision,
+      areas: first.areas.map((area) => ({
+        id: area.id,
+        name: area.name,
+        slotMinutes: area.slot_minutes,
+        fixedReserveSlots: area.fixed_reserve_slots,
+        availability: area.availability.map((window) => ({
+          id: window.id,
+          date: window.date,
+          startTime: window.start_time,
+          endTime: window.end_time,
+          crossMidnight: window.cross_midnight,
+        })),
+        unavailable: area.unavailable.map((window) => ({
+          id: window.id,
+          date: window.date,
+          startTime: window.start_time,
+          endTime: window.end_time,
+          crossMidnight: window.cross_midnight,
+        })),
+      })),
+    };
+    const second = await runtime.replaceCapacity(actor, competition.id, input, randomUUID());
+    expect(second.areas.map((area) => area.daily_reserve_slots)).toEqual(
+      first.areas.map((area) => area.daily_reserve_slots),
+    );
+    await agreement(second);
+    const hashBefore = required(
+      await client<{ hash: string }[]>`SELECT phase4_capacity_hash(${competition.id}) AS hash`,
+    ).hash;
+    const zero = await runtime.replaceCapacity(
+      actor,
+      competition.id,
+      { revision: second.revision, areas: input.areas.map((area) => ({ ...area, dailyReserveSlots: {} })) },
+      randomUUID(),
+    );
+    expect(zero.effective.availableMatchSlots).toBe(9);
+    expect(
+      required(await client<{ hash: string }[]>`SELECT phase4_capacity_hash(${competition.id}) AS hash`).hash,
+    ).not.toBe(hashBefore);
+    await agreement(zero);
+    const overflow = await runtime.replaceCapacity(
+      actor,
+      competition.id,
+      {
+        revision: zero.revision,
+        areas: input.areas.map((area) => ({ ...area, dailyReserveSlots: { "2027-10-31": 99 } })),
+      },
+      randomUUID(),
+    );
+    expect(overflow.effective.reserveOverflows).toHaveLength(2);
+    await agreement(overflow);
+    await expect(
+      runtime.replaceCapacity(
+        actor,
+        competition.id,
+        {
+          revision: overflow.revision,
+          areas: input.areas.map((area) => ({ ...area, dailyReserveSlots: { "2027-11-01": 1 } })),
+        },
+        randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: "CAPACITY_INVALID" });
+    const legacy = await runtime.replaceCapacity(
+      actor,
+      competition.id,
+      { revision: overflow.revision, areas: input.areas.map((area) => ({ ...area, dailyReserveSlots: null })) },
+      randomUUID(),
+    );
+    expect(legacy.areas.every((area) => area.daily_reserve_slots === null)).toBe(true);
+    await agreement(legacy);
+    expect(
+      required(
+        await client<
+          { count: number }[]
+        >`SELECT count(*)::integer AS count FROM schedule_revisions WHERE competition_id=${competition.id}`,
+      ).count,
+    ).toBe(0);
+  });
+
+  it("rejects out-of-range daily reserve dates with 422 before computing any capacity", async () => {
+    let computations = 0;
+    const counting = {
+      ...phase3DomainAdapter,
+      capacity: (input: Parameters<typeof phase3DomainAdapter.capacity>[0]) => {
+        computations += 1;
+        return phase3DomainAdapter.capacity(input);
+      },
+      resolveCapacityWindows: (input: Parameters<typeof phase3DomainAdapter.resolveCapacityWindows>[0]) => {
+        computations += 1;
+        return phase3DomainAdapter.resolveCapacityWindows(input);
+      },
+    };
+    const guarded = new Phase3Runtime(client as unknown as PostgresJsSql, counting);
+    const competition = await guarded.createCompetition(
+      { accountId },
+      {
+        organisationId,
+        name: "Reserve bounds cup",
+        slug: `reserve-bounds-${randomUUID()}`,
+        sportCode: "badminton",
+        venue: "Hall",
+        address: "7 Road",
+        countryCode: "SG",
+        startsOn: "2027-10-30",
+        endsOn: "2027-10-31",
+        timezone: "Europe/London",
+        locale: "en-GB",
+      },
+      randomUUID(),
+    );
+    const area = (dailyReserveSlots: Record<string, number>) => ({
+      name: "A",
+      slotMinutes: 30,
+      dailyReserveSlots,
+      availability: [{ date: "2027-10-30", startTime: "09:00", endTime: "10:00" }],
+    });
+    // Far outside the competition (a year of keys would previously reach the slot builder first).
+    const yearOfDates = Object.fromEntries(
+      Array.from({ length: 365 }, (_, day) => [new Date(Date.UTC(2030, 0, 1 + day)).toISOString().slice(0, 10), 1]),
+    );
+    for (const dailyReserveSlots of [{ "2027-11-01": 1 }, { "2027-10-29": 1 }, yearOfDates]) {
+      await expect(
+        guarded.replaceCapacity(
+          { accountId },
+          competition.id,
+          { revision: 1, areas: [area(dailyReserveSlots)] },
+          randomUUID(),
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        code: "CAPACITY_INVALID",
+        message: expect.stringContaining("daily_reserve_slots"),
+      });
+    }
+    expect(computations).toBe(0);
+    await guarded.replaceCapacity(
+      { accountId },
+      competition.id,
+      { revision: 1, areas: [area({ "2027-10-30": 1, "2027-10-31": 0 })] },
+      randomUUID(),
+    );
+    expect(computations).toBeGreaterThan(0);
+  });
+
   it("uses per-area reserves and aggregate lifecycle format demand for capacity feasibility", async () => {
     const actor = { accountId };
     const competition = await runtime.createCompetition(

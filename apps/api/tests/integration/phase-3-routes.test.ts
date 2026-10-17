@@ -506,6 +506,33 @@ describe("Phase 3 authenticated route boundary", () => {
       ).statusCode,
     ).toBe(400);
     expect(phase3Runtime.replaceCapacity).not.toHaveBeenCalled();
+    // Daily reserve maps are bounded by schema before any runtime/calendar work happens.
+    const oversizedReserves = Object.fromEntries(
+      Array.from({ length: 367 }, (_, day) => [new Date(Date.UTC(2027, 0, 1 + day)).toISOString().slice(0, 10), 1]),
+    );
+    for (const dailyReserveSlots of [oversizedReserves, { "2027-01-01": 1441 }, { "2027-01-01": -1 }]) {
+      expect(
+        (
+          await app.inject({
+            method: "PUT",
+            url: `/api/v1/competitions/${competitionId}/capacity`,
+            headers,
+            payload: {
+              revision: 1,
+              areas: [
+                {
+                  name: "Court",
+                  slot_minutes: 30,
+                  daily_reserve_slots: dailyReserveSlots,
+                  availability: [{ date: "2027-01-01", start_time: "08:00", end_time: "09:00" }],
+                },
+              ],
+            },
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
+    expect(phase3Runtime.replaceCapacity).not.toHaveBeenCalled();
     expect(
       (
         await app.inject({
@@ -521,6 +548,7 @@ describe("Phase 3 authenticated route boundary", () => {
                 name: "Court",
                 slot_minutes: 30,
                 fixed_reserve_slots: 2,
+                daily_reserve_slots: { "2027-01-01": 1 },
                 availability: [{ id: windowId, date: "2027-01-01", start_time: "08:00", end_time: "09:00" }],
               },
             ],
@@ -540,6 +568,7 @@ describe("Phase 3 authenticated route boundary", () => {
             name: "Court",
             slotMinutes: 30,
             fixedReserveSlots: 2,
+            dailyReserveSlots: { "2027-01-01": 1 },
             availability: [{ id: windowId, date: "2027-01-01", startTime: "08:00", endTime: "09:00" }],
           },
         ],

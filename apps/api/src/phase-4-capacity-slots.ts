@@ -15,12 +15,15 @@ export type CapacityAreaRow = {
   id: string;
   slot_minutes: number;
   fixed_reserve_slots: number;
+  /** NULL keeps the per-area rule; an object holds per-local-date reserve counts. */
+  daily_reserve_slots?: Record<string, number> | string | null;
 };
 
 /**
  * Solver slots from the canonical domain capacity grid (`buildCalendarCapacitySlotSet`), so the
  * solver sees exactly the usable slots the capacity count promises: reserve slots (each area's
- * latest `fixed_reserve_slots` slots) are never offered to normal solving. Slot IDs keep the
+ * latest `fixed_reserve_slots` slots, or its per-day `daily_reserve_slots`) are never offered
+ * to normal solving. Slot IDs keep the
  * historical `<availability window id>:<1-based index>` form whenever the slot sits on its
  * source window's grid, so persisted placements and locks still resolve; a slot shifted by an
  * unavailable split gets an exact-instant `<window id>:at:<epoch ms>` ID instead.
@@ -48,6 +51,12 @@ export function capacityMatchSlots(
       name: area.id,
       sortOrder: index,
       fixedReserveSlots: area.fixed_reserve_slots,
+      dailyReserveSlots:
+        area.daily_reserve_slots == null
+          ? null
+          : typeof area.daily_reserve_slots === "string"
+            ? (JSON.parse(area.daily_reserve_slots) as Record<string, number>)
+            : area.daily_reserve_slots,
     })),
     availability: windows.map(civilWindow),
     unavailable: unavailable.map(civilWindow),

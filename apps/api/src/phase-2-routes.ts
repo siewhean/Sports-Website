@@ -1,4 +1,6 @@
 import { Type } from "@sinclair/typebox";
+
+import { DailyReserveSlots } from "./capacity-schemas.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError, ErrorCode } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
@@ -403,6 +405,7 @@ export async function registerPhase2Routes(
         sort_order?: number;
         slot_minutes: number;
         fixed_reserve_slots?: number;
+        daily_reserve_slots?: Record<string, number> | null;
         availability: Array<{
           id?: string;
           date: string;
@@ -439,6 +442,7 @@ export async function registerPhase2Routes(
                   sort_order: Type.Optional(Type.Integer({ minimum: 0 })),
                   slot_minutes: Type.Integer({ minimum: 1, maximum: 1440 }),
                   fixed_reserve_slots: Type.Optional(Type.Integer({ minimum: 0 })),
+                  daily_reserve_slots: Type.Optional(DailyReserveSlots),
                   availability: Type.Array(
                     Type.Object({
                       id: Type.Optional(Id),
@@ -493,6 +497,7 @@ export async function registerPhase2Routes(
             ...(area.sort_order !== undefined ? { sortOrder: area.sort_order } : {}),
             slotMinutes: area.slot_minutes,
             ...(area.fixed_reserve_slots !== undefined ? { fixedReserveSlots: area.fixed_reserve_slots } : {}),
+            ...(area.daily_reserve_slots !== undefined ? { dailyReserveSlots: area.daily_reserve_slots } : {}),
             availability: area.availability.map((window) => ({
               ...(window.id !== undefined ? { id: window.id } : {}),
               date: window.date,

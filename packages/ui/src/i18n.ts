@@ -19,6 +19,21 @@ export const competitionCreateFieldKeys = [
 export type CompetitionCreateFieldKey = (typeof competitionCreateFieldKeys)[number];
 
 export const messages = {
+  capacityReserves: {
+    legacyLabel: "Reserve slots across all days",
+    legacyHint: "This saved total applies once across this area’s available days.",
+    dailyLabel: "Reserve slots per day",
+    dailyHint: "These slots stay free for delays, for this area on each date.",
+    useDaily: "Set reserve slots for each day",
+    useLegacy: "Use one total across all days",
+    addDate: "Add an available date to set daily reserve slots.",
+    invalidDaily: "Use valid dates and zero or more whole reserve slots.",
+    retry: "Your entries are still here. Reconnect and try saving again.",
+    reserveForDate: "Reserve slots on {date}",
+    overflow:
+      "{area} on {date}: {requested} reserve slots requested, but only {available} slots fit. Reduce the reserve count or add available time.",
+    allDays: "all days",
+  },
   metadata: {
     defaultTitle: "MATCHDAY · Competition operations",
     titleTemplate: "%s · MATCHDAY",

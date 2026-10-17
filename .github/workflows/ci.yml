@@ -73,6 +73,7 @@ jobs:
           POSTGRES_DB: matchday
           POSTGRES_USER: matchday
           POSTGRES_PASSWORD: matchday
+          POSTGRES_INITDB_ARGS: "--locale=C"
         ports:
           - 5432:5432
         options: >-

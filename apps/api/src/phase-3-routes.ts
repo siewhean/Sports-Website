@@ -1,4 +1,6 @@
 import { Type, type Static } from "@sinclair/typebox";
+
+import { DailyReserveSlots } from "./capacity-schemas.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ApiError, ErrorCode } from "./errors.js";
 import type { IdentityRequestContext } from "./identity-routes.js";
@@ -83,6 +85,16 @@ const CapacityEffective = Type.Object(
     slotMinutes: Type.Integer(),
     rawTotalSlots: Type.Integer(),
     fixedReserveSlots: Type.Integer(),
+    reserveOverflows: Type.Optional(
+      Type.Array(
+        Type.Object({
+          areaId: Type.Union([Id, Type.Null()]),
+          date: Type.Union([Type.String(), Type.Null()]),
+          requestedSlots: Type.Integer(),
+          availableSlots: Type.Integer(),
+        }),
+      ),
+    ),
     availableMatchSlots: Type.Integer(),
     requiredMatchSlots: Type.Integer(),
     remainingMatchSlots: Type.Integer(),
@@ -130,6 +142,7 @@ const CapacityResponse = Type.Object(
           sort_order: Type.Integer(),
           slot_minutes: Type.Integer(),
           fixed_reserve_slots: Type.Integer(),
+          daily_reserve_slots: Type.Optional(DailyReserveSlots),
           scheduled_match_count: Type.Integer({ minimum: 0 }),
           retained: Type.Boolean(),
           availability: Type.Array(CapacityWindowResponse),
@@ -1107,6 +1120,7 @@ export async function registerPhase3Routes(
           sort_order?: number;
           slot_minutes: number;
           fixed_reserve_slots?: number;
+          daily_reserve_slots?: Record<string, number> | null;
           availability: Array<{
             id?: string;
             date: string;
@@ -1142,6 +1156,7 @@ export async function registerPhase3Routes(
                     sort_order: Type.Optional(Type.Integer({ minimum: 0 })),
                     slot_minutes: Type.Integer({ minimum: 1, maximum: 1440 }),
                     fixed_reserve_slots: Type.Optional(Type.Integer({ minimum: 0 })),
+                    daily_reserve_slots: Type.Optional(DailyReserveSlots),
                     availability: Type.Array(CapacityWindowRequest),
                     unavailable: Type.Optional(Type.Array(CapacityWindowRequest)),
                   },
@@ -1174,6 +1189,7 @@ export async function registerPhase3Routes(
               ...(area.sort_order !== undefined ? { sortOrder: area.sort_order } : {}),
               slotMinutes: area.slot_minutes,
               ...(area.fixed_reserve_slots !== undefined ? { fixedReserveSlots: area.fixed_reserve_slots } : {}),
+              ...(area.daily_reserve_slots !== undefined ? { dailyReserveSlots: area.daily_reserve_slots } : {}),
               availability: area.availability.map((window) => ({
                 ...(window.id !== undefined ? { id: window.id } : {}),
                 date: window.date,

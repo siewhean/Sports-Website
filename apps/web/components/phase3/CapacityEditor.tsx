@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Gauge, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import {
   capacityMutationBody,
+  capacityReserveDates,
+  capacityReserveOverflowLabel,
   parseCapacityResponse,
   phase3CapacityCopy,
   phase3CapacityMachine,
@@ -41,6 +43,7 @@ function newArea(index: number): CapacityAreaDraft {
     sortOrder: index,
     slotMinutes: 30,
     fixedReserveSlots: 0,
+    dailyReserveSlots: {},
     availability: [newWindow()],
     unavailable: [],
   };
@@ -53,6 +56,7 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
   const [areas, setAreas] = useState<readonly CapacityAreaDraft[]>(() =>
     editableSource.length ? editableSource : [newArea(0)],
   );
+  const dailyDrafts = useRef<Record<string, Readonly<Record<string, number>>>>({});
   const [retainedAreas, setRetainedAreas] = useState<readonly CapacityAreaDraft[]>(() =>
     document.areas.filter((area) => area.retained),
   );
@@ -76,6 +80,9 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
   const editable = document.canEdit && viewState !== "read-only";
 
   function updateArea(index: number, patch: Partial<CapacityAreaDraft>) {
+    const area = areas[index];
+    if (area?.dailyReserveSlots != null) dailyDrafts.current[area.id] = area.dailyReserveSlots;
+    if (area && patch.dailyReserveSlots != null) dailyDrafts.current[area.id] = patch.dailyReserveSlots;
     setAreas((current) => current.map((area, areaIndex) => (areaIndex === index ? { ...area, ...patch } : area)));
     setDirty(true);
     setMessage("");
@@ -129,7 +136,7 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
       setDirty(false);
       setMessage(phase3CapacityCopy.saved);
     } catch {
-      setCommandState(phase3CapacityMachine.offline);
+      setMessage(phase3CapacityCopy.dailyReserve.retry);
     } finally {
       setBusy(false);
     }
@@ -199,20 +206,65 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
                     onChange={(event) => updateArea(areaIndex, { slotMinutes: Number(event.target.value) })}
                   />
                 </Field>
-                <Field
-                  label={phase3CapacityCopy.reserveSlots}
-                  hint={phase3CapacityCopy.reserveSlotsHint}
-                  error={issues[`area-${areaIndex}-reserve`]}
-                >
-                  <input
-                    type="number"
-                    min={0}
-                    value={area.fixedReserveSlots}
-                    onChange={(event) => updateArea(areaIndex, { fixedReserveSlots: Number(event.target.value) })}
-                  />
-                </Field>
+                {area.dailyReserveSlots == null ? (
+                  <Field
+                    label={phase3CapacityCopy.reserveSlots}
+                    hint={phase3CapacityCopy.reserveSlotsHint}
+                    error={issues[`area-${areaIndex}-reserve`]}
+                  >
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={area.fixedReserveSlots}
+                      onChange={(event) => updateArea(areaIndex, { fixedReserveSlots: Number(event.target.value) })}
+                    />
+                  </Field>
+                ) : null}
               </div>
 
+              <div className={styles.reserveFields}>
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  onClick={() =>
+                    updateArea(areaIndex, {
+                      dailyReserveSlots: area.dailyReserveSlots == null ? (dailyDrafts.current[area.id] ?? {}) : null,
+                    })
+                  }
+                >
+                  {area.dailyReserveSlots == null
+                    ? phase3CapacityCopy.dailyReserve.useDaily
+                    : phase3CapacityCopy.dailyReserve.useLegacy}
+                </button>
+                {area.dailyReserveSlots != null ? (
+                  <>
+                    <p>{phase3CapacityCopy.dailyReserve.dailyHint}</p>
+                    {capacityReserveDates(area).length === 0 ? <p>{phase3CapacityCopy.dailyReserve.addDate}</p> : null}
+                    <div className={styles.areaFields}>
+                      {capacityReserveDates(area).map((date) => (
+                        <Field
+                          key={date}
+                          label={phase3CapacityCopy.dailyReserve.reserveForDate.replace("{date}", date)}
+                          error={issues[`area-${areaIndex}-daily-reserve`]}
+                        >
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={area.dailyReserveSlots?.[date] ?? 0}
+                            onChange={(event) =>
+                              updateArea(areaIndex, {
+                                dailyReserveSlots: { ...area.dailyReserveSlots, [date]: Number(event.target.value) },
+                              })
+                            }
+                          />
+                        </Field>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+              </div>
               <WindowGroup
                 title={phase3CapacityCopy.availableWindows}
                 windows={area.availability}
@@ -259,7 +311,7 @@ export function CapacityEditor({ document }: { document: CapacityDocument }) {
             {phase3CapacityCopy.reviewFields}
           </p>
         ) : null}
-        {message === phase3CapacityCopy.commandFailed ? (
+        {message === phase3CapacityCopy.commandFailed || message === phase3CapacityCopy.dailyReserve.retry ? (
           <p className={styles.formError} role="alert">
             {message}
           </p>
@@ -486,6 +538,11 @@ function CapacityRail({ summary }: { summary: CapacityDocument["summary"] }) {
       <Gauge aria-hidden="true" />
       <p className={styles.kicker}>{phase3CapacityCopy.status}</p>
       <h2>{summary ? phase3CapacityCopy[summary.status] : phase3CapacityCopy.emptyTitle}</h2>
+      {summary?.reserveOverflows?.map((overflow, index) => (
+        <p key={index} role="alert" className={styles.formError}>
+          {capacityReserveOverflowLabel(summary, overflow)}
+        </p>
+      ))}
       {summary ? (
         <dl>
           <div>
