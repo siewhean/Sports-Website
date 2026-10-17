@@ -14,7 +14,6 @@ for (const theme of ["dark", "light"] as const) {
       // Dark mode: axe reports color-contrast on the whole pre-existing CapacityEditor (labels,
       // hints, buttons), not on the new reserve inputs. No other a11y spec covers dark mode yet;
       // dark contrast is redesign Phase 1 (tokens/themes) scope. Re-enable when Phase 1 lands.
-      test.fixme(theme === "dark", "Pre-existing CapacityEditor dark-mode contrast; fixed by redesign Phase 1.");
       await page.setViewportSize({ width, height: 900 });
       await page.emulateMedia({ colorScheme: theme });
       await page.addInitScript((preference) => window.localStorage.setItem("matchday-theme", preference), theme);
@@ -29,13 +28,13 @@ for (const theme of ["dark", "light"] as const) {
       await page.goto("/organiser/competitions/singapore-open/capacity");
       await dismissConsent(page);
       const editor = page.getByTestId("phase3-capacity");
-      await expect(page.getByLabel("Reserve slots across all days", { exact: false })).toHaveValue("2");
+      await expect(page.getByRole("textbox", { name: "Reserve slots across all days", exact: true })).toHaveValue("2");
       await page.getByRole("button", { name: "Set reserve slots for each day", exact: true }).click();
       const day = page.getByLabel("Reserve slots on 2026-08-15", { exact: true });
       await expect(day).toHaveValue("0");
       await day.fill("3");
       await page.getByRole("button", { name: "Use one total across all days", exact: true }).click();
-      await expect(page.getByLabel("Reserve slots across all days", { exact: false })).toHaveValue("2");
+      await expect(page.getByRole("textbox", { name: "Reserve slots across all days", exact: true })).toHaveValue("2");
       await page.getByRole("button", { name: "Set reserve slots for each day", exact: true }).click();
       await expect(day).toHaveValue("3");
       await page.getByRole("button", { name: "Add window", exact: true }).click();
