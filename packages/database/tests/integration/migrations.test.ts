@@ -242,6 +242,8 @@ describe("foundation migrations", () => {
         "0074_r4_org_wide_ai_quota.sql",
         // 0075 redefines 0027/0066 schedule-input validators, so it must replay after them.
         "0075_phase0_started_match_placements.sql",
+        // 0076 redefines capacity/seed functions; keep it after 0075 like a fresh chain.
+        "0076_daily_court_reserves.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {

@@ -205,6 +205,63 @@ describe("solver never uses reserve slots (Phase 0 property test)", () => {
     },
   );
 
+  it("never offers per-court-per-day reserve slots, over 240 random daily capacities", { timeout: 120_000 }, () => {
+    const random = seeded(20261018);
+    let solved = 0;
+    for (let sample = 0; sample < 240; sample += 1) {
+      const { input } = randomCase(random, sample);
+      const dates = [...new Set(input.availability.map((window) => window.date))];
+      const daily = new Map(
+        input.areas.map((area) => [area.id, Object.fromEntries(dates.map((date) => [date, random(5)]))]),
+      );
+      const withDaily: CalendarCapacityInput = {
+        ...input,
+        areas: input.areas.map((area) => ({ ...area, dailyReserveSlots: daily.get(area.id)! })),
+      };
+      const { windows, unavailable } = rows(withDaily);
+      const offered = capacityMatchSlots(
+        windows,
+        unavailable,
+        input.slotMinutes!,
+        input.areas.map((area) => ({
+          id: area.id,
+          slot_minutes: input.slotMinutes!,
+          fixed_reserve_slots: area.fixedReserveSlots!,
+          daily_reserve_slots: daily.get(area.id)!,
+        })),
+        input.timeZone,
+      );
+      const localDate = new Intl.DateTimeFormat("en-CA", {
+        timeZone: input.timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      const raw = buildCalendarCapacitySlotSet(withDaily).allSlots;
+      const reserved: (typeof raw)[number][] = [];
+      for (const [areaId, counts] of daily) {
+        for (const [date, count] of Object.entries(counts)) {
+          const daySlots = raw
+            .filter((slot) => slot.areaId === areaId && localDate.format(slot.startEpochMs) === date)
+            .sort((a, b) => a.startEpochMs - b.startEpochMs);
+          reserved.push(...daySlots.slice(Math.max(0, daySlots.length - count)));
+        }
+      }
+      const inReserve = (placement: { areaId: string; startEpochMs: number; endEpochMs: number }) =>
+        reserved.some(
+          (slot) =>
+            slot.areaId === placement.areaId &&
+            slot.startEpochMs < placement.endEpochMs &&
+            placement.startEpochMs < slot.endEpochMs,
+        );
+      expect(offered).toHaveLength(calculateCalendarCapacity(withDaily).availableMatchSlots);
+      expect(offered.length).toBe(raw.length - reserved.length);
+      expect(offered.filter(inReserve)).toEqual([]);
+      if (offered.length > 0) solved += 1;
+    }
+    expect(solved).toBeGreaterThanOrEqual(200);
+  });
+
   it("keeps the historical `<window>:<n>` slot IDs on an unchanged grid", () => {
     const input: CalendarCapacityInput = {
       timeZone: "Asia/Singapore",

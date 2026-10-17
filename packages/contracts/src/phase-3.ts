@@ -75,6 +75,7 @@ export type Phase3CapacityMutation = {
     sort_order?: number;
     slot_minutes: number;
     fixed_reserve_slots?: number;
+    daily_reserve_slots?: Record<string, number> | null;
     availability: Phase3CapacityWindow[];
     unavailable?: Phase3CapacityWindow[];
   }>;

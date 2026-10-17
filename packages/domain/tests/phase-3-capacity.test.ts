@@ -655,3 +655,141 @@ describe("reserve slot identity (Phase 0: one rule for the count and the solver 
     }
   });
 });
+
+describe("independent court/day reserve grid", () => {
+  const base = (): CalendarCapacityInput => ({
+    timeZone: "Asia/Singapore",
+    slotMinutes: 30,
+    areas: [
+      { id: "a", name: "Court A", fixedReserveSlots: 7, dailyReserveSlots: { "2027-01-01": 1, "2027-01-02": 2 } },
+    ],
+    availability: ["2027-01-01", "2027-01-02"].flatMap((date) => [
+      { id: `${date}-am`, areaId: "a", date, startTime: "09:00", endTime: "10:00" },
+      { id: `${date}-pm`, areaId: "a", date, startTime: "14:00", endTime: "15:00" },
+    ]),
+  });
+  it("reserves latest slots independently across windows and dates, ignoring the retained legacy setting", () => {
+    const input = base();
+    const grid = buildCalendarCapacitySlotSet(input);
+    expect(grid.allSlots).toHaveLength(8);
+    expect(grid.reserveSlots.map((slot) => slot.startIso)).toEqual([
+      "2027-01-01T06:30:00.000Z",
+      "2027-01-02T06:00:00.000Z",
+      "2027-01-02T06:30:00.000Z",
+    ]);
+    expect(calculateCalendarCapacity(input)).toMatchObject({
+      rawTotalSlots: 8,
+      fixedReserveSlots: 3,
+      availableMatchSlots: 5,
+      reserveOverflows: [],
+    });
+    expect(buildCalendarCapacitySlots(input)).toEqual(grid.usableSlots);
+  });
+  it("distinguishes explicit empty daily mode from NULL legacy and reports over-reservation", () => {
+    const input = base();
+    expect(
+      calculateCalendarCapacity({ ...input, areas: [{ ...input.areas[0]!, dailyReserveSlots: {} }] })
+        .availableMatchSlots,
+    ).toBe(8);
+    expect(
+      calculateCalendarCapacity({ ...input, areas: [{ ...input.areas[0]!, dailyReserveSlots: null }] })
+        .availableMatchSlots,
+    ).toBe(1);
+    const result = calculateCalendarCapacity({
+      ...input,
+      areas: [{ ...input.areas[0]!, dailyReserveSlots: { "2027-01-01": 9 } }],
+    });
+    expect(result.availableMatchSlots).toBe(4);
+    expect(result.reserveOverflows).toEqual([
+      { areaId: "a", date: "2027-01-01", requestedSlots: 9, availableSlots: 4 },
+    ]);
+  });
+  it("groups overnight and DST slots by competition-local start date", () => {
+    const grid = buildCalendarCapacitySlotSet({
+      timeZone: "Europe/London",
+      slotMinutes: 30,
+      areas: [{ id: "a", name: "A", dailyReserveSlots: { "2027-10-30": 1, "2027-10-31": 2 } }],
+      availability: [
+        { id: "night", areaId: "a", date: "2027-10-30", startTime: "23:00", endTime: "03:00", crossMidnight: true },
+      ],
+    });
+    expect(grid.allSlots).toHaveLength(10);
+    expect(grid.reserveSlots.map((slot) => slot.startIso)).toEqual([
+      "2027-10-30T22:30:00.000Z",
+      "2027-10-31T02:00:00.000Z",
+      "2027-10-31T02:30:00.000Z",
+    ]);
+  });
+  it.each([{ "2027-02-30": 1 }, { "2027-01-01": -1 }, { "2027-01-01": 1.2 }])(
+    "rejects malformed reserve maps %j",
+    (dailyReserveSlots) => {
+      const input = base();
+      expect(() =>
+        buildCalendarCapacitySlotSet({ ...input, areas: [{ ...input.areas[0]!, dailyReserveSlots }] }),
+      ).toThrow();
+    },
+  );
+  it(
+    "agrees on count, identity and per-day isolation for 240 reproducible random multiwindow cases",
+    { timeout: 60_000 },
+    () => {
+      let state = 192837;
+      const random = (limit: number) => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return state % limit;
+      };
+      for (let sample = 0; sample < 240; sample += 1) {
+        const dates = ["2027-01-01", "2027-01-02", "2027-01-03"];
+        const input: CalendarCapacityInput = {
+          timeZone: ["Asia/Singapore", "Europe/London", "America/New_York"][sample % 3]!,
+          slotMinutes: [15, 30, 45][sample % 3]!,
+          areas: ["a", "b"].map((id) => ({
+            id,
+            name: id,
+            fixedReserveSlots: random(5),
+            dailyReserveSlots: sample % 4 === 0 ? null : Object.fromEntries(dates.map((date) => [date, random(8)])),
+          })),
+          availability: ["a", "b"].flatMap((areaId) =>
+            dates.flatMap((date) => [
+              { id: `${areaId}-${date}-am`, areaId, date, startTime: "08:00", endTime: "11:00" },
+              { id: `${areaId}-${date}-pm`, areaId, date, startTime: "13:00", endTime: "17:00" },
+            ]),
+          ),
+          unavailable: ["a", "b"].flatMap((areaId) =>
+            dates.map((date) => ({
+              id: `${areaId}-${date}-closed`,
+              areaId,
+              date,
+              startTime: "09:00",
+              endTime: `09:${["15", "30", "45"][random(3)]}`,
+            })),
+          ),
+        };
+        const grid = buildCalendarCapacitySlotSet(input);
+        const summary = calculateCalendarCapacity(input);
+        expect(summary.rawTotalSlots).toBe(grid.allSlots.length);
+        expect(summary.availableMatchSlots).toBe(grid.usableSlots.length);
+        expect(new Set([...grid.usableSlots, ...grid.reserveSlots].map((slot) => slot.id)).size).toBe(
+          grid.allSlots.length,
+        );
+        const formatter = new Intl.DateTimeFormat("en-CA", {
+          timeZone: input.timeZone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        });
+        for (const area of input.areas)
+          for (const date of area.dailyReserveSlots == null ? [null] : dates) {
+            const matches = (slot: { areaId: string; startEpochMs: number }) =>
+              slot.areaId === area.id && (date === null || formatter.format(slot.startEpochMs) === date);
+            expect(grid.reserveSlots.filter(matches)).toHaveLength(
+              Math.min(
+                grid.allSlots.filter(matches).length,
+                date === null ? area.fixedReserveSlots! : area.dailyReserveSlots![date]!,
+              ),
+            );
+          }
+      }
+    },
+  );
+});
