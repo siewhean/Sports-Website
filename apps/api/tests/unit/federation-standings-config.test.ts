@@ -8,6 +8,7 @@ import {
   TABLE_TENNIS_FEDERATION_SPORT_PACK,
   VOLLEYBALL_FEDERATION_SPORT_PACK,
   BADMINTON_3X15_SPORT_PACK,
+  BADMINTON_FEDERATION_SPORT_PACK,
   calculateStandings,
 } from "@matchday/domain";
 import { phase3DomainAdapter } from "../../src/phase-3-domain-adapter.js";
@@ -131,5 +132,52 @@ describe("standings configuration for federation packs (redesign Phase 4)", () =
       ["a", 2],
       ["b", 0],
     ]);
+  });
+  it("deletes a retired badminton player's group results on a federation pack only", () => {
+    const snapshotRow = (matchId: string, home: string, away: string, extra: Record<string, unknown>) => ({
+      match_id: matchId,
+      home_entry_id: home,
+      away_entry_id: away,
+      home_score: 0,
+      away_score: 0,
+      state: "final" as const,
+      result_version: 1,
+      snapshot: { exceptionalOutcome: null, actions: [], ...extra },
+    });
+    const rows = [
+      snapshotRow("m1", "a", "b", {
+        segments: [
+          { home: 21, away: 10 },
+          { home: 21, away: 10 },
+        ],
+        totalPoints: { home: 42, away: 20 },
+        winner: "home",
+      }),
+      snapshotRow("m2", "c", "a", {
+        segments: [
+          { home: 21, away: 5 },
+          { home: 4, away: 2 },
+        ],
+        totalPoints: { home: 25, away: 7 },
+        exceptionalOutcome: "retirement",
+        winner: "home",
+      }),
+    ];
+    const entries = [
+      { id: "a", name: "Alpha", seed: 1 },
+      { id: "b", name: "Bravo", seed: 2 },
+      { id: "c", name: "Charlie", seed: 3 },
+    ];
+    const federation = config(BADMINTON_FEDERATION_SPORT_PACK);
+    const converted = rows.map((row) => standingsResultFromSnapshot(row, federation));
+    expect(converted[1]).toMatchObject({ retiredEntryId: "a" });
+    const standings = calculateStandings(entries, converted, federation);
+    expect(standings.find((row) => row.entryId === "a")).toMatchObject({ resultsDeleted: true, played: 0 });
+    expect(standings.find((row) => row.entryId === "b")).toMatchObject({ played: 0, lost: 0 });
+
+    const draft = phase3DomainAdapter.standingsConfig(SPORT_PACKS.badminton, SPORT_PACKS.badminton.recommendedSettings);
+    const draftResults = rows.map((row) => standingsResultFromSnapshot(row, draft));
+    expect(draftResults[1]).not.toHaveProperty("retiredEntryId");
+    expect(calculateStandings(entries, draftResults, draft).some((row) => row.resultsDeleted)).toBe(false);
   });
 });

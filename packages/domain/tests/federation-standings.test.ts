@@ -144,14 +144,15 @@ describe("head-to-head first (FIBA, ITTF)", () => {
   });
 });
 
+const badmintonCriteria: StandingsEngineConfig["criteria"] = [
+  "match_wins",
+  "head_to_head_two_way",
+  "segment_difference",
+  "score_difference",
+];
+
 describe("badminton two-way head-to-head (BWF)", () => {
-  const criteria: StandingsEngineConfig["criteria"] = [
-    "match_wins",
-    "head_to_head_two_way",
-    "segment_difference",
-    "score_difference",
-  ];
-  const config = { ...STANDINGS_SPORT_PACKS.badminton, criteria };
+  const config = { ...STANDINGS_SPORT_PACKS.badminton, criteria: badmintonCriteria };
 
   it("decides a two-way tie by the match between the two", () => {
     const four: StandingsParticipant[] = [...three, { id: "d", name: "Delta", seed: 4 }];
@@ -203,6 +204,108 @@ describe("badminton two-way head-to-head (BWF)", () => {
         "game_difference",
         "point_difference",
       ]);
+  });
+});
+
+describe("badminton withdrawal in groups (BWF GCR 16.2.5)", () => {
+  const four: StandingsParticipant[] = [...three, { id: "d", name: "Delta", seed: 4 }];
+  const federation = (version: string) =>
+    applyFederationStandingsRules(
+      STANDINGS_SPORT_PACKS.badminton,
+      "badminton",
+      version,
+      BADMINTON_FEDERATION_SPORT_PACK.recommendedSettings,
+    );
+  // d beats a and b, then retires against c: every d result is deleted.
+  const withRetirement = () => [
+    result("a", "b", 0, 0, games([21, 21], [10, 10])),
+    result("a", "c", 0, 0, games([21, 21], [15, 15])),
+    result("b", "c", 0, 0, games([21, 21], [18, 18])),
+    result("d", "a", 0, 0, games([21, 21], [5, 5])),
+    result("d", "b", 0, 0, games([21, 21], [5, 5])),
+    result("c", "d", 0, 0, { ...games([11], [8]), retiredEntryId: "d" }),
+  ];
+
+  it("turns the rule on for both badminton federation packs only", () => {
+    for (const version of [BADMINTON_FEDERATION_SPORT_PACK.version, BADMINTON_3X15_SPORT_PACK.version])
+      expect(federation(version)).toMatchObject({ incompleteEntryResults: "delete_all" });
+    expect(federation(DRAFT_SPORT_PACK_VERSION).incompleteEntryResults).toBeUndefined();
+    expect(STANDINGS_SPORT_PACKS.badminton.incompleteEntryResults).toBeUndefined();
+    const basketballConfig = applyFederationStandingsRules(
+      STANDINGS_SPORT_PACKS.basketball,
+      "basketball",
+      "1.0.0",
+      BASKETBALL_FEDERATION_SPORT_PACK.recommendedSettings,
+    );
+    expect(basketballConfig.incompleteEntryResults).toBeUndefined();
+  });
+
+  it("deletes every result of a player who retired, for every other player too", () => {
+    const rows = calculateStandings(four, withRetirement(), federation("1.0.0"));
+    expect(rows.map((row) => row.entryId)).toEqual(["a", "b", "c", "d"]);
+    const byId = new Map(rows.map((row) => [row.entryId, row]));
+    expect(byId.get("a")).toMatchObject({ played: 2, won: 2, lost: 0, segmentsWon: 4, segmentsLost: 0 });
+    expect(byId.get("b")).toMatchObject({ played: 2, won: 1, lost: 1 });
+    expect(byId.get("c")).toMatchObject({ played: 2, won: 0, lost: 2 });
+    expect(byId.get("d")).toMatchObject({
+      rank: 4,
+      status: "withdrawn",
+      resultsDeleted: true,
+      eligibleForAdvancement: false,
+      played: 0,
+      won: 0,
+      tablePoints: 0,
+    });
+    expect(byId.get("a")?.resultsDeleted).toBeUndefined();
+  });
+
+  it("deletes a walkover instead of scoring it as a 21-0 win", () => {
+    const rows = calculateStandings(
+      three,
+      [
+        result("a", "b", 0, 0, games([21, 21], [19, 19])),
+        result("a", "c", 0, 0, { ...games([21, 21], [0, 0]), status: "forfeit", forfeitLoserEntryId: "c" }),
+        result("b", "c", 0, 0, { ...games([21, 21], [0, 0]), status: "forfeit", forfeitLoserEntryId: "c" }),
+      ],
+      federation("1.1.0"),
+    );
+    expect(rows.map((row) => [row.entryId, row.played, row.won, row.scoreFor, row.resultsDeleted ?? false])).toEqual([
+      ["a", 1, 1, 42, false],
+      ["b", 1, 0, 38, false],
+      ["c", 0, 0, 0, true],
+    ]);
+  });
+
+  it("keeps the results of a player who completed every match", () => {
+    const rows = calculateStandings(
+      three,
+      [
+        result("a", "b", 0, 0, games([21, 21], [5, 5])),
+        result("a", "c", 0, 0, games([21, 21], [5, 5])),
+        result("b", "c", 0, 0, games([21, 21], [5, 5])),
+      ],
+      federation("1.0.0"),
+    );
+    expect(rows.every((row) => row.resultsDeleted === undefined && row.played === 2)).toBe(true);
+  });
+
+  it("counts the retired player's results on a draft pack, as before", () => {
+    const rows = calculateStandings(four, withRetirement(), {
+      ...STANDINGS_SPORT_PACKS.badminton,
+      criteria: badmintonCriteria,
+    });
+    expect(rows.find((row) => row.entryId === "d")).toMatchObject({ played: 3, won: 2, status: "active" });
+    expect(rows.some((row) => row.resultsDeleted)).toBe(false);
+  });
+
+  it("rejects a retirement that names an entry outside the match", () => {
+    expect(() =>
+      calculateStandings(
+        four,
+        [result("a", "b", 0, 0, { ...games([11], [3]), retiredEntryId: "c" })],
+        federation("1.0.0"),
+      ),
+    ).toThrow(/must identify a participating entry/u);
   });
 });
 

@@ -72,6 +72,13 @@ export function standingsResultFromSnapshot(
   const snapshot = detail as CanonicalSnapshot;
   const segments = Array.isArray(snapshot.segments) ? snapshot.segments : [];
   const forfeit = snapshot.exceptionalOutcome === "walkover" && Boolean(snapshot.winner);
+  // Packs that delete an incomplete entry's results (BWF GCR 16.2.5) need to know who retired; others do not.
+  const retiredEntryId =
+    config.incompleteEntryResults && snapshot.exceptionalOutcome === "retirement" && snapshot.winner
+      ? snapshot.winner === "home"
+        ? row.away_entry_id
+        : row.home_entry_id
+      : undefined;
   const homeWonForfeit = forfeit && snapshot.winner === "home";
   const forfeitHomeSegments = homeWonForfeit ? config.forfeitScore.homeSegments : config.forfeitScore.awaySegments;
   const forfeitAwaySegments = homeWonForfeit ? config.forfeitScore.awaySegments : config.forfeitScore.homeSegments;
@@ -109,6 +116,7 @@ export function standingsResultFromSnapshot(
           forfeitLoserEntryId: snapshot.winner === "home" ? row.away_entry_id : row.home_entry_id,
         }
       : {}),
+    ...(retiredEntryId ? { retiredEntryId } : {}),
     version: row.result_version,
   };
 }

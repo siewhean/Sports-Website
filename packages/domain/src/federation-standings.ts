@@ -53,7 +53,8 @@ function integerSetting(settings: SportPackSettings, key: string): number | unde
 
 /**
  * Applies a federation pack's classification-points scheme (3/1/0 or 2/1/0 with 0 for a forfeit) to a standings
- * configuration. Draft packs come back unchanged. The version gains a suffix so a snapshot records the scheme.
+ * configuration, and for badminton the BWF rule that deletes the results of an entry that did not complete its
+ * group matches. Draft packs come back unchanged. The version gains a suffix so a snapshot records the scheme.
  */
 export function applyFederationStandingsRules(
   config: StandingsEngineConfig,
@@ -67,13 +68,16 @@ export function applyFederationStandingsRules(
   const lossPoints = integerSetting(effective, "lossPoints") ?? config.lossPoints;
   const forfeitLossPoints = integerSetting(effective, "forfeitLossPoints");
   const disciplineWeights = disciplineWeightsFor(sportId, packVersion);
+  const deleteIncomplete = sportId === "badminton";
   return {
     ...config,
-    version: `${config.version}+federation:${packVersion}:${winPoints}/${drawPoints}/${lossPoints}/${forfeitLossPoints ?? "loss"}${disciplineWeights ? ":honourable-play" : ""}`,
+    version: `${config.version}+federation:${packVersion}:${winPoints}/${drawPoints}/${lossPoints}/${forfeitLossPoints ?? "loss"}${disciplineWeights ? ":honourable-play" : ""}${deleteIncomplete ? ":incomplete-deleted" : ""}`,
     winPoints,
     drawPoints,
     lossPoints,
     ...(forfeitLossPoints === undefined ? {} : { forfeitLossPoints }),
     ...(disciplineWeights ? { disciplineWeights } : {}),
+    // BWF GCR 16.2.5: a player or pair who cannot complete all their group matches has all their results deleted.
+    ...(deleteIncomplete ? { incompleteEntryResults: "delete_all" as const } : {}),
   };
 }

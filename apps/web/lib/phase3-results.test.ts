@@ -210,6 +210,17 @@ describe("Phase 3 results boundary", () => {
     });
   });
 
+  it("keeps a badminton entry whose results were deleted, and rejects any other value for the mark", () => {
+    const deleted = { ...row(), status: "withdrawn", eligibleForAdvancement: false, resultsDeleted: true };
+    const withRows = (rows: unknown[]) => {
+      const value = snapshot();
+      value.standings.groups.division.rows = rows as ReturnType<typeof row>[];
+      return parseStandingsSnapshot(value, competitionId, divisionId);
+    };
+    expect(withRows([deleted])).toMatchObject({ groups: { division: { rows: [{ resultsDeleted: true }] } } });
+    expect(withRows([{ ...deleted, resultsDeleted: false }])).toBeNull();
+  });
+
   it("accepts only server recalculation receipts without arbitrary standings fields", () => {
     const parsed = parseRecalculationResponse(
       {
