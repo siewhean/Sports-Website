@@ -1,9 +1,11 @@
 import { notFound, redirect } from "next/navigation";
 import { OrganiserWorkspace } from "@/components/phase2/OrganiserWorkspace";
+import { RulesPage } from "@/components/phase3/RulesPage";
 import { SportSettingsEditor } from "@/components/phase3/SportSettingsEditor";
 import { phase2Copy } from "@/lib/phase2";
 import { getOrganiserCompetitionView } from "@/lib/phase2-organiser.server";
-import { getSportSettingsDocument } from "@/lib/phase3-sport-settings.server";
+import { getRulesHistory, getSportSettingsDocument } from "@/lib/phase3-sport-settings.server";
+import { redesignRulesEnabled } from "@/lib/redesign-rules.server";
 import { phase3SettingsCopy, phase3SettingsMachine, settingsSyncPresentation } from "@/lib/phase3-sport-settings";
 
 export default async function DivisionSettingsPage({
@@ -28,6 +30,8 @@ export default async function DivisionSettingsPage({
     previewState: query.state,
   });
   const sync = settingsSyncPresentation(document);
+  // Redesign Phase 4 (flag redesign_p4_rules): the grouped Rules page replaces the settings editor.
+  const rulesHistory = (await redesignRulesEnabled()) ? await getRulesHistory(competitionResult.competition.id) : null;
   return (
     <OrganiserWorkspace
       competition={competitionResult.competition}
@@ -39,11 +43,20 @@ export default async function DivisionSettingsPage({
       syncLabel={sync.label}
       syncState={sync.state}
       sectionContent={
-        <SportSettingsEditor
-          document={document}
-          competitionHref={`/organiser/competitions/${encodeURIComponent(id)}/settings`}
-          divisionHref={`/organiser/competitions/${encodeURIComponent(id)}/settings/divisions/${encodeURIComponent(divisionId)}`}
-        />
+        rulesHistory ? (
+          <RulesPage
+            history={rulesHistory}
+            document={document}
+            competitionHref={`/organiser/competitions/${encodeURIComponent(id)}/settings`}
+            divisionHref={`/organiser/competitions/${encodeURIComponent(id)}/settings/divisions/${encodeURIComponent(divisionId)}`}
+          />
+        ) : (
+          <SportSettingsEditor
+            document={document}
+            competitionHref={`/organiser/competitions/${encodeURIComponent(id)}/settings`}
+            divisionHref={`/organiser/competitions/${encodeURIComponent(id)}/settings/divisions/${encodeURIComponent(divisionId)}`}
+          />
+        )
       }
     />
   );

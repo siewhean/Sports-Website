@@ -1,0 +1,122 @@
+.rules-readonly {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--info-line);
+  border-radius: var(--radius-md);
+  background: var(--info-surface);
+  color: var(--info-ink);
+}
+
+.rules-form {
+  display: grid;
+  gap: 28px;
+  margin-top: 24px;
+}
+
+.rules-group {
+  display: grid;
+  min-width: 0;
+}
+
+.rules-group h3 {
+  margin: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-strong);
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+
+.rules-row {
+  display: grid;
+  min-width: 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.rules-row > * {
+  border-bottom: 0;
+}
+
+.rules-row > :first-child {
+  padding-bottom: 6px;
+}
+
+.rules-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  min-width: 0;
+  padding-bottom: 14px;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+
+.rules-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 1px 9px;
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius-full);
+  background: var(--warning-surface);
+  color: var(--warning-ink);
+  font-weight: 700;
+}
+
+.rules-tiebreaks {
+  padding: 16px 0 0;
+}
+
+.rules-tiebreaks h4 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+
+.rules-tiebreaks p {
+  margin: 0;
+  max-width: 70ch;
+}
+
+.rules-history {
+  margin-top: 36px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line-strong);
+}
+
+.rules-history h2 {
+  margin: 0 0 12px;
+  font-size: 1.15rem;
+}
+
+.rules-history ol {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rules-history ol > li {
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.rules-history ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.rules-history p {
+  margin: 0;
+}
+
+.rules-history__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
