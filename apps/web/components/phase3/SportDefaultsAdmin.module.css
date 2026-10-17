@@ -1,5 +1,5 @@
 .p3-admin {
-  --p3-line: #d1cec3;
+  --p3-line: var(--hairline);
   min-height: 100dvh;
   background: var(--canvas);
   color: var(--ink);
@@ -76,7 +76,7 @@
   grid-template-columns: auto 1fr;
   gap: 4px 12px;
   padding: 20px;
-  border: 1px solid #c59d37;
+  border: 1px solid var(--warning-line);
   background: var(--warning-surface);
 }
 
@@ -370,7 +370,7 @@
 
 @media (hover: hover) and (pointer: fine) {
   .p3-sport-tabs button:hover {
-    background: rgb(23 25 24 / 6%);
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
   }
 }
 

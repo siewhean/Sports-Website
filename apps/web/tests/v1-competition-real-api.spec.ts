@@ -223,20 +223,20 @@ test("browser completes and corrects a sixteen-team Canoe compact knockout", asy
   await dismissConsent(page);
   await expect(page.getByLabel("Organisation", { exact: true })).toHaveCount(0);
   await page.getByLabel("Competition name").fill("V1 Sixteen Team Knockout");
-  await page.getByLabel("Public address").fill(slug);
+  await page.getByLabel("Public address", { exact: true }).fill(slug);
   await page.getByLabel("Sport", { exact: true }).selectOption("canoe_polo");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Venue", exact: true })).toBeVisible();
-  await page.getByLabel("Venue name").fill("V1 Championship Arena");
+  await page.getByLabel("Venue name", { exact: true }).fill("V1 Championship Arena");
   await page.getByLabel("Address", { exact: true }).fill("8 Matchday Road");
   await page.getByLabel("City or locality (optional)").fill("Singapore");
-  await page.getByLabel("Country code").fill("SG");
+  await page.getByLabel("Country code", { exact: true }).fill("SG");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Dates and time" })).toBeVisible();
   await page.getByLabel("Start date").fill("2027-08-01");
-  await page.getByLabel("End date").fill("2027-08-02");
-  await page.getByLabel("Time zone").fill("Asia/Singapore");
-  await page.getByLabel("Locale").fill("en-SG");
+  await page.getByLabel("End date", { exact: true }).fill("2027-08-02");
+  await page.getByLabel("Time zone", { exact: true }).fill("Asia/Singapore");
+  await page.getByLabel("Locale", { exact: true }).fill("en-SG");
   const creationResponse = await submit(
     page,
     page.getByRole("button", { name: "Create competition" }),

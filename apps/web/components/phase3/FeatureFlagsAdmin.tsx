@@ -99,7 +99,7 @@ export function FeatureFlagsAdmin({ document }: { document: FeatureFlagAdminDocu
       <div className={styles["ff-admin"]}>
         <div className={styles["ff-admin__body"]}>
           <div className={`${styles["ff-card"]} ${styles["ff-state-card"]}`}>
-            <LockKey size={48} color="#c53030" className={styles["ff-state-icon"]} />
+            <LockKey size={48} className={`${styles["ff-state-icon"]} ${styles["ff-icon-danger"]}`} />
             <h2>{featureFlagAdminCopy.permissionTitle}</h2>
             <p>{featureFlagAdminCopy.permissionBody}</p>
           </div>
@@ -113,7 +113,7 @@ export function FeatureFlagsAdmin({ document }: { document: FeatureFlagAdminDocu
       <div className={styles["ff-admin"]}>
         <div className={styles["ff-admin__body"]}>
           <div className={`${styles["ff-card"]} ${styles["ff-state-card"]}`}>
-            <WarningCircle size={48} color="#c53030" className={styles["ff-state-icon"]} />
+            <WarningCircle size={48} className={`${styles["ff-state-icon"]} ${styles["ff-icon-danger"]}`} />
             <h2>
               {document.state === featureFlagAdminMachine.offline
                 ? featureFlagAdminCopy.offlineTitle
@@ -515,7 +515,7 @@ export function FeatureFlagsAdmin({ document }: { document: FeatureFlagAdminDocu
         <div className={styles["ff-modal-overlay"]}>
           <div className={styles["ff-modal"]}>
             <div className={styles["ff-modal-header"]}>
-              <ShieldWarning size={28} color="#b7791f" />
+              <ShieldWarning size={28} className={styles["ff-icon-warning"]} />
               <h3>{featureFlagAdminCopy.dangerousConfirmTitle}</h3>
             </div>
             <p>{featureFlagAdminCopy.dangerousConfirmWarning}</p>

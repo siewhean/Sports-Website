@@ -1,9 +1,9 @@
 import type { MetadataRoute } from "next";
-import { messages, opaqueId } from "@matchday/ui";
+import { designTokens, messages, opaqueId } from "@matchday/ui";
 
-// Brand tokens from globals.css: --ink (graphite) for browser chrome, dark-theme --canvas for the splash screen.
-const THEME_COLOR = "#171918";
-const BACKGROUND_COLOR = "#111513";
+// Dark is the default theme: browser chrome and splash screen both use the dark canvas.
+const THEME_COLOR = designTokens.themeColor.dark;
+const BACKGROUND_COLOR = designTokens.themeColor.dark;
 
 export default function manifest(): MetadataRoute.Manifest {
   return {

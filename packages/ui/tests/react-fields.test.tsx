@@ -55,6 +55,16 @@ describe("InfoTip", () => {
     expect(new Set(ids).size).toBe(2);
   });
 
+  it("uses a caller id for the popover so a field can stay described by a moved hint", () => {
+    const html = renderToStaticMarkup(
+      <InfoTip id="slug-hint" label="More about public address">
+        Lowercase letters only.
+      </InfoTip>,
+    );
+    expect(html).toContain('aria-controls="slug-hint"');
+    expect(html).toMatch(/<span[^>]*id="slug-hint"[^>]*role="note"[^>]*hidden=""/);
+  });
+
   it("toggles on activation and only closes on dismiss", () => {
     expect(infoTipReducer(false, "toggle")).toBe(true);
     expect(infoTipReducer(true, "toggle")).toBe(false);

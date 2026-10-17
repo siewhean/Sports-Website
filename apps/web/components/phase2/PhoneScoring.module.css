@@ -4,7 +4,7 @@
   width: min(100%, 1280px);
   min-width: 0;
   padding-bottom: max(2rem, env(safe-area-inset-bottom));
-  color: #f5f7f2;
+  color: var(--ink);
 }
 
 .matchHeader {
@@ -13,7 +13,7 @@
   z-index: 10;
   min-height: 62px;
   padding-block: 0.5rem;
-  background: var(--event-canvas);
+  background: var(--canvas);
 }
 .matchHeader p {
   font-size: 0.875rem;
@@ -25,10 +25,10 @@
   gap: 0.4rem;
   min-height: var(--touch-target-min);
   padding: 0.35rem 0.75rem;
-  border: 2px solid #4a4f4d;
+  border: 2px solid var(--line-strong);
   border-radius: 999px;
-  background: #171a19;
-  color: #f5f7f2;
+  background: var(--surface);
+  color: var(--ink);
   font-size: max(0.875rem, 14px);
 }
 .statusChip strong {
@@ -40,21 +40,21 @@
   height: 18px;
 }
 .statusChip[data-tone="ok"] {
-  border-color: #97bc0d;
+  border-color: var(--signal);
 }
 .statusChip[data-tone="busy"] {
   border-color: var(--info-line);
 }
 .statusChip[data-tone="warn"] {
-  border-color: #e9a410;
-  background: #2a2208;
+  border-color: var(--warning);
+  background: var(--warning-surface);
 }
 .statusChip[data-tone="blocked"] {
-  border-color: #e06b63;
-  background: #2a1210;
+  border-color: var(--danger);
+  background: var(--danger-surface);
 }
 .statusChip:focus-visible {
-  outline: 3px solid #e2fa77;
+  outline: 3px solid var(--focus);
   outline-offset: var(--focus-ring-offset);
 }
 
@@ -70,16 +70,16 @@
   gap: 0.25rem;
   min-width: 0;
   padding: 0.75rem;
-  border: 1px solid #444d43;
+  border: 1px solid var(--hairline);
   border-top-width: 6px;
   border-radius: 0.875rem;
-  background: #1a201b;
+  background: var(--surface);
 }
 .liveScoreSide[data-side="home"] {
-  border-top-color: #4f86f0;
+  border-top-color: var(--ink);
 }
 .liveScoreSide[data-side="away"] {
-  border-top-color: #dea700;
+  border-top-color: var(--line-strong);
 }
 .liveScoreSide span {
   min-width: 0;
@@ -88,14 +88,14 @@
   font-weight: 650;
 }
 .liveScoreSide strong {
-  color: #e2fa77;
+  color: var(--signal-text);
   font: 700 clamp(3.5rem, 18vw, 6rem) / 1 var(--font-mono, monospace);
   font-variant-numeric: tabular-nums;
 }
 .liveScoreSegment {
   grid-column: 1 / -1;
   margin: 0;
-  color: #d5ddca;
+  color: var(--ink-muted);
   font-family: var(--font-mono, monospace);
   font-size: 1rem;
 }
@@ -109,9 +109,9 @@
   gap: 0.75rem;
   margin-top: 0.75rem;
   padding: 0.5rem 0.5rem 0.5rem 1rem;
-  border: 1px solid var(--success-line);
+  border: 1px solid var(--signal-line);
   border-radius: 0.875rem;
-  background: #222b1a;
+  background: var(--signal-surface);
   font-size: 1rem;
 }
 .undoToast span {
@@ -123,16 +123,16 @@
   min-width: 96px;
   min-height: 56px;
   padding: 0 1rem;
-  border: 2px solid #e2fa77;
+  border: 2px solid var(--signal);
   border-radius: 0.75rem;
   background: transparent;
-  color: #e2fa77;
+  color: var(--signal-text);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
 }
 .undoToast button:focus-visible {
-  outline: 3px solid #e2fa77;
+  outline: 3px solid var(--focus);
   outline-offset: var(--focus-ring-offset);
 }
 .eventLog {
@@ -143,7 +143,7 @@
   display: grid;
   gap: 0.5rem;
   padding: 0.75rem clamp(1rem, 3vw, 2.5rem);
-  color: #d5ddca;
+  color: var(--ink-muted);
   font-size: 0.875rem;
 }
 .settings p {
@@ -164,7 +164,7 @@
 .reasonChips button {
   min-height: var(--touch-target-min);
   padding: 0 0.875rem;
-  border: 1px solid #667064;
+  border: 1px solid var(--field-border);
   border-radius: 999px;
   background: transparent;
   color: inherit;
@@ -172,37 +172,37 @@
   cursor: pointer;
 }
 .reasonChips button[aria-pressed="true"] {
-  border-color: #e2fa77;
-  background: #e2fa77;
-  color: var(--signal-ink);
+  border-color: var(--signal-bright);
+  background: var(--signal-bright);
+  color: var(--signal-bright-ink);
 }
 .reasonChips button:focus-visible {
-  outline: 3px solid #e2fa77;
+  outline: 3px solid var(--focus);
   outline-offset: var(--focus-ring-offset);
 }
 
-/* Glare mode: pure black and white, thicker edges, team hues kept but brightened. */
+/* Glare mode: pure black and white, thicker edges, sides told apart by name, no team hues. */
 .scoringPage[data-contrast="high"] {
-  background: #000000;
-  color: #ffffff;
+  background: var(--palette-black);
+  color: var(--palette-white);
 }
 .scoringPage[data-contrast="high"] .matchHeader {
-  background: #000000;
+  background: var(--palette-black);
 }
 .scoringPage[data-contrast="high"] .liveScoreSide,
 .scoringPage[data-contrast="high"] .statusChip {
-  border-color: #ffffff;
-  background: #000000;
-  color: #ffffff;
+  border-color: var(--palette-white);
+  background: var(--palette-black);
+  color: var(--palette-white);
 }
 .scoringPage[data-contrast="high"] .liveScoreSide strong {
-  color: #ffffff;
+  color: var(--palette-white);
 }
 .scoringPage[data-contrast="high"] .liveScoreSide[data-side="home"] {
-  border-top-color: var(--info-line);
+  border-top-color: var(--palette-white);
 }
 .scoringPage[data-contrast="high"] .liveScoreSide[data-side="away"] {
-  border-top-color: #ffe066;
+  border-top-color: var(--palette-white);
 }
 .matchHeader h1 {
   font-size: clamp(1.125rem, 4vw, 1.5rem);
@@ -245,7 +245,7 @@
 }
 .timeEntry small {
   grid-column: 1 / -1;
-  color: #d5ddca;
+  color: var(--ink-muted);
   font-size: 0.75rem;
 }
 

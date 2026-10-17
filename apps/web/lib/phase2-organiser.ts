@@ -346,7 +346,7 @@ export function toOrganiserCompetitionView(payload: OrganiserWorkspacePayload): 
   const updatedAt = competition.updated_at ?? publication?.updated_at ?? competition.created_at;
   const formatSummary: ReadonlyArray<readonly [string, string]> = payload.current_format
     ? [
-        ["Format revision", setting(payload.current_format.revision)],
+        ["Format version", setting(payload.current_format.revision)],
         ["Groups", setting(records(formatDefinition?.groups).length)],
         ["Matches", setting(formatMatches.length)],
         [

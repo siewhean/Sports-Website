@@ -97,9 +97,13 @@ export async function assertNoWcagAOrAaViolations(page: Page): Promise<void> {
   const initialScheme = await page.evaluate(() =>
     window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
   );
+  // Dark is the default theme (<html data-theme="dark">), so emulating the media query alone no longer switches
+  // themes: set the explicit choice too, exactly as the theme control does, and restore it afterwards.
+  const initialTheme = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
   try {
     for (const colorScheme of SCANNED_COLOR_SCHEMES) {
       await page.emulateMedia({ colorScheme });
+      await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), colorScheme);
       await waitForSettledAnimations(page);
       const results = await new AxeBuilder({ page })
         .options({
@@ -116,6 +120,10 @@ export async function assertNoWcagAOrAaViolations(page: Page): Promise<void> {
     }
   } finally {
     await page.emulateMedia({ colorScheme: initialScheme });
+    await page.evaluate((theme) => {
+      if (theme === null) document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.setAttribute("data-theme", theme);
+    }, initialTheme);
   }
   if (failures.length > 0) {
     throw new Error(`Found WCAG A/AA accessibility violations\n\n${failures.join("\n\n")}`);

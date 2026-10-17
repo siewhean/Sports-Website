@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { NumberField } from "@matchday/ui/react";
+import { messages } from "@matchday/ui";
+import { InfoTip, NumberField } from "@matchday/ui/react";
 import { useRouter } from "next/navigation";
 import {
   ArrowCounterClockwise,
@@ -330,8 +331,12 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
 
           <section>
             <p className={cx("p3-kicker")}>{phase3SettingsCopy.personal}</p>
-            <h2>{phase3SettingsCopy.personalTitle}</h2>
-            <p>{phase3SettingsCopy.personalBody}</p>
+            <div className="md-label-row md-label-row--heading">
+              <h2>{phase3SettingsCopy.personalTitle}</h2>
+              <InfoTip label={`${messages.organiser.moreAbout} ${phase3SettingsCopy.personalTitle.toLowerCase()}`}>
+                {phase3SettingsCopy.personalBody}
+              </InfoTip>
+            </div>
             <button
               className={cx("p3-button", "p3-button--secondary")}
               type="button"

@@ -16,14 +16,14 @@ test("unfinished competition creation survives navigation and reload", async ({ 
 
   // Step 0: fill name (auto-derives slug) and select sport to pass validation
   await page.getByLabel("Competition name").fill("Saved Draft Cup");
-  await page.getByLabel("Public address").fill("saved-draft-cup");
+  await page.getByLabel("Public address", { exact: true }).fill("saved-draft-cup");
   await page.getByLabel("Sport").selectOption("badminton");
 
   // Advance to step 1 (Venue)
   await page.getByRole("button", { name: "Continue" }).click();
 
   // Step 1: Venue
-  await page.getByLabel("Venue name").fill("Draft Arena");
+  await page.getByLabel("Venue name", { exact: true }).fill("Draft Arena");
 
   // Navigate away and back (route mock persists in this page context)
   await page.goto("/");
@@ -31,16 +31,16 @@ test("unfinished competition creation survives navigation and reload", async ({ 
 
   // Should restore step 0 fields immediately
   await expect(page.getByLabel("Competition name")).toHaveValue("Saved Draft Cup");
-  await expect(page.getByLabel("Public address")).toHaveValue("saved-draft-cup");
+  await expect(page.getByLabel("Public address", { exact: true })).toHaveValue("saved-draft-cup");
 
   // Advance to step 1 and verify venue persisted
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByLabel("Venue name")).toHaveValue("Draft Arena");
+  await expect(page.getByLabel("Venue name", { exact: true })).toHaveValue("Draft Arena");
 
   // Navigate to step 0, reload, verify step 0 fields still present
   await page.getByRole("button", { name: "Back" }).click();
   await page.reload();
 
   await expect(page.getByLabel("Competition name")).toHaveValue("Saved Draft Cup");
-  await expect(page.getByLabel("Public address")).toHaveValue("saved-draft-cup");
+  await expect(page.getByLabel("Public address", { exact: true })).toHaveValue("saved-draft-cup");
 });

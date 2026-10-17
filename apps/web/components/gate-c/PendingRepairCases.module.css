@@ -49,10 +49,10 @@
 .panel button {
   min-height: 2.75rem;
   padding: 0.65rem 0.85rem;
-  border: 1px solid #176b45;
+  border: 1px solid var(--signal);
   border-radius: 0.65rem;
-  background: #176b45;
-  color: #fff;
+  background: var(--signal);
+  color: var(--signal-ink);
   font: inherit;
   font-weight: 750;
   cursor: pointer;
@@ -65,7 +65,7 @@
 
 .error {
   padding: 0.75rem;
-  border: 1px solid #b42318;
+  border: 1px solid var(--danger-line);
   border-radius: 0.65rem;
   background: var(--danger-surface);
   color: var(--danger-ink);

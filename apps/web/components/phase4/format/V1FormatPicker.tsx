@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { ArrowRight, Check, CheckCircle, WarningCircle } from "@phosphor-icons/react";
 import type { Phase4SetupDocument } from "@matchday/contracts";
-import { opaqueId, translate as t } from "@matchday/ui";
+import { messages, opaqueId, translate as t } from "@matchday/ui";
+import { InfoTip } from "@matchday/ui/react";
 import {
   fittingV1Recommendations,
   parseV1FormatApplication,
@@ -245,10 +246,14 @@ export function V1FormatPicker({
     <section className={styles.workspace} aria-labelledby="v1-format-picker-heading" data-testid="v1-format-picker">
       <header className={styles.heading}>
         <p className={styles.eyebrow}>{copy.format}</p>
-        <h2 ref={headingRef} id="v1-format-picker-heading" tabIndex={-1}>
-          {copy.pickerTitle}
-        </h2>
-        <p>{copy.pickerBody}</p>
+        <div className="md-label-row md-label-row--heading">
+          <h2 ref={headingRef} id="v1-format-picker-heading" tabIndex={-1}>
+            {copy.pickerTitle}
+          </h2>
+          <InfoTip label={`${messages.organiser.moreAbout} ${copy.pickerTitle.toLowerCase()}`}>
+            {copy.pickerBody}
+          </InfoTip>
+        </div>
       </header>
 
       <div className={styles.readyBar}>
@@ -283,8 +288,12 @@ export function V1FormatPicker({
         <div>
           <div className={styles.optionsHeader}>
             <div>
-              <h3>{copy.availableFormats}</h3>
-              <p>{copy.availableFormatsBody}</p>
+              <div className="md-label-row md-label-row--heading">
+                <h3>{copy.availableFormats}</h3>
+                <InfoTip label={`${messages.organiser.moreAbout} ${copy.availableFormats.toLowerCase()}`}>
+                  {copy.availableFormatsBody}
+                </InfoTip>
+              </div>
             </div>
           </div>
           <ol className={styles.optionList}>

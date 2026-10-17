@@ -42,7 +42,7 @@ test("@a11y capacity status and lossless source editor meet WCAG A/AA requiremen
   await page.goto("/organiser/competitions/singapore-open/capacity");
   await dismissConsent(page);
   await expect(page.getByRole("heading", { level: 1, name: "Capacity" })).toBeVisible();
-  await expect(page.getByText("Capacity revision")).toBeVisible();
+  await expect(page.getByText("Capacity version")).toBeVisible();
   await assertNoWcagAOrAaViolations(page);
 });
 

@@ -29,7 +29,8 @@ export function MarketingHome({
       </a>
       <SiteHeader viewer={viewer} />
       <main id="main-content" tabIndex={-1}>
-        <section className={styles.hero} aria-labelledby="home-title">
+        {/* The hero sits on a dark venue illustration, so it keeps dark tokens in every theme. */}
+        <section className={`${styles.hero} theme-dark`} aria-labelledby="home-title">
           <div className={styles.heroCopy}>
             <p className={styles.eyebrow}>{messages.home.eyebrow}</p>
             <h1 id="home-title">

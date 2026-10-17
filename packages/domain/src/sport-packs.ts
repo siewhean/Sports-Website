@@ -1839,6 +1839,21 @@ export const SPORT_PACKS: Readonly<Record<SportId, SportPack>> = deepFreeze({
   basketball: BASKETBALL_SPORT_PACK,
 });
 
+/** What a sport calls its playing area, for plain labels ("Pitch 1", "Courts"). Not part of the versioned pack. */
+export type PlayingAreaNoun = "pitch" | "court" | "table";
+
+const PLAYING_AREA_NOUNS: Readonly<Record<SportId, PlayingAreaNoun>> = Object.freeze({
+  canoe_polo: "pitch",
+  badminton: "court",
+  table_tennis: "table",
+  volleyball: "court",
+  basketball: "court",
+});
+
+export function playingAreaNoun(sportId: SportId): PlayingAreaNoun {
+  return PLAYING_AREA_NOUNS[sportId];
+}
+
 function effectiveSettings(base: SportPackSettings, override: SportPackOverride): SportPackSettings {
   return frozenClone({ ...base, ...override });
 }
@@ -2127,5 +2142,144 @@ export function createSportPackRegistry(packs: readonly SportPack[]): SportPackR
 export function resolveSportPack(registry: SportPackRegistry, sportId: SportId, version: string): SportPack {
   const pack = registry.resolve(sportId, version);
   if (!pack) throw new Error(`Unknown sport pack ${sportId}@${version}`);
+  return pack;
+}
+
+/*
+ * Redesign Phase 4: federation-based packs. Each sport gets pack `1.0.0`, built from the federation rules
+ * cited in `federation-defaults.ts`; badminton also gets `1.1.0` (the 3×15 scoring system). The draft packs
+ * above stay registered for existing competitions, and `SPORT_PACKS` keeps pointing at them until the
+ * `redesign_p4_rules` rollout (new competitions move to these packs only after checkpoint F-1 and owner
+ * approval). Values that are not federation rules (match slot, scorecard options) are carried over unchanged.
+ */
+export const FEDERATION_SPORT_PACK_VERSION = "1.0.0" as const;
+export const BADMINTON_3X15_SPORT_PACK_VERSION = "1.1.0" as const;
+/** BWF 3×15 scoring applies to competitions that start on or after this date (owner decision D34). */
+export const BADMINTON_3X15_EFFECTIVE_FROM = "2027-01-04" as const;
+
+const intervalMinutes = (label: string) => integer(label, 0, 30);
+
+export const CANOE_POLO_FEDERATION_SPORT_PACK = definePack({
+  ...CANOE_POLO_SPORT_PACK,
+  version: FEDERATION_SPORT_PACK_VERSION,
+  matchStructure: {
+    kind: "timed_periods",
+    regulationSegments: 2,
+    segmentDurationMinutes: 10,
+    overtimeDurationMinutes: 5,
+    successiveOvertime: true,
+  },
+  forfeit: { ...CANOE_POLO_SPORT_PACK.forfeit, winnerScore: 7, loserScore: 0 },
+  settingsSchema: {
+    ...CANOE_POLO_SPORT_PACK.settingsSchema,
+    periodDurationMinutes: integer("Period length (minutes)", 1, 60),
+    intervalMinutes: intervalMinutes("Half-time (minutes)"),
+    overtimeBreakMinutes: intervalMinutes("Break before overtime (minutes)"),
+    overtimeDurationMinutes: integer("Overtime period (minutes)", 1, 30),
+    goldenGoal: bool("First goal in overtime wins"),
+    shotClockSeconds: integer("Shot clock (seconds)", 10, 120, true),
+    timeoutsPerTeam: integer("Team timeouts per match", 0, 5),
+    playersOnField: integer("Players on the water", 1, 10),
+    rosterMax: integer("Players in a squad", 1, 30),
+  },
+  recommendedSettings: {
+    ...CANOE_POLO_SPORT_PACK.recommendedSettings,
+    timeoutsEnabled: false,
+    forfeitWinnerScore: 7,
+    forfeitLoserScore: 0,
+    periodDurationMinutes: 10,
+    intervalMinutes: 3,
+    overtimeBreakMinutes: 3,
+    overtimeDurationMinutes: 5,
+    goldenGoal: true,
+    shotClockSeconds: 60,
+    timeoutsPerTeam: 0,
+    playersOnField: 5,
+    rosterMax: 8,
+  },
+});
+
+export const VOLLEYBALL_FEDERATION_SPORT_PACK = definePack({
+  ...VOLLEYBALL_SPORT_PACK,
+  version: FEDERATION_SPORT_PACK_VERSION,
+  matchStructure: {
+    kind: "best_of_segments",
+    regulationSegments: 5,
+    targetPoints: [25, 25, 25, 25, 15],
+    winBy: 2,
+    pointCap: null,
+  },
+  // FIVB default: the team that defaults loses 0-3, each set 0-25.
+  forfeit: { ...VOLLEYBALL_SPORT_PACK.forfeit, winnerScore: 25, loserScore: 0, awardedSegments: 3 },
+  recommendedSlotMinutes: 90,
+  settingsSchema: {
+    ...VOLLEYBALL_SPORT_PACK.settingsSchema,
+    timeoutsPerSet: integer("Team timeouts per set", 0, 5),
+    timeoutSeconds: integer("Timeout length (seconds)", 10, 120),
+    substitutionsPerSet: integer("Substitutions per set", 0, 20),
+    setIntervalMinutes: intervalMinutes("Break between sets (minutes)"),
+  },
+  recommendedSettings: {
+    ...VOLLEYBALL_SPORT_PACK.recommendedSettings,
+    bestOf: 5,
+    slotMinutes: 90,
+    timeoutsPerSet: 2,
+    timeoutSeconds: 30,
+    substitutionsPerSet: 6,
+    setIntervalMinutes: 3,
+  },
+});
+
+export const BASKETBALL_FEDERATION_SPORT_PACK = definePack({
+  ...BASKETBALL_SPORT_PACK,
+  version: FEDERATION_SPORT_PACK_VERSION,
+});
+
+export const TABLE_TENNIS_FEDERATION_SPORT_PACK = definePack({
+  ...TABLE_TENNIS_SPORT_PACK,
+  version: FEDERATION_SPORT_PACK_VERSION,
+});
+
+export const BADMINTON_FEDERATION_SPORT_PACK = definePack({
+  ...BADMINTON_SPORT_PACK,
+  version: FEDERATION_SPORT_PACK_VERSION,
+});
+
+export const BADMINTON_3X15_SPORT_PACK = definePack({
+  ...BADMINTON_SPORT_PACK,
+  version: BADMINTON_3X15_SPORT_PACK_VERSION,
+  matchStructure: { ...BADMINTON_SPORT_PACK.matchStructure, targetPoints: [15, 15, 15], winBy: 2, pointCap: 21 },
+  forfeit: { ...BADMINTON_SPORT_PACK.forfeit, winnerScore: 15, loserScore: 0 },
+  recommendedSettings: {
+    ...BADMINTON_SPORT_PACK.recommendedSettings,
+    regularTargetPoints: 15,
+    pointCap: 21,
+    forfeitWinnerScore: 15,
+    forfeitLoserScore: 0,
+  },
+});
+
+/** Every federation-based pack, newest last. Not yet the default for new competitions (see above). */
+export const FEDERATION_SPORT_PACKS: readonly SportPack[] = Object.freeze([
+  CANOE_POLO_FEDERATION_SPORT_PACK,
+  BADMINTON_FEDERATION_SPORT_PACK,
+  BADMINTON_3X15_SPORT_PACK,
+  TABLE_TENNIS_FEDERATION_SPORT_PACK,
+  VOLLEYBALL_FEDERATION_SPORT_PACK,
+  BASKETBALL_FEDERATION_SPORT_PACK,
+]);
+
+/**
+ * The federation pack a new competition should start from, chosen by its start date (`YYYY-MM-DD`, the
+ * competition's own calendar date). Only badminton changes by date today.
+ */
+export function federationSportPackFor(sportId: SportId, startDate: string): SportPack {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(startDate)) throw new Error("startDate must be YYYY-MM-DD");
+  if (sportId === "badminton")
+    return startDate >= BADMINTON_3X15_EFFECTIVE_FROM ? BADMINTON_3X15_SPORT_PACK : BADMINTON_FEDERATION_SPORT_PACK;
+  const pack = FEDERATION_SPORT_PACKS.find(
+    (candidate) => candidate.sportId === sportId && candidate.version === FEDERATION_SPORT_PACK_VERSION,
+  );
+  if (!pack) throw new Error(`No federation pack for ${sportId}`);
   return pack;
 }

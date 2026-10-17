@@ -74,3 +74,79 @@ test("@a11y number fields drop leading zeros and show no spin buttons", async ({
   await expect(reserve).toHaveValue("10");
   expect(await page.locator('main input[type="number"]').count()).toBe(0);
 });
+
+const touchProjects = new Set(["tablet-webkit", "phone-webkit", "phone-chromium"]);
+
+test("@a11y info tips open on mouse hover, stay open over the popover, close after leaving", async ({
+  page,
+}, testInfo) => {
+  test.skip(touchProjects.has(testInfo.project.name), "Hover is a fine-pointer behaviour; touch projects tap.");
+  await page.goto("/organiser/competitions/singapore-open/capacity");
+  await dismissConsent(page);
+
+  const button = page.getByRole("button", { name: slotLength }).first();
+  const popover = page.getByText(slotExplanation).first();
+  const heading = page.getByRole("heading", { name: "Capacity", level: 1 });
+
+  await button.hover();
+  await expect(popover).toBeVisible();
+  await expect(button).toHaveAttribute("aria-expanded", "true");
+
+  // Moving the mouse from the (i) into the popover keeps it open.
+  await popover.hover();
+  await page.waitForTimeout(500);
+  await expect(popover).toBeVisible();
+
+  // Leaving the tip closes it after the close delay.
+  await heading.hover();
+  await expect(popover).toBeHidden();
+  await expect(button).toHaveAttribute("aria-expanded", "false");
+
+  // A click after hovering pins it open rather than toggling it shut.
+  await button.hover();
+  await expect(popover).toBeVisible();
+  await button.click();
+  await expect(popover).toBeVisible();
+  await heading.hover();
+  await page.waitForTimeout(500);
+  await expect(popover).toBeVisible();
+  // A second click closes the pinned tip.
+  await button.click();
+  await expect(popover).toBeHidden();
+});
+
+test("@a11y info tips toggle on tap for touch devices", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.use.hasTouch, "Tap needs a touch-enabled project.");
+  await page.goto("/organiser/competitions/singapore-open/capacity");
+  await dismissConsent(page);
+
+  const button = page.getByRole("button", { name: slotLength }).first();
+  const popover = page.getByText(slotExplanation).first();
+  await button.tap();
+  await expect(popover).toBeVisible();
+  await expect(button).toHaveAttribute("aria-expanded", "true");
+  await button.tap();
+  await expect(popover).toBeHidden();
+  await expect(button).toHaveAttribute("aria-expanded", "false");
+});
+
+test("@a11y info tips toggle with Enter and Space and Escape returns focus", async ({ page }) => {
+  await page.goto("/organiser/competitions/singapore-open/capacity");
+  await dismissConsent(page);
+
+  const button = page.getByRole("button", { name: slotLength }).first();
+  const popover = page.getByText(slotExplanation).first();
+  await button.focus();
+
+  await page.keyboard.press("Enter");
+  await expect(popover).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(popover).toBeHidden();
+
+  await page.keyboard.press("Space");
+  await expect(popover).toBeVisible();
+  await expect(button).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(popover).toBeHidden();
+  await expect(button).toBeFocused();
+});

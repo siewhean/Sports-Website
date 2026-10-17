@@ -6,6 +6,7 @@ import { ConsentManager } from "@/components/foundation/ConsentManager";
 import { ServiceWorkerRegistration } from "@/components/foundation/ServiceWorkerRegistration";
 import { resolveSeoOrigin } from "@/lib/public-origin";
 import { messages, opaqueId } from "@matchday/ui";
+import { DEFAULT_THEME, themeBootstrapScript, themeColorFor } from "@/lib/theme";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -31,17 +32,28 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
+// Dark is the default theme; the pre-paint script in <head> retargets this meta for a saved Light/Same-as-device choice.
 export const viewport: Viewport = {
-  themeColor: "#171918",
+  themeColor: themeColorFor(DEFAULT_THEME),
 };
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   // Reading the proxy-provided nonce opts every route into request-time rendering, allowing Next to apply the
   // per-request nonce to framework bootstrap and inline RSC payload scripts (see the CSP note in proxy.ts).
-  await headers();
+  const nonce = (await headers()).get(opaqueId("x-nonce")) ?? undefined;
   // The next/font variables live on <html> so the :root --font-sans / --font-mono tokens can resolve them.
+  // data-theme is always the default on the server (public documents are identical for every visitor); the
+  // blocking script applies a saved choice before first paint, hence suppressHydrationWarning on <html>.
   return (
-    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
+    <html
+      lang="en"
+      className={`${GeistSans.variable} ${GeistMono.variable}`}
+      data-theme={DEFAULT_THEME}
+      suppressHydrationWarning
+    >
+      <head>
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeBootstrapScript() }} />
+      </head>
       <body>
         {children}
         <ConsentManager />

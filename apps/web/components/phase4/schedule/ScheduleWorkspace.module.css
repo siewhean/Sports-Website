@@ -3,8 +3,8 @@
   --schedule-muted: var(--ink-muted);
   --schedule-line: var(--hairline);
   --schedule-paper: var(--canvas);
-  --schedule-signal: #b7dc22;
-  --schedule-signal-dark: var(--success-ink);
+  --schedule-signal: var(--signal);
+  --schedule-signal-dark: var(--signal-text);
   display: grid;
   gap: 1.15rem;
   color: var(--schedule-ink);
@@ -66,7 +66,7 @@
 
 .statusRail[data-tone="danger"],
 .commandError {
-  border-color: #c98d83;
+  border-color: var(--danger-line);
   color: var(--danger-ink);
 }
 
@@ -453,7 +453,7 @@
 }
 
 .matchBlock[data-conflict="true"] {
-  border-color: #c9473a;
+  border-color: var(--danger);
 }
 
 .matchBlock span,
@@ -905,7 +905,7 @@
   }
 
   .semanticTimeline li[data-conflict="true"] {
-    box-shadow: inset 3px 0 #c9473a;
+    box-shadow: inset 3px 0 var(--danger);
     padding-left: 0.7rem;
   }
 
