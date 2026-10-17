@@ -1,4 +1,4 @@
-import type { StandingsEngineConfig, StandingsMatchResult } from "@matchday/domain";
+import { disciplinePointsFromActions, type StandingsEngineConfig, type StandingsMatchResult } from "@matchday/domain";
 
 export type PersistedStandingsResultRow = {
   match_id: string;
@@ -13,6 +13,7 @@ export type PersistedStandingsResultRow = {
 
 type CanonicalSnapshot = {
   segments?: Array<{ home?: number; away?: number }>;
+  actions?: Array<{ eventType?: unknown; side?: unknown; reversed?: unknown }>;
   totalPoints?: { home?: number; away?: number };
   exceptionalOutcome?: string | null;
   winner?: "home" | "away" | null;
@@ -74,6 +75,11 @@ export function standingsResultFromSnapshot(
   const homeWonForfeit = forfeit && snapshot.winner === "home";
   const forfeitHomeSegments = homeWonForfeit ? config.forfeitScore.homeSegments : config.forfeitScore.awaySegments;
   const forfeitAwaySegments = homeWonForfeit ? config.forfeitScore.awaySegments : config.forfeitScore.homeSegments;
+  // Federation packs with honourable play count each finalised match's cards; other packs leave discipline out.
+  const discipline =
+    config.disciplineWeights && Array.isArray(snapshot.actions)
+      ? disciplinePointsFromActions(snapshot.actions, config.disciplineWeights)
+      : null;
   return {
     matchId: row.match_id,
     homeEntryId: row.home_entry_id,
@@ -96,6 +102,7 @@ export function standingsResultFromSnapshot(
       : forfeitHomeSegments && forfeitAwaySegments
         ? { homeSegments: forfeitHomeSegments, awaySegments: forfeitAwaySegments }
         : {}),
+    ...(discipline ? { homeDisciplinePoints: discipline.home, awayDisciplinePoints: discipline.away } : {}),
     status: forfeit ? ("forfeit" as const) : row.state,
     ...(forfeit
       ? {

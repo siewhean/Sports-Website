@@ -3,6 +3,7 @@ import {
   SPORT_PACKS,
   STANDINGS_SPORT_PACKS,
   applyAutomaticAdvancement,
+  applyFederationStandingsRules,
   applyWithdrawalPolicy,
   calculateCalendarCapacity,
   calculateStandings,
@@ -17,6 +18,7 @@ import {
   type CalendarCapacityInput,
   type FormatGraph,
   type SportPack,
+  type SportPackSettings,
   type SportId,
   type ConfigurableStandingsRow,
   type AdvancementRule,
@@ -160,7 +162,9 @@ export const phase3DomainAdapter = {
         set_difference: "segment_difference",
         set_ratio: "segment_ratio",
         point_ratio: "score_ratio",
+        game_ratio: "segment_ratio",
         head_to_head: "head_to_head",
+        head_to_head_two_way: "head_to_head_two_way",
         discipline: "discipline",
         seed: "seed",
       })[value] as StandingsEngineConfig["criteria"][number] | undefined;
@@ -174,7 +178,7 @@ export const phase3DomainAdapter = {
           .map(metric)
           .filter((value): value is StandingsEngineConfig["criteria"][number] => value !== undefined)
       : [];
-    return {
+    const config: StandingsEngineConfig = {
       ...base,
       version: `${pack.version}:${this.hash(effective)}`,
       winPoints: Number(effective.winPoints ?? base.winPoints),
@@ -194,6 +198,8 @@ export const phase3DomainAdapter = {
           : {}),
       },
     };
+    // Federation packs bring their classification-points scheme and honourable play; draft packs are unchanged.
+    return applyFederationStandingsRules(config, pack.sportId, pack.version, effective as SportPackSettings);
   },
   calculateStandings(
     entries: readonly StandingsParticipant[],

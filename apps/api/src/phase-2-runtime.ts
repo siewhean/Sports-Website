@@ -10,6 +10,7 @@ import type {
 import {
   SPORT_PACKS,
   STANDINGS_SPORT_PACKS,
+  applyFederationStandingsRules,
   isRegisteredSportPackVersion,
   registeredSportPack,
   assertFiveSportScoreCommandAllowed,
@@ -257,12 +258,20 @@ const STANDINGS_CRITERION_ALIASES: Readonly<Record<string, StandingsEngineConfig
   points_for: "score_for",
   set_ratio: "segment_ratio",
   point_ratio: "score_ratio",
+  game_ratio: "segment_ratio",
   head_to_head: "head_to_head",
+  head_to_head_two_way: "head_to_head_two_way",
   discipline: "discipline",
   seed: "seed",
 };
 
-function effectiveStandingsConfig(sportId: SportId, settings: SportPackSettings) {
+function effectiveStandingsConfig(sportId: SportId, settings: SportPackSettings, packVersion?: string | null) {
+  const config = draftStandingsConfig(sportId, settings);
+  // Federation packs bring their classification-points scheme and honourable play; draft packs are unchanged.
+  return packVersion ? applyFederationStandingsRules(config, sportId, packVersion, settings) : config;
+}
+
+function draftStandingsConfig(sportId: SportId, settings: SportPackSettings) {
   const base = STANDINGS_SPORT_PACKS[sportId];
   const configuredOrder = Array.isArray(settings.standingsOrder)
     ? settings.standingsOrder
@@ -5164,9 +5173,9 @@ export class Phase2Runtime {
     }
     const results = await this.resultsForDivision(tx, divisionId, resultVersion);
     const effectiveSettings = required(
-      await tx.unsafe<{ settings: SportPackSettings | string }>(
+      await tx.unsafe<{ settings: SportPackSettings | string; pack_version: string | null }>(
         `SELECT settings.recommended_snapshot || settings.settings_override ||
-                COALESCE(division.settings_override,'{}'::jsonb) AS settings
+                COALESCE(division.settings_override,'{}'::jsonb) AS settings,settings.pack_version
          FROM competition_sport_settings settings
          LEFT JOIN division_sport_settings division
            ON division.competition_id=settings.competition_id AND division.division_id=$2
@@ -5182,6 +5191,7 @@ export class Phase2Runtime {
     const standingsConfig = effectiveStandingsConfig(
       sport.sport_code,
       jsonValue<SportPackSettings>(effectiveSettings.settings),
+      effectiveSettings.pack_version,
     );
     const genericResults = await tx.unsafe<{
       match_id: string;

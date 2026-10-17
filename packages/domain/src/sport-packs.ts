@@ -2230,24 +2230,122 @@ export const VOLLEYBALL_FEDERATION_SPORT_PACK = definePack({
   },
 });
 
+/*
+ * Standings for the federation packs (redesign Phase 4). Basketball (FIBA) and table tennis (ITTF) rank groups by
+ * classification points, 2 for a win, 1 for a loss and 0 for a forfeit (owner decision D29), with the result between
+ * the tied entries first. Badminton (BWF) uses that result only for a two-way tie. These standings rules are not yet
+ * cited in `federation-defaults.ts`; they are secondary-source values awaiting checkpoint F-1 like the rest of those
+ * sports, so the Rules page shows them without a federation citation until the table cites them.
+ */
+const classificationPointsSchema = {
+  winPoints: integer("Points for a win", 0, 20),
+  lossPoints: integer("Points for a loss", 0, 20),
+  forfeitLossPoints: integer("Points for a forfeit", 0, 20),
+} as const;
+const twoOneZero = { winPoints: 2, lossPoints: 1, forfeitLossPoints: 0 } as const;
+
+const basketballFederationOrder = ["points", "head_to_head", "point_difference", "points_for"] as const;
 export const BASKETBALL_FEDERATION_SPORT_PACK = definePack({
   ...BASKETBALL_SPORT_PACK,
   version: FEDERATION_SPORT_PACK_VERSION,
+  standings: {
+    ...BASKETBALL_SPORT_PACK.standings,
+    points: { win: 2, draw: 1, loss: 1 }, // No draws in these sports; the validator needs win ≥ draw ≥ loss.
+    defaultOrder: basketballFederationOrder,
+    availableCriteria: [
+      criterion("points", "Classification points"),
+      ...BASKETBALL_SPORT_PACK.standings.availableCriteria,
+    ],
+  },
+  settingsSchema: {
+    ...BASKETBALL_SPORT_PACK.settingsSchema,
+    ...classificationPointsSchema,
+    standingsOrder: ordered("Standings order", [
+      "points",
+      "wins",
+      "head_to_head",
+      "point_difference",
+      "points_for",
+      "seed",
+    ]),
+  },
+  recommendedSettings: {
+    ...BASKETBALL_SPORT_PACK.recommendedSettings,
+    ...twoOneZero,
+    standingsOrder: basketballFederationOrder,
+  },
 });
 
+const tableTennisFederationOrder = ["points", "head_to_head", "game_ratio", "point_ratio"] as const;
 export const TABLE_TENNIS_FEDERATION_SPORT_PACK = definePack({
   ...TABLE_TENNIS_SPORT_PACK,
   version: FEDERATION_SPORT_PACK_VERSION,
+  standings: {
+    ...TABLE_TENNIS_SPORT_PACK.standings,
+    points: { win: 2, draw: 1, loss: 1 }, // No draws in these sports; the validator needs win ≥ draw ≥ loss.
+    defaultOrder: tableTennisFederationOrder,
+    availableCriteria: [
+      criterion("points", "Match points"),
+      ...TABLE_TENNIS_SPORT_PACK.standings.availableCriteria,
+      criterion("game_ratio", "Game ratio", "higher", "infinity_when_numerator_positive"),
+      criterion("point_ratio", "Point ratio", "higher", "infinity_when_numerator_positive"),
+    ],
+  },
+  settingsSchema: {
+    ...TABLE_TENNIS_SPORT_PACK.settingsSchema,
+    ...classificationPointsSchema,
+    standingsOrder: ordered("Standings order", [
+      "points",
+      "match_wins",
+      "head_to_head",
+      "game_ratio",
+      "point_ratio",
+      "game_difference",
+      "point_difference",
+      "seed",
+    ]),
+  },
+  recommendedSettings: {
+    ...TABLE_TENNIS_SPORT_PACK.recommendedSettings,
+    ...twoOneZero,
+    standingsOrder: tableTennisFederationOrder,
+  },
 });
+
+const badmintonFederationOrder = ["match_wins", "head_to_head_two_way", "game_difference", "point_difference"] as const;
+const badmintonFederationStandings = {
+  ...BADMINTON_SPORT_PACK.standings,
+  defaultOrder: badmintonFederationOrder,
+  availableCriteria: [
+    ...BADMINTON_SPORT_PACK.standings.availableCriteria,
+    criterion("head_to_head_two_way", "Head-to-head (two-way tie)", "resolution"),
+  ],
+} as const;
+const badmintonFederationSchema = {
+  ...BADMINTON_SPORT_PACK.settingsSchema,
+  standingsOrder: ordered("Standings order", [
+    "match_wins",
+    "head_to_head_two_way",
+    "game_difference",
+    "point_difference",
+    "head_to_head",
+    "seed",
+  ]),
+} as const;
 
 export const BADMINTON_FEDERATION_SPORT_PACK = definePack({
   ...BADMINTON_SPORT_PACK,
   version: FEDERATION_SPORT_PACK_VERSION,
+  standings: badmintonFederationStandings,
+  settingsSchema: badmintonFederationSchema,
+  recommendedSettings: { ...BADMINTON_SPORT_PACK.recommendedSettings, standingsOrder: badmintonFederationOrder },
 });
 
 export const BADMINTON_3X15_SPORT_PACK = definePack({
   ...BADMINTON_SPORT_PACK,
   version: BADMINTON_3X15_SPORT_PACK_VERSION,
+  standings: badmintonFederationStandings,
+  settingsSchema: badmintonFederationSchema,
   matchStructure: { ...BADMINTON_SPORT_PACK.matchStructure, targetPoints: [15, 15, 15], winBy: 2, pointCap: 21 },
   forfeit: { ...BADMINTON_SPORT_PACK.forfeit, winnerScore: 15, loserScore: 0 },
   recommendedSettings: {
@@ -2256,6 +2354,7 @@ export const BADMINTON_3X15_SPORT_PACK = definePack({
     pointCap: 21,
     forfeitWinnerScore: 15,
     forfeitLoserScore: 0,
+    standingsOrder: badmintonFederationOrder,
   },
 });
 

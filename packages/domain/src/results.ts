@@ -395,6 +395,7 @@ export type StandingsMetric =
   | "segment_ratio"
   | "score_ratio"
   | "head_to_head"
+  | "head_to_head_two_way"
   | "discipline"
   | "seed";
 
@@ -438,6 +439,16 @@ export type StandingsEngineConfig = {
   terminalFallback: "seed_then_entry_id" | "entry_id" | "unresolved";
   forfeitScore: ForfeitScore;
   withdrawalPolicy: "completed_results_stand" | "void_all_results";
+  /**
+   * Classification points for the team that forfeits (redesign Phase 4: FIBA and ITTF give 0, not the loss
+   * points). Absent means a forfeit loss earns `lossPoints`, as before.
+   */
+  forfeitLossPoints?: number;
+  /**
+   * Points per card type for the `discipline` criterion, counted from each finalised match's card events
+   * (redesign Phase 4: ICF honourable play). Absent means discipline points come only from generated results.
+   */
+  disciplineWeights?: Readonly<Record<string, number>>;
 };
 
 function freezeStandingsConfig(config: StandingsEngineConfig): StandingsEngineConfig {
@@ -575,6 +586,7 @@ function validateEngineConfig(config: StandingsEngineConfig): void {
     ["winPoints", config.winPoints],
     ["drawPoints", config.drawPoints],
     ["lossPoints", config.lossPoints],
+    ...(config.forfeitLossPoints === undefined ? [] : ([["forfeitLossPoints", config.forfeitLossPoints]] as const)),
   ] as const) {
     assertNonNegativeInteger(value, label);
   }
@@ -677,6 +689,15 @@ function matchOutcome(result: StandingsMatchResult, config: StandingsEngineConfi
   return "draw";
 }
 
+/** Classification points a losing entry earns: `forfeitLossPoints` when it forfeited and the config sets one. */
+function losingPoints(result: StandingsMatchResult, loserEntryId: string, config: StandingsEngineConfig): number {
+  return result.status === "forfeit" &&
+    result.forfeitLoserEntryId === loserEntryId &&
+    config.forfeitLossPoints !== undefined
+    ? config.forfeitLossPoints
+    : config.lossPoints;
+}
+
 function safeAdd(left: number, right: number, label: string): number {
   const result = left + right;
   if (!Number.isSafeInteger(result)) throw new Error(`${label} exceeds the safe integer range`);
@@ -707,12 +728,12 @@ function addResultToRows(
     home.won += 1;
     away.lost += 1;
     home.tablePoints += config.winPoints;
-    away.tablePoints += config.lossPoints;
+    away.tablePoints += losingPoints(result, away.entryId, config);
   } else if (outcome === "away") {
     away.won += 1;
     home.lost += 1;
     away.tablePoints += config.winPoints;
-    home.tablePoints += config.lossPoints;
+    home.tablePoints += losingPoints(result, home.entryId, config);
   } else {
     home.drawn += 1;
     away.drawn += 1;
@@ -795,7 +816,7 @@ function headToHeadValue(
     const won = (isHome && outcome === "home") || (isAway && outcome === "away");
     const drawn = outcome === "draw";
     if (config.headToHeadMetric === "match_wins") value += won ? 1 : 0;
-    else value += won ? config.winPoints : drawn ? config.drawPoints : config.lossPoints;
+    else value += won ? config.winPoints : drawn ? config.drawPoints : losingPoints(result, row.entryId, config);
   }
   return { kind: "integer", value };
 }
@@ -824,6 +845,9 @@ function metricValue(
       return { kind: "rational", value: rational(row.scoreFor, row.scoreAgainst) };
     case "head_to_head":
       return headToHeadValue(row, scope, results, config);
+    case "head_to_head_two_way":
+      // BWF: the result between the two tied entries decides only a two-way tie; larger ties skip it.
+      return scope.length === 2 ? headToHeadValue(row, scope, results, config) : { kind: "integer", value: 0 };
     case "discipline":
       return { kind: "integer", value: row.disciplinePoints };
     case "seed":
@@ -849,9 +873,11 @@ function refineTiedGroups(
         value: displayRankedValue(value),
         comparedWithinEntryIds: scopeIds,
         summary:
-          criterion === "head_to_head"
+          criterion === "head_to_head" || (criterion === "head_to_head_two_way" && group.length === 2)
             ? `${config.headToHeadMetric.replaceAll("_", " ")} from matches only among the tied entries`
-            : `${criterion.replaceAll("_", " ")}: ${String(displayRankedValue(value))}`,
+            : criterion === "head_to_head_two_way"
+              ? "head to head applies only to a two-way tie; skipped"
+              : `${criterion.replaceAll("_", " ")}: ${String(displayRankedValue(value))}`,
       });
       const bucket = buckets.get(valueKey(value));
       if (bucket) bucket.rows.push(row);

@@ -216,6 +216,8 @@ const criterionWords: Readonly<Record<string, string>> = {
   set_ratio: "best set ratio",
   point_ratio: "best point ratio",
   head_to_head: "result between the tied teams",
+  head_to_head_two_way: "result between the two when exactly two are level",
+  game_ratio: "best game ratio",
   discipline: "fewest cards",
   seed: "higher seed",
 };
