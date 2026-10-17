@@ -1,5 +1,6 @@
 import {
-  SPORT_PACKS,
+  isRegisteredSportPackVersion,
+  registeredSportPack,
   assertValidSportSettings,
   type MatchEventDefinition,
   type ScorecardComponent,
@@ -161,8 +162,12 @@ function segmentOptions(pack: SportPack, settings: SportPackSettings): readonly 
 export function buildFiveSportScorecardDefinition(
   sportId: SportId,
   settingsOverride?: SportPackSettings,
+  packVersion?: string | null | undefined,
 ): FiveSportScorecardDefinition {
-  const pack = SPORT_PACKS[sportId];
+  const pack = registeredSportPack(
+    sportId,
+    packVersion && isRegisteredSportPackVersion(sportId, packVersion) ? packVersion : undefined,
+  );
   const settings = effectiveSettings(pack, settingsOverride);
   const controls = pack.eventTypes
     .filter((event) => !LIFECYCLE_EVENTS.has(event.id))

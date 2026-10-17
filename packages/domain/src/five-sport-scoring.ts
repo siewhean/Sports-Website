@@ -1,6 +1,6 @@
 import {
-  SPORT_PACKS,
   assertValidSportSettings,
+  registeredSportPack,
   type SportId,
   type SportPack,
   type SportPackSettings,
@@ -631,9 +631,12 @@ export function reduceFiveSportScoreEvents(
   sportId: SportId,
   events: readonly FiveSportScoreEvent[],
   settingsOverride?: SportPackSettings,
-  options?: { readonly historicalSegmentEventIds?: ReadonlySet<string> },
+  options?: {
+    readonly historicalSegmentEventIds?: ReadonlySet<string>;
+    readonly packVersion?: string | null | undefined;
+  },
 ): FiveSportScoreState {
-  const pack = SPORT_PACKS[sportId];
+  const pack = registeredSportPack(sportId, options?.packVersion);
   const settings = mergedSettings(pack, settingsOverride);
   const state: MutableState = {
     sportId,

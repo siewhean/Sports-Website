@@ -1,5 +1,5 @@
 import {
-  SPORT_PACKS,
+  registeredSportPack,
   assertValidSportSettings,
   type MatchEventDefinition,
   type SportId,
@@ -153,8 +153,9 @@ export function assertFiveSportScoreCommandAllowed(
   sportId: SportId,
   command: FiveSportScoreCommand,
   settingsOverride?: SportPackSettings,
+  packVersion?: string | null | undefined,
 ): void {
-  const pack = SPORT_PACKS[sportId];
+  const pack = registeredSportPack(sportId, packVersion);
   const settings = effectiveSettings(pack, settingsOverride);
   const definition = definitionFor(pack, command.type);
 

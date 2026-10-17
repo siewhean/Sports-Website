@@ -2283,3 +2283,29 @@ export function federationSportPackFor(sportId: SportId, startDate: string): Spo
   if (!pack) throw new Error(`No federation pack for ${sportId}`);
   return pack;
 }
+
+/**
+ * Every pack version a competition may be on: the draft packs (`0.1.0-draft.1`) and the federation packs
+ * (`1.0.0`, badminton `1.1.0`). The scoring runtime and pack lookups accept any version listed here for the
+ * competition's sport; a competition keeps the version it was created with.
+ */
+export const SPORT_PACK_REGISTRY: SportPackRegistry = createSportPackRegistry([
+  ...Object.values(SPORT_PACKS),
+  ...FEDERATION_SPORT_PACKS,
+]);
+
+/** True when `version` is a registered pack version for the sport. */
+export function isRegisteredSportPackVersion(sportId: SportId, version: string): boolean {
+  return SPORT_PACK_REGISTRY.has(sportId, version);
+}
+
+/**
+ * The registered pack for a sport and version. Without a version it is the sport's draft pack, which is what
+ * every caller used before multi-version support, so existing competitions behave exactly as before.
+ */
+export function registeredSportPack(sportId: SportId, version?: string | null): SportPack {
+  const draft = SPORT_PACKS[sportId];
+  if (!draft) throw new Error(`Unknown sport ${String(sportId)}`);
+  if (version === undefined || version === null || version === draft.version) return draft;
+  return resolveSportPack(SPORT_PACK_REGISTRY, sportId, version);
+}

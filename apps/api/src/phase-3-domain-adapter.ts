@@ -8,6 +8,7 @@ import {
   calculateStandings,
   compareAcrossGroups,
   competitionDomain,
+  federationSportPackFor,
   createStandingsSnapshot,
   resolveCalendarCapacityWindows,
   validateSportPack,
@@ -53,6 +54,10 @@ export const phase3DomainAdapter = {
   },
   sportPack(sport: SportId) {
     return SPORT_PACKS[sport];
+  },
+  /** Redesign Phase 4: the federation pack for a new competition, by its start date (D34). */
+  federationSportPack(sport: SportId, startsOn: string) {
+    return federationSportPackFor(sport, startsOn);
   },
   validateSportPack(value: unknown) {
     return validateSportPack(value);

@@ -10,6 +10,8 @@ import type {
 import {
   SPORT_PACKS,
   STANDINGS_SPORT_PACKS,
+  isRegisteredSportPackVersion,
+  registeredSportPack,
   assertFiveSportScoreCommandAllowed,
   calculateStandings,
   DEFAULT_LIVE_MATCH_STALE_AFTER_MS,
@@ -451,6 +453,15 @@ type CanonicalScoringContext = {
 
 function date(value: Date | string): Date {
   return value instanceof Date ? value : new Date(value);
+}
+
+/**
+ * The pack version the scoring reducer should use for a competition. A registered version (draft or federation)
+ * is used as is; anything else falls back to the sport's draft pack, as before multi-version support, and is
+ * then rejected by the score-stream checks.
+ */
+function scoringPackVersion(sportId: SportId, packVersion: string | null | undefined): string | undefined {
+  return packVersion && isRegisteredSportPackVersion(sportId, packVersion) ? packVersion : undefined;
 }
 
 // Command-shape rules (missing team_slot, participant_id, reason, ...) are
@@ -3025,8 +3036,9 @@ export class Phase2Runtime {
       ),
       "Match scoring settings not found",
     );
-    const pack = SPORT_PACKS[row.sport_code];
-    if (!pack) throw new ApiError(409, ErrorCode.SPORT_PACK_UNSUPPORTED, "The competition sport is not supported");
+    if (!SPORT_PACKS[row.sport_code])
+      throw new ApiError(409, ErrorCode.SPORT_PACK_UNSUPPORTED, "The competition sport is not supported");
+    const pack = registeredSportPack(row.sport_code, scoringPackVersion(row.sport_code, row.pack_version));
     if (!row.pack_version || (row.division_pack_version && row.division_pack_version !== row.pack_version)) {
       throw new ApiError(
         409,
@@ -3049,6 +3061,7 @@ export class Phase2Runtime {
           occurredAt: this.now().toISOString(),
         },
         settings,
+        scoringPackVersion(row.sport_code, row.pack_version),
       );
     } catch (error) {
       throw new ApiError(
@@ -3157,11 +3170,11 @@ export class Phase2Runtime {
     ) {
       throw new ApiError(409, ErrorCode.SCORING_STREAM_CONTEXT_MISMATCH, "The match scoring stream context is invalid");
     }
-    if (stream.pack_version !== SPORT_PACKS[stream.sport_code].version) {
+    if (!isRegisteredSportPackVersion(stream.sport_code, stream.pack_version)) {
       throw new ApiError(
         409,
         ErrorCode.SPORT_PACK_VERSION_UNSUPPORTED,
-        `Score stream pack ${stream.pack_version} is not supported by reducer ${SPORT_PACKS[stream.sport_code].version}`,
+        `Score stream pack ${stream.pack_version} is not a registered ${stream.sport_code} pack version`,
       );
     }
     return {
@@ -3237,11 +3250,11 @@ export class Phase2Runtime {
         "The score stream settings fingerprint is invalid",
       );
     }
-    if (stream.pack_version !== SPORT_PACKS[stream.sport_code].version) {
+    if (!isRegisteredSportPackVersion(stream.sport_code, stream.pack_version)) {
       throw new ApiError(
         409,
         ErrorCode.SPORT_PACK_VERSION_UNSUPPORTED,
-        `Score stream pack ${stream.pack_version} is not supported by reducer ${SPORT_PACKS[stream.sport_code].version}`,
+        `Score stream pack ${stream.pack_version} is not a registered ${stream.sport_code} pack version`,
       );
     }
     const events = await this.canonicalScoreEvents(tx, matchId);
@@ -3265,7 +3278,9 @@ export class Phase2Runtime {
     }
     let state: FiveSportScoreState;
     try {
-      state = reduceFiveSportScoreEvents(stream.sport_code, events, settings);
+      state = reduceFiveSportScoreEvents(stream.sport_code, events, settings, {
+        packVersion: scoringPackVersion(stream.sport_code, stream.pack_version),
+      });
       if (hasLegacyCorrection) {
         const legacy = required(
           await tx.unsafe<{ home_score: number; away_score: number }>(
@@ -3397,7 +3412,12 @@ export class Phase2Runtime {
             "This historical corrected result is readable but cannot accept canonical score events",
           );
         }
-        assertScoreCommandAllowed(context.sport_code, command, context.settings);
+        assertScoreCommandAllowed(
+          context.sport_code,
+          command,
+          context.settings,
+          scoringPackVersion(context.sport_code, context.pack_version),
+        );
         const fingerprint = stableHash(wireScoreCommand(command));
         const duplicateRow = historyRows.find((r) => r.client_event_id === command.clientEventId);
         if (duplicateRow) {
@@ -3463,7 +3483,9 @@ export class Phase2Runtime {
         });
         let reduced: ReturnType<typeof reduceFiveSportScoreEvents>;
         try {
-          reduced = reduceFiveSportScoreEvents(context.sport_code, [...existing, event], context.settings);
+          reduced = reduceFiveSportScoreEvents(context.sport_code, [...existing, event], context.settings, {
+            packVersion: scoringPackVersion(context.sport_code, context.pack_version),
+          });
         } catch (error) {
           throw new ApiError(
             422,
@@ -4377,6 +4399,7 @@ export class Phase2Runtime {
             canonical.context.sport_code,
             [...canonical.events, event],
             canonical.context.settings,
+            { packVersion: scoringPackVersion(canonical.context.sport_code, canonical.context.pack_version) },
           );
         } catch (error) {
           throw new ApiError(
@@ -4570,6 +4593,7 @@ export class Phase2Runtime {
           canonical.context.sport_code,
           [...canonical.events, event],
           canonical.context.settings,
+          { packVersion: scoringPackVersion(canonical.context.sport_code, canonical.context.pack_version) },
         );
       } catch (error) {
         throw new ApiError(
@@ -4719,7 +4743,12 @@ export class Phase2Runtime {
         );
       }
       for (const command of commands) {
-        assertScoreCommandAllowed(canonical.context.sport_code, command, canonical.context.settings);
+        assertScoreCommandAllowed(
+          canonical.context.sport_code,
+          command,
+          canonical.context.settings,
+          scoringPackVersion(canonical.context.sport_code, canonical.context.pack_version),
+        );
       }
       const explicitlyReopened = match.state === "in_progress" && canonical.events.at(-1)?.type === "match_reopened";
       if (!["final", "corrected"].includes(match.state) && !explicitlyReopened) {
@@ -4793,7 +4822,9 @@ export class Phase2Runtime {
       }
       let state: FiveSportScoreState;
       try {
-        state = reduceFiveSportScoreEvents(canonical.context.sport_code, logicalEvents, canonical.context.settings);
+        state = reduceFiveSportScoreEvents(canonical.context.sport_code, logicalEvents, canonical.context.settings, {
+          packVersion: scoringPackVersion(canonical.context.sport_code, canonical.context.pack_version),
+        });
       } catch (error) {
         throw new ApiError(
           422,
@@ -6045,7 +6076,10 @@ export class Phase2Runtime {
           })();
       const currentContext = canonical ? canonical.context : await this.canonicalScoringContext(tx, session.match_id);
       const canonicalState =
-        canonical?.state ?? reduceFiveSportScoreEvents(currentContext.sport_code, [], currentContext.settings);
+        canonical?.state ??
+        reduceFiveSportScoreEvents(currentContext.sport_code, [], currentContext.settings, {
+          packVersion: scoringPackVersion(currentContext.sport_code, currentContext.pack_version),
+        });
       const writerActive =
         session.mode === "writer" &&
         session.lease_session_id === session.id &&

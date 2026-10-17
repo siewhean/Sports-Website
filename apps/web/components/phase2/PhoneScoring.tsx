@@ -344,7 +344,9 @@ export function PhoneScoring({
       const previousState = writerStateRef.current;
       setCompetitionSlug(session.competitionSlug);
       setCompetitionName(session.competitionName ?? session.competitionSlug);
-      setScorecardDefinition(buildFiveSportScorecardDefinition(session.sportId, session.sportSettings));
+      setScorecardDefinition(
+        buildFiveSportScorecardDefinition(session.sportId, session.sportSettings, session.sportPackVersion),
+      );
       setAllowUnknownScorer(
         session.sportId === phase2Machine.canoePolo && session.sportSettings.allowUnknownScorer === true,
       );

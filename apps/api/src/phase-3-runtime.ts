@@ -16,6 +16,7 @@ import { ApiError, ErrorCode } from "./errors.js";
 import { resultWinnerEntryId, standingsResultFromSnapshot } from "./standings-results.js";
 import { assertDivisionInCompetition } from "./tenant-scope.js";
 import type { Phase3DomainAdapter } from "./phase-3-domain-adapter.js";
+import { isRedesignRulesEnabled } from "./feature-flags.js";
 import {
   CompetitionRepository,
   OrganisationRepository,
@@ -166,6 +167,11 @@ function expectDomain<T>(result: DomainCommandResult<T>): T {
   throw new ApiError(validation ? 422 : 409, result.error.code, result.error.message);
 }
 
+export type Phase3RuntimeOptions = Readonly<{
+  /** Redesign Phase 4 flag `redesign_p4_rules`: new competitions start from the federation packs. */
+  federationRulesEnabled?: () => Promise<boolean>;
+}>;
+
 export class Phase3Runtime {
   private readonly competitionRepo: CompetitionRepository;
   private readonly organisationRepo: OrganisationRepository;
@@ -180,6 +186,7 @@ export class Phase3Runtime {
     private readonly sql: PostgresJsSql,
     private readonly domain: Phase3DomainAdapter,
     private readonly now: () => Date = () => new Date(),
+    private readonly options: Phase3RuntimeOptions = {},
   ) {
     this.competitionRepo = new CompetitionRepository(sql);
     this.organisationRepo = new OrganisationRepository(sql);
@@ -335,6 +342,39 @@ export class Phase3Runtime {
       [sportCode, version],
     );
     return decodedJson(required(rows, "Sport pack version not found").definition);
+  }
+
+  /**
+   * The pack a new competition (or a draft that changes sport) starts from. With `redesign_p4_rules` on it is the
+   * federation pack effective on the start date (badminton 3×21 before 4 Jan 2027, 3×15 from then; D34),
+   * registered in `sport_pack_versions` as a non-active version; otherwise `fallback` (today's active pack).
+   */
+  private async startingSportPack(
+    tx: PostgresJsSql,
+    sportCode: Phase3SportCode,
+    startsOn: string,
+    fallback: () => Promise<SportPack>,
+  ): Promise<SportPack> {
+    const enabled = await (this.options.federationRulesEnabled ?? isRedesignRulesEnabled)();
+    if (!enabled) return fallback();
+    const pack = this.domain.federationSportPack(sportCode, startsOn);
+    const packHash = this.domain.hash(pack);
+    await tx.unsafe(
+      `INSERT INTO sport_pack_versions (sport_code,version,schema_version,definition,definition_hash)
+       VALUES ($1,$2,$3,$4::jsonb,$5) ON CONFLICT (sport_code,version) DO NOTHING`,
+      [sportCode, pack.version, pack.schemaVersion, pack, packHash],
+    );
+    const stored = required(
+      await tx.unsafe<{ definition_hash: string }>(
+        `SELECT definition_hash FROM sport_pack_versions WHERE sport_code=$1 AND version=$2`,
+        [sportCode, pack.version],
+      ),
+      "Sport pack version not found",
+    );
+    if (stored.definition_hash !== packHash) {
+      throw new ApiError(409, ErrorCode.SPORT_PACK_CORRUPT, "The stored federation sport pack does not match");
+    }
+    return pack;
   }
 
   private async currentSportPack(tx: PostgresJsSql, sportCode: Phase3SportCode, actor: Phase3Actor) {
@@ -647,13 +687,16 @@ export class Phase3Runtime {
       if (!result)
         throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Competition revision or lifecycle state is stale");
       if (input.action === "update" && patch.sportCode !== undefined && patch.sportCode !== current.sport) {
-        const pack = this.domain.sportPack(patch.sportCode);
-        const packHash = this.domain.hash(pack);
-        await tx.unsafe(
-          `INSERT INTO sport_pack_versions (sport_code,version,schema_version,definition,definition_hash)
-           VALUES ($1,$2,$3,$4::jsonb,$5) ON CONFLICT (sport_code,version) DO NOTHING`,
-          [patch.sportCode, pack.version, pack.schemaVersion, pack, packHash],
-        );
+        const sportCode = patch.sportCode;
+        const pack = await this.startingSportPack(tx, sportCode, patch.startsOn ?? current.startDate, async () => {
+          const draft = this.domain.sportPack(sportCode);
+          await tx.unsafe(
+            `INSERT INTO sport_pack_versions (sport_code,version,schema_version,definition,definition_hash)
+             VALUES ($1,$2,$3,$4::jsonb,$5) ON CONFLICT (sport_code,version) DO NOTHING`,
+            [sportCode, draft.version, draft.schemaVersion, draft, this.domain.hash(draft)],
+          );
+          return draft;
+        });
         await tx.unsafe(
           `UPDATE competition_sport_settings SET sport_code=$2,pack_version=$3,pack_schema_version=$4,
              recommended_snapshot=$5::jsonb,settings_override='{}'::jsonb,customised=false,
@@ -1541,8 +1584,12 @@ export class Phase3Runtime {
           this.context(actor),
         ),
       );
-      const activePack = await this.currentSportPack(tx, input.sportCode, actor);
-      const pack = activePack.pack;
+      const pack = await this.startingSportPack(
+        tx,
+        input.sportCode,
+        input.startsOn,
+        async () => (await this.currentSportPack(tx, input.sportCode, actor)).pack,
+      );
       const savedDefault = (
         await tx.unsafe<{ source_pack_version: string; settings: Record<string, unknown> }>(
           `SELECT source_pack_version,settings FROM account_sport_defaults WHERE account_id=$1 AND sport_code=$2`,

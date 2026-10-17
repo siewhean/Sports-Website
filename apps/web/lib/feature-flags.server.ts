@@ -9,6 +9,7 @@ import {
 const environmentKeys: Partial<Record<keyof typeof featureFlags, string>> = {
   "scoring.phase2-route": "MATCHDAY_FEATURE_SCORING_PHASE2_ROUTE",
   "organiser.redesign-shell": "MATCHDAY_FEATURE_ORGANISER_REDESIGN_SHELL",
+  "organiser.redesign-p4-rules": "MATCHDAY_FEATURE_REDESIGN_P4_RULES",
 };
 
 const environmentFlagReader: FeatureFlagReader = {
@@ -35,4 +36,9 @@ export async function isPhase2ScoringRouteEnabled(): Promise<boolean> {
 /** Redesign Phase 2 navigation shell. Off unless MATCHDAY_FEATURE_ORGANISER_REDESIGN_SHELL=true. */
 export async function isOrganiserRedesignShellEnabled(): Promise<boolean> {
   return (await evaluator.evaluate("organiser.redesign-shell")).value;
+}
+
+/** Redesign Phase 4 Rules page (redesign_p4_rules). Off unless MATCHDAY_FEATURE_REDESIGN_P4_RULES=true. */
+export async function isRedesignRulesEnabled(): Promise<boolean> {
+  return (await evaluator.evaluate("organiser.redesign-p4-rules")).value;
 }
