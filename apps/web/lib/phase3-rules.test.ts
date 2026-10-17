@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  BASKETBALL_FEDERATION_SPORT_PACK,
   CANOE_POLO_FEDERATION_SPORT_PACK,
   SPORT_PACKS,
+  TABLE_TENNIS_FEDERATION_SPORT_PACK,
   createCompetitionSportSettings,
 } from "@matchday/domain";
 import { isRedesignRulesEnabled } from "./feature-flags.server";
@@ -57,9 +57,9 @@ describe("Rules page rows (redesign Phase 4)", () => {
   });
 
   it("says when a federation rule is still to be verified", () => {
-    const pack = BASKETBALL_FEDERATION_SPORT_PACK;
-    const basketball = createCompetitionSportSettings(pack, "cmp_2").recommendedSnapshot;
-    expect(row(buildRulesGroups(pack, basketball, basketball), "periods")?.sourceText).toContain(
+    const pack = TABLE_TENNIS_FEDERATION_SPORT_PACK;
+    const tableTennis = createCompetitionSportSettings(pack, "cmp_2").recommendedSnapshot;
+    expect(row(buildRulesGroups(pack, tableTennis, tableTennis), "bestOf")?.sourceText).toContain(
       rulesCopy.notYetVerified,
     );
   });

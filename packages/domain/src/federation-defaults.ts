@@ -51,26 +51,37 @@ const fivb = (clause: string): RuleSource => ({
   verified: "primary",
 });
 
-const fiba = (verified: RuleVerification): RuleSource => ({
+const fiba = (clause: string): RuleSource => ({
   doc: "FIBA Official Basketball Rules",
-  edition: "2026 (effective 1 Oct 2026)",
-  url: "https://www.fiba.basketball/en/rules",
-  verified,
+  edition: "2026 v1.1 (effective 1 Oct 2026)",
+  clause,
+  url: "https://assets.fiba.basketball/image/upload/documents-corporate-fiba-official-rules-2026-v1-1.pdf",
+  verified: "primary",
 });
 
-const ittf = (verified: RuleVerification): RuleSource => ({
-  doc: "ITTF Handbook",
-  edition: "current",
-  url: "https://www.ittf.com/handbook/",
-  verified,
+// The ITTF Laws were only read in Table Tennis England's verbatim copy of the 2026 Statutes, so they stay
+// secondary until the ITTF's own text is checked.
+const ittf = (clause: string): RuleSource => ({
+  doc: "ITTF Statutes, Laws of Table Tennis",
+  edition: "2026 (54th edition)",
+  clause,
+  url: "https://documents.ittf.sport/sites/default/files/public/2026-02/2026_Statutes_v1_consolidated_clean.pdf",
+  verified: "secondary",
 });
 
-const bwf = (edition: string, verified: RuleVerification): RuleSource => ({
-  doc: "BWF Laws of Badminton and General Competition Regulations",
+// 3×21 was read in BWF Laws V2.1 (2023), not the current V5.0; 3×15 only in BWF's April 2026 announcements,
+// not the Laws V6.0 text. Both stay secondary until the current Laws are checked.
+const bwf = (edition: string, clause: string, url: string): RuleSource => ({
+  doc: "BWF Laws of Badminton",
   edition,
-  url: "https://corporate.bwfbadminton.com/statutes/",
-  verified,
+  clause,
+  url,
+  verified: "secondary",
 });
+
+const BWF_LAWS_3X21_URL =
+  "https://extranet.bwf.sport/docs/document-system/81/1466/1470/Section%204.1%20-%20Laws%20of%20Badminton%20-%2026%20April%202025%20V5.0%20(2)%20.pdf";
+const BWF_3X15_URL = "https://bwfbadminton.com/news-single/2026/04/26/key-changes-under-the-3x15-scoring-system";
 
 const rule = (
   setting: string,
@@ -80,11 +91,11 @@ const rule = (
   recordOnly = false,
 ): FederationRule => Object.freeze({ setting, group, value, source, ...(recordOnly ? { recordOnly } : {}) });
 
-const badmintonGames = (target: number, cap: number, edition: string): readonly FederationRule[] => [
-  rule("bestOf", "scoring", 3, bwf(edition, "secondary")),
-  rule("regularTargetPoints", "scoring", target, bwf(edition, "secondary")),
-  rule("winBy", "scoring", 2, bwf(edition, "secondary")),
-  rule("pointCap", "scoring", cap, bwf(edition, "secondary")),
+const badmintonGames = (target: number, cap: number, edition: string, url: string): readonly FederationRule[] => [
+  rule("bestOf", "scoring", 3, bwf(edition, "Law 7.1", url)),
+  rule("regularTargetPoints", "scoring", target, bwf(edition, "Law 7.2", url)),
+  rule("winBy", "scoring", 2, bwf(edition, "Law 7.4", url)),
+  rule("pointCap", "scoring", cap, bwf(edition, "Law 7.5", url)),
 ];
 
 const table: Readonly<Record<string, readonly FederationRule[]>> = {
@@ -119,21 +130,31 @@ const table: Readonly<Record<string, readonly FederationRule[]>> = {
     rule("forfeitLoserScore", "forfeits", 0, fivb("Rule 6.4 Default")),
   ],
   [`basketball@${FEDERATION_SPORT_PACK_VERSION}`]: [
-    rule("periods", "time", 4, fiba("unverified")),
-    rule("periodDurationMinutes", "time", 10, fiba("unverified")),
-    rule("overtimeDurationMinutes", "time", 5, fiba("unverified")),
-    rule("successiveOvertime", "time", true, fiba("unverified")),
-    rule("forfeitWinnerScore", "forfeits", 20, fiba("secondary")),
-    rule("forfeitLoserScore", "forfeits", 0, fiba("secondary")),
+    rule("periods", "time", 4, fiba("Art. 8.1 Playing time")),
+    rule("periodDurationMinutes", "time", 10, fiba("Art. 8.1 Playing time")),
+    rule("overtimeDurationMinutes", "time", 5, fiba("Art. 8.7 Overtime")),
+    rule("successiveOvertime", "time", true, fiba("Art. 8.7 Overtime")),
+    rule("forfeitWinnerScore", "forfeits", 20, fiba("Art. 20.2.1 Forfeit")),
+    rule("forfeitLoserScore", "forfeits", 0, fiba("Art. 20.2.1 Forfeit")),
   ],
   [`table_tennis@${FEDERATION_SPORT_PACK_VERSION}`]: [
-    rule("bestOf", "scoring", 5, ittf("secondary")),
-    rule("regularTargetPoints", "scoring", 11, ittf("unverified")),
-    rule("winBy", "scoring", 2, ittf("unverified")),
-    rule("pointCap", "scoring", null, ittf("unverified")),
+    rule("bestOf", "scoring", 5, ittf("Law 2.12.1 A match")),
+    rule("regularTargetPoints", "scoring", 11, ittf("Law 2.11.1 A game")),
+    rule("winBy", "scoring", 2, ittf("Law 2.11.1 A game")),
+    rule("pointCap", "scoring", null, ittf("Law 2.11.1 A game")),
   ],
-  [`badminton@${FEDERATION_SPORT_PACK_VERSION}`]: badmintonGames(21, 30, "3×21 scoring"),
-  [`badminton@${BADMINTON_3X15_SPORT_PACK_VERSION}`]: badmintonGames(15, 21, "3×15 scoring, from 4 Jan 2027"),
+  [`badminton@${FEDERATION_SPORT_PACK_VERSION}`]: badmintonGames(
+    21,
+    30,
+    "3×21 scoring (read in V2.1, 2023)",
+    BWF_LAWS_3X21_URL,
+  ),
+  [`badminton@${BADMINTON_3X15_SPORT_PACK_VERSION}`]: badmintonGames(
+    15,
+    21,
+    "3×15 scoring, from 4 Jan 2027 (BWF announcement)",
+    BWF_3X15_URL,
+  ),
 };
 
 export const FEDERATION_DEFAULTS: Readonly<Record<string, readonly FederationRule[]>> = Object.freeze(

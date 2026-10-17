@@ -53,9 +53,12 @@ describe("federation defaults (redesign Phase 4)", () => {
     const pending = rulesNeedingVerification();
     expect(pending.every(({ rule }) => rule.source.verified !== "primary")).toBe(true);
     const sports = new Set(pending.map(({ pack }) => pack.split("@")[0]));
-    expect([...sports].sort()).toEqual(["badminton", "basketball", "table_tennis"]);
-    // Canoe polo and volleyball are read from the federations' own documents.
-    expect(pending.some(({ pack }) => pack.startsWith("canoe_polo") || pack.startsWith("volleyball"))).toBe(false);
+    expect([...sports].sort()).toEqual(["badminton", "table_tennis"]);
+    // Canoe polo, volleyball and basketball are read from the federations' own documents.
+    expect(
+      pending.some(({ pack }) => ["canoe_polo", "volleyball", "basketball"].some((sport) => pack.startsWith(sport))),
+    ).toBe(false);
+    expect(pending.some(({ rule }) => rule.source.verified === "unverified")).toBe(false);
   });
 
   it("applies the federation corrections the plan calls for", () => {
