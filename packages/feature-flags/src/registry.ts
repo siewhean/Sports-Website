@@ -26,6 +26,10 @@ export const featureFlags = {
     false,
     "Redesign Phase 4 (redesign_p4_rules): new competitions start from the federation sport packs and organisers see the Rules page.",
   ),
+  "organiser.redesign-p5-cards": booleanFlag(
+    false,
+    "Redesign Phase 5 (redesign_p5_cards): format selection uses 3-card recommendation view with mini diagrams and fit status.",
+  ),
 } as const;
 
 export type MatchdayFeatureFlags = typeof featureFlags;

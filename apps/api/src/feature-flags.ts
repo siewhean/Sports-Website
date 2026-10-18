@@ -8,6 +8,7 @@ import {
 /** Global flags a deployment can switch with an environment variable ("true" or "false"), as in the web app. */
 const environmentKeys: Partial<Record<keyof typeof featureFlags, string>> = {
   "organiser.redesign-p4-rules": "MATCHDAY_FEATURE_REDESIGN_P4_RULES",
+  "organiser.redesign-p5-cards": "MATCHDAY_FEATURE_REDESIGN_P5_CARDS",
 };
 
 const environmentFlagReader: FeatureFlagReader = {
@@ -32,3 +33,15 @@ const evaluator = new FeatureFlagEvaluator({ registry: featureFlags, storage: en
 export async function isRedesignRulesEnabled(): Promise<boolean> {
   return (await evaluator.evaluate("organiser.redesign-p4-rules")).value;
 }
+
+export const isOrganiserRedesignP4RulesEnabled = isRedesignRulesEnabled;
+
+/**
+ * Redesign Phase 5 (`redesign_p5_cards`): format selection uses 3-card recommendation view.
+ * Off unless MATCHDAY_FEATURE_REDESIGN_P5_CARDS=true.
+ */
+export async function isRedesignP5CardsEnabled(): Promise<boolean> {
+  return (await evaluator.evaluate("organiser.redesign-p5-cards")).value;
+}
+
+export const isOrganiserRedesignP5CardsEnabled = isRedesignP5CardsEnabled;
