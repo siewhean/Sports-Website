@@ -244,6 +244,8 @@ describe("foundation migrations", () => {
         "0075_phase0_started_match_placements.sql",
         // 0076 redefines capacity/seed functions; keep it after 0075 like a fresh chain.
         "0076_daily_court_reserves.sql",
+        // 0078 redefines the 0076 seed function, which calls phase3_capacity_totals from 0076.
+        "0078_phase4_setup_seed_sport_pack_slot.sql",
       ] as const;
       const forwardMigrations = await Promise.all(
         forwardMigrationNames.map(async (name) => {
