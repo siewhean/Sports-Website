@@ -24,6 +24,12 @@ import styles from "./V1FormatPicker.module.css";
 
 type PickerState = "idle" | "loading" | "ready" | "applying" | "error";
 const readyByDefault: V1FormatReadiness = { ready: true, prerequisites: [] };
+// The subhead counts the cards actually shown: a recommendation set can hold fewer than three.
+function waysToRun(cardCount: number): string {
+  if (cardCount === 1) return opaqueId("Here is one way");
+  return cardCount === 2 ? opaqueId("Here are two ways") : opaqueId("Here are three ways");
+}
+
 const copy = {
   idle: opaqueId("idle"),
   loading: opaqueId("loading"),
@@ -73,13 +79,13 @@ const copy = {
   rulesSuggestion: opaqueId("Rules-based suggestion"),
   division: opaqueId("Division"),
   formatFor: (name: string) => opaqueId(`Format for ${name}`),
-  formatSubhead: (teamCount: number, availableSlots: number, otherDivisionsText: string) =>
+  formatSubhead: (teamCount: number, cardCount: number, availableSlots: number, otherDivisionsText: string) =>
     opaqueId(
-      `${teamCount} team${teamCount === 1 ? "" : "s"}. Here are three ways to run it, checked against your venue time (${availableSlots} match slots${otherDivisionsText}).`,
+      `${teamCount} team${teamCount === 1 ? "" : "s"}. ${waysToRun(cardCount)} to run it, checked against your venue time (${availableSlots} match slots${otherDivisionsText}).`,
     ),
-  formatSubheadUnknown: (availableSlots: number, otherDivisionsText: string) =>
+  formatSubheadUnknown: (cardCount: number, availableSlots: number, otherDivisionsText: string) =>
     opaqueId(
-      `Here are three ways to run your format, checked against your venue time (${availableSlots} match slots${otherDivisionsText}).`,
+      `${waysToRun(cardCount)} to run your format, checked against your venue time (${availableSlots} match slots${otherDivisionsText}).`,
     ),
   fitsVenueTime: opaqueId("Fits the venue time"),
   doesNotFit: opaqueId("Doesn’t fit"),
@@ -308,8 +314,13 @@ export function V1FormatPicker({
             </h1>
             <p>
               {activeDivision.entryCount !== undefined
-                ? copy.formatSubhead(activeDivision.entryCount, totalAvailableSlots, otherDivisionsText)
-                : copy.formatSubheadUnknown(totalAvailableSlots, otherDivisionsText)}
+                ? copy.formatSubhead(
+                    activeDivision.entryCount,
+                    candidates.length,
+                    totalAvailableSlots,
+                    otherDivisionsText,
+                  )
+                : copy.formatSubheadUnknown(candidates.length, totalAvailableSlots, otherDivisionsText)}
             </p>
           </div>
           {divisions && divisions.length > 1 ? (

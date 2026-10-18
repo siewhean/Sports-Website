@@ -65,6 +65,9 @@ test("Phase 5 format cards show the domain numbers and apply the chosen format",
   const container = page.getByTestId("v1-format-picker");
   await expect(container).toBeVisible();
   await expect(container.getByRole("heading", { level: 1, name: "Format for Open division" })).toBeVisible();
+  // The subhead counts the cards shown, and each division has exactly one tab.
+  await expect(container.getByText(/Here are two ways to run it/)).toBeVisible();
+  await expect(container.getByRole("button", { name: /^Open division/ })).toHaveCount(1);
 
   // The demo setup document holds two recommendations; the first is the saved choice.
   const cards = container.locator("article");
