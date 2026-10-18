@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { useModalFocusTrap } from "@/components/ui/useModalFocusTrap";
 import { InfoTip } from "@matchday/ui/react";
 import { useRouter } from "next/navigation";
 import { ArrowCounterClockwise, FloppyDisk, Warning } from "@phosphor-icons/react";
@@ -65,43 +66,9 @@ export function RulesPage({ document, history, competitionHref, divisionHref }: 
   const [commandError, setCommandError] = useState("");
   const [commandState, setCommandState] = useState<SportSettingsSurfaceState | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
-  const modalRef = useRef<HTMLDivElement>(null);
-  const modalTriggerRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    if (confirmDialog) {
-      modalTriggerRef.current = window.document.activeElement as HTMLElement | null;
-      const controls = modalRef.current?.querySelectorAll<HTMLElement>(
-        "button:not([disabled]), [tabindex]:not([tabindex='-1'])",
-      );
-      controls?.[0]?.focus();
-    } else {
-      modalTriggerRef.current?.focus();
-      modalTriggerRef.current = null;
-    }
-  }, [confirmDialog]);
-
-  function handleModalKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setConfirmDialog(null);
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const controls = Array.from(
-      modalRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), [tabindex]:not([tabindex='-1'])") ?? [],
-    );
-    const first = controls[0];
-    const last = controls.at(-1);
-    if (!first || !last) return;
-    if (event.shiftKey && window.document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && window.document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
+  const { modalRef, onKeyDown: handleModalKeyDown } = useModalFocusTrap(Boolean(confirmDialog), () =>
+    setConfirmDialog(null),
+  );
   const pack = document.packDefinition;
   const snapshot = document.recommended;
   const scopeBaseline = sportSettingsScopeBaseline(document);
@@ -369,6 +336,7 @@ export function RulesPage({ document, history, competitionHref, divisionHref }: 
           role="dialog"
           aria-modal="true"
           aria-labelledby="p3-confirm-title"
+          tabIndex={-1}
           onKeyDown={handleModalKeyDown}
         >
           <div className={editorStyles["p3-modal"]}>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useModalFocusTrap } from "@/components/ui/useModalFocusTrap";
 import { useRouter } from "next/navigation";
 import type { Phase4SetupDocument, Phase4SetupStepId, Phase4SetupStepValue } from "@matchday/contracts";
 import { opaqueId } from "@matchday/ui";
@@ -571,52 +572,20 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
       });
   }, [reloadSetupState, setViewState]);
 
-  const modalRef = useRef<HTMLDivElement>(null);
-  const modalTriggerRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    if (packOfferDialog) {
-      modalTriggerRef.current = window.document.activeElement as HTMLElement | null;
-      const controls = modalRef.current?.querySelectorAll<HTMLElement>(
-        "button:not([disabled]), [tabindex]:not([tabindex='-1'])",
-      );
-      controls?.[0]?.focus();
-    } else {
-      modalTriggerRef.current?.focus();
-      modalTriggerRef.current = null;
+  // Dismissing the offer (Escape) keeps the saved dates: put the server's dates back in the form.
+  const dismissPackOffer = useCallback(() => {
+    setPackOfferDialog(null);
+    const serverBasics = setupRef.current?.values?.basics;
+    const current = basicsRef.current;
+    if (serverBasics && current) {
+      setBasics({
+        ...current,
+        starts_on: serverBasics.starts_on,
+        ends_on: serverBasics.ends_on,
+      });
     }
-  }, [packOfferDialog]);
-
-  function handleModalKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setPackOfferDialog(null);
-      const serverBasics = setupRef.current?.values?.basics;
-      const current = basicsRef.current;
-      if (serverBasics && current) {
-        setBasics({
-          ...current,
-          starts_on: serverBasics.starts_on,
-          ends_on: serverBasics.ends_on,
-        });
-      }
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const controls = Array.from(
-      modalRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), [tabindex]:not([tabindex='-1'])") ?? [],
-    );
-    const first = controls[0];
-    const last = controls.at(-1);
-    if (!first || !last) return;
-    if (event.shiftKey && window.document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && window.document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
+  }, [setBasics]);
+  const { modalRef, onKeyDown: handleModalKeyDown } = useModalFocusTrap(Boolean(packOfferDialog), dismissPackOffer);
 
   const handleConfirmPackSwitch = useCallback(
     async (confirm: boolean) => {
@@ -691,6 +660,7 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
           role="dialog"
           aria-modal="true"
           aria-labelledby="pack-offer-title"
+          tabIndex={-1}
           onKeyDown={handleModalKeyDown}
         >
           <div className={styles.modal}>
