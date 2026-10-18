@@ -16,9 +16,23 @@ export function useModalFocusTrap<T extends HTMLElement = HTMLDivElement>(open: 
     onEscapeRef.current = onEscape;
   });
 
+  // The trigger is often disabled while its request runs, which drops focus to <body> before the dialog opens.
+  // Remember the last element focused outside the dialog so focus can still go back to it.
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    function remember(event: FocusEvent) {
+      const target = event.target;
+      if (target instanceof HTMLElement && !modalRef.current?.contains(target)) lastFocusedRef.current = target;
+    }
+    window.document.addEventListener("focusin", remember);
+    return () => window.document.removeEventListener("focusin", remember);
+  }, []);
+
   useEffect(() => {
     if (open) {
-      triggerRef.current = window.document.activeElement as HTMLElement | null;
+      const active = window.document.activeElement;
+      triggerRef.current =
+        active instanceof HTMLElement && active !== window.document.body ? active : lastFocusedRef.current;
       const container = modalRef.current;
       const first = container?.querySelector<HTMLElement>("button:not([disabled]), [tabindex]:not([tabindex='-1'])");
       (first ?? container)?.focus();
