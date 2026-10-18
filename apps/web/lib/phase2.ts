@@ -965,6 +965,7 @@ export const phase5FormatCardsCompetition: CompetitionView = {
   id: "cmp_sgopen_format_2026",
   slug: "singapore-open-format",
   name: "Singapore Open Format 2026",
+  division: { ...phase2Competition.division, id: "a641f08e-23de-4611-8893-01bfebf42684" },
   divisions: [
     {
       id: "a641f08e-23de-4611-8893-01bfebf42684",
