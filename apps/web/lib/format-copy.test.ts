@@ -66,6 +66,22 @@ describe("format-copy", () => {
       label: "Double chance",
       isBest: false,
     });
+    expect(formatRecommendationRibbon("championship_focus", 3, true)).toEqual({
+      label: "Shorter finals",
+      isBest: false,
+    });
+  });
+
+  it("never repeats a ribbon across the cards of one recommendation set", () => {
+    // The speed priority puts Compact knockout and Championship focus side by side.
+    for (const order of [
+      ["compact_knockout", "double_elimination", "championship_focus"],
+      ["championship_focus", "round_robin", "compact_knockout"],
+      ["full_placement", "double_elimination", "championship_focus"],
+    ]) {
+      const labels = order.map((strategy, index) => formatRecommendationRibbon(strategy, index + 1, true).label);
+      expect(new Set(labels).size).toBe(labels.length);
+    }
   });
 
   it("produces descriptive titles matching groups of 4 domain generation", () => {

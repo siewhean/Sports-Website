@@ -7,6 +7,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
 }));
 
+import { FormatPreviewDiagram } from "../../components/phase4/format/FormatPreviewDiagram";
 import { V1FormatPicker } from "../../components/phase4/format/V1FormatPicker";
 
 function mockRecommendation(overrides: Partial<Phase4SetupRecommendation>): Phase4SetupRecommendation {
@@ -159,7 +160,7 @@ describe("Phase 5 format recommendation cards rendering", () => {
 
     // 3. Strategy ribbons
     expect(html).toContain("Best balance");
-    expect(html).toContain("Shortest day");
+    expect(html).toContain("Shorter finals");
     expect(html).toContain("Most games");
 
     // 4. Descriptive titles matching groups of 4 domain generation
@@ -212,5 +213,26 @@ describe("Phase 5 format recommendation cards rendering", () => {
     expect(html).not.toContain("Best balance");
     expect(html).not.toContain("Something else in mind?");
     expect(html).toContain('data-testid="v1-format-picker"');
+  });
+});
+
+describe("Phase 5 format preview diagram", () => {
+  it.each(["championship_focus", "full_placement"])("draws the domain's groups of four for %s", (strategy) => {
+    const sixteen = renderToString(React.createElement(FormatPreviewDiagram, { strategy, entryCount: 16 }));
+    expect(sixteen).toContain("D · 4");
+    expect(sixteen).not.toContain("more");
+
+    // 24 teams are six groups of four: three drawn rows plus a row counting the other three.
+    const twentyFour = renderToString(React.createElement(FormatPreviewDiagram, { strategy, entryCount: 24 }));
+    expect(twentyFour).toContain("A · 4");
+    expect(twentyFour).toContain("+3 more");
+    expect(twentyFour).toContain('aria-label="6 groups of four');
+    expect(twentyFour).not.toContain("· 6");
+  });
+
+  it("keeps the round-robin leader bar at full strength", () => {
+    const html = renderToString(React.createElement(FormatPreviewDiagram, { strategy: "round_robin" }));
+    expect(html).not.toMatch(/<g[^>]*opacity="0.4"[^>]*><rect[^>]*var\(--signal\)/);
+    expect(html).toContain('fill="var(--signal)"');
   });
 });

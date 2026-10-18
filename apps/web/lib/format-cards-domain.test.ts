@@ -9,7 +9,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { V1FormatPicker } from "../components/phase4/format/V1FormatPicker";
-import { detectFormatFamily, formatDescriptiveTitle, formatFitStatus, formatRecommendationRibbon } from "./format-copy";
+import { detectFormatFamily, formatFitStatus, formatRecommendationRibbon } from "./format-copy";
 
 const sports = ["canoe_polo", "badminton", "table_tennis", "volleyball", "basketball"] as const;
 
@@ -73,7 +73,11 @@ describe("Phase 5 format card metrics alignment with domain output", () => {
       }),
     );
 
-    for (let i = 0; i < result.recommendations.length; i++) {
+    // Each card is checked on its own markup, so a number shown on another card cannot satisfy it.
+    const cardHtml = html.split("<article").slice(1);
+    expect(cardHtml).toHaveLength(Math.min(result.recommendations.length, 3));
+
+    cardHtml.forEach((card, i) => {
       const candidate = result.recommendations[i]!;
       const divisionFormat = candidate.divisions[0]!;
       const family = detectFormatFamily({
@@ -89,19 +93,23 @@ describe("Phase 5 format card metrics alignment with domain output", () => {
         warning_codes: candidate.warningCodes,
       });
       const ribbon = formatRecommendationRibbon(family, i + 1, fit.fits);
-      const title = formatDescriptiveTitle(family, 12);
 
-      // Verify rendered card numbers equal domain output
-      expect(html).toContain(`<dd>${divisionFormat.matchCount}</dd>`);
-      expect(html).toContain(`<dd>${divisionFormat.guaranteedMatches}</dd>`);
-      expect(html).toContain(`<dd>${candidate.matchCount} / ${candidate.availableMatchSlots}</dd>`);
-      expect(html).toContain(`<dd>${candidate.rankingCoverage === "all_entries" ? "Yes" : "No"}</dd>`);
+      const metrics = [...card.matchAll(/<dd>([^<]*)<\/dd>/g)].map((match) => match[1]);
+      expect(metrics).toEqual([
+        String(divisionFormat.matchCount),
+        String(divisionFormat.guaranteedMatches),
+        `${candidate.matchCount} / ${candidate.availableMatchSlots}`,
+        candidate.rankingCoverage === "all_entries" ? "Yes" : "No",
+      ]);
+      expect(card).toContain(ribbon.label);
+      expect(card).toContain(fit.badgeLabel);
 
-      // Verify ribbon, title and fit badge rendered
-      expect(html).toContain(ribbon.label);
-      expect(html).toContain(title);
-      expect(html).toContain(fit.badgeLabel);
-    }
+      // The title's group count comes from the graph the domain actually built, not from the title helper.
+      const groupStage = divisionFormat.graph.stages.find((stage) => stage.kind === "group");
+      if (groupStage) {
+        expect(card).toContain(`${groupStage.groupIds.length} groups of ${groupStage.groupSize}`);
+      }
+    });
   });
 
   it("handles multi-division combined slots used accurately in rendered cards (e.g. Men 12 + Women 8)", () => {
