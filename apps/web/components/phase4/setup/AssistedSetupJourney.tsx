@@ -593,9 +593,14 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
       setCommandBusy(true);
       try {
         const current = setupRef.current;
-        if (!current) return;
-        const currentBasics = basicsRef.current ?? current.values.basics;
-        if (!currentBasics) return;
+        const currentBasics = basicsRef.current ?? current?.values.basics;
+        if (!current || !currentBasics) {
+          // Nothing to save against (setup not loaded yet or lost): close the offer and show the error state
+          // instead of leaving a dialog open that can never complete.
+          setPackOfferDialog(null);
+          setViewState(opaqueId("error"));
+          return;
+        }
         const step = stepValue(opaqueId("basics"), {
           ...currentBasics,
           starts_on: packOfferDialog.startsOn,
