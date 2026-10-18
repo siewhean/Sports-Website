@@ -16,8 +16,6 @@ import {
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
-import { Phase2Runtime } from "./phase-2-runtime.js";
-import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
 
 export function isRedesignP4RulesEnabled(): boolean {
   const env = process.env.MATCHDAY_FEATURE_REDESIGN_P4_RULES?.trim().toLowerCase();
@@ -2731,28 +2729,16 @@ export class Phase3Runtime {
         }
       }
       if (publication.status !== "draft") {
-        if (this.publicProjection) {
-          await this.publicProjection.writePublicProjection(
-            tx,
-            competitionId,
-            publication.schedule_version,
-            newResultVersion,
-          );
-        } else {
-          const projectionWriter = new Phase2Runtime(
-            this.sql,
-            phase2DomainAdapter,
-            this.now,
-            undefined,
-            "phase3-internal-projection-fallback-hmac-secret-min-32-bytes",
-          );
-          await projectionWriter.writePublicProjection(
-            tx,
-            competitionId,
-            publication.schedule_version,
-            newResultVersion,
-          );
+        // Spectators read standings from the public projection, so it must move to the new result version too.
+        if (!this.publicProjection) {
+          throw new Error("Phase 3 rule changes on published competitions require a public projection writer");
         }
+        await this.publicProjection.writePublicProjection(
+          tx,
+          competitionId,
+          publication.schedule_version,
+          newResultVersion,
+        );
       }
     }
   }
