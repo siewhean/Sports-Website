@@ -162,9 +162,9 @@ describe("Phase 5 format recommendation cards rendering", () => {
     expect(html).toContain("Shortest day");
     expect(html).toContain("Most games");
 
-    // 4. Descriptive titles
-    expect(html).toContain("2 groups of 6, then semi-finals and full placings");
-    expect(html).toContain("4 groups of 3, then quarter-finals");
+    // 4. Descriptive titles matching groups of 4 domain generation
+    expect(html).toContain("3 groups of 4, then knockouts and full placings");
+    expect(html).toContain("3 groups of 4, then knockouts");
     expect(html).toContain("One league, everyone plays everyone");
 
     // 5. SVG previews
@@ -188,10 +188,11 @@ describe("Phase 5 format recommendation cards rendering", () => {
     expect(html).toContain("Leaves 28 slots spare for delays");
     expect(html).toContain("Teams would play more matches in a day than your daily limit allows.");
 
-    // 9. Buttons
+    // 9. Buttons & division-specific customise links
     expect(html).toContain("Current format");
     expect(html).toContain("Use this format");
     expect(html).toContain("Customise");
+    expect(html).toContain("format?division=div-men&amp;mode=editor");
 
     // 10. Bottom sheet
     expect(html).toContain("Something else in mind?");

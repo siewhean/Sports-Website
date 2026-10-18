@@ -58,8 +58,11 @@ export default async function FormatDesignerPage({
     const pickerDivisions = divisions.map((division) => {
       const setupDivision = setup.setup?.values?.entries?.divisions?.find((d) => d.division_id === division.id);
       const entryCount = setupDivision
-        ? setupDivision.entry_ids.length || setupDivision.confirmed_count + setupDivision.placeholder_count
-        : 12;
+        ? setupDivision.entry_ids?.length ||
+          (setupDivision.confirmed_count + setupDivision.placeholder_count > 0
+            ? setupDivision.confirmed_count + setupDivision.placeholder_count
+            : undefined)
+        : undefined;
       return {
         id: division.id,
         name: division.name,

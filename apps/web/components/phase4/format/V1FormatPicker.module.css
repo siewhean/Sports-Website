@@ -424,6 +424,12 @@
   border-color: var(--signal-line);
 }
 
+.badgeNotChecked {
+  background: var(--surface-subtle);
+  color: var(--ink-muted);
+  border-color: var(--hairline);
+}
+
 .badgeNoFit {
   background: var(--danger-surface);
   color: var(--danger-ink);

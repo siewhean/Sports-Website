@@ -83,15 +83,21 @@ export function formatWarningSentence(warningCode: string): string {
 
 /**
  * Derives a ribbon badge label for a format recommendation card (e.g., "Best balance", "Shortest day", "Most games").
+ * If the card does not fit, it never receives "Best balance".
  */
-export function formatRecommendationRibbon(strategy: string, ordinal: number): { label: string; isBest: boolean } {
-  if (ordinal === 1) {
-    return { label: opaqueId("Best balance"), isBest: true };
+export function formatRecommendationRibbon(
+  strategy: string,
+  ordinal: number,
+  fits: boolean = true,
+): { label: string; isBest: boolean } {
+  if (!fits) {
+    if (strategy === "compact_knockout") return { label: opaqueId("Shortest day"), isBest: false };
+    if (strategy === "round_robin") return { label: opaqueId("Most games"), isBest: false };
+    if (strategy === "double_elimination") return { label: opaqueId("Double chance"), isBest: false };
+    return { label: opaqueId("Alternative"), isBest: false };
   }
+
   if (strategy === "compact_knockout") {
-    return { label: opaqueId("Shortest day"), isBest: false };
-  }
-  if (strategy === "championship_focus") {
     return { label: opaqueId("Shortest day"), isBest: false };
   }
   if (strategy === "round_robin") {
@@ -100,13 +106,28 @@ export function formatRecommendationRibbon(strategy: string, ordinal: number): {
   if (strategy === "double_elimination") {
     return { label: opaqueId("Double chance"), isBest: false };
   }
+  if (strategy === "full_placement") {
+    if (ordinal === 1) return { label: opaqueId("Best balance"), isBest: true };
+    return { label: opaqueId("Alternative"), isBest: false };
+  }
+  if (strategy === "championship_focus") {
+    if (ordinal === 1) return { label: opaqueId("Best balance"), isBest: true };
+    return { label: opaqueId("Shortest day"), isBest: false };
+  }
+  if (ordinal === 1) {
+    return { label: opaqueId("Best balance"), isBest: true };
+  }
   return { label: opaqueId("Alternative"), isBest: false };
 }
 
 /**
  * Human-readable descriptive title for format strategies.
+ * Matches domain graph generation which builds groups of 4 (packages/domain/src/format.ts:1196).
  */
-export function formatDescriptiveTitle(strategy: string, entryCount?: number): string {
+export function formatDescriptiveTitle(strategy: string, entryCount?: number, structure?: string): string {
+  if (structure && structure.includes("groups of")) {
+    return structure;
+  }
   if (strategy === "round_robin") {
     return opaqueId("One league, everyone plays everyone");
   }
@@ -116,16 +137,29 @@ export function formatDescriptiveTitle(strategy: string, entryCount?: number): s
   if (strategy === "double_elimination") {
     return opaqueId("Double elimination with upper and lower brackets");
   }
+
+  if (entryCount && entryCount % 4 === 0) {
+    const groups = entryCount / 4;
+    if (strategy === "full_placement") {
+      if (groups === 2) return opaqueId("2 groups of 4, then semi-finals and full placings");
+      if (groups === 3) return opaqueId("3 groups of 4, then knockouts and full placings");
+      if (groups === 4) return opaqueId("4 groups of 4, then quarter-finals and full placings");
+      if (groups === 6) return opaqueId("6 groups of 4, then knockouts and full placings");
+      return opaqueId(`${groups} groups of 4, then knockouts and full placings`);
+    }
+    if (strategy === "championship_focus") {
+      if (groups === 2) return opaqueId("2 groups of 4, then semi-finals");
+      if (groups === 3) return opaqueId("3 groups of 4, then knockouts");
+      if (groups === 4) return opaqueId("4 groups of 4, then quarter-finals");
+      if (groups === 6) return opaqueId("6 groups of 4, then knockouts");
+      return opaqueId(`${groups} groups of 4, then championship knockouts`);
+    }
+  }
+
   if (strategy === "full_placement") {
-    if (entryCount === 12) return opaqueId("2 groups of 6, then semi-finals and full placings");
-    if (entryCount === 16) return opaqueId("4 groups of 4, then quarter-finals and full placings");
-    if (entryCount === 8) return opaqueId("2 groups of 4, then semi-finals and full placings");
     return opaqueId("Group stages, then knockouts and full placings");
   }
   if (strategy === "championship_focus") {
-    if (entryCount === 12) return opaqueId("4 groups of 3, then quarter-finals");
-    if (entryCount === 16) return opaqueId("4 groups of 4, then quarter-finals");
-    if (entryCount === 8) return opaqueId("2 groups of 4, then semi-finals");
     return opaqueId("Group stages, then championship knockouts");
   }
   return strategy.replaceAll("_", " ");
@@ -133,7 +167,9 @@ export function formatDescriptiveTitle(strategy: string, entryCount?: number): s
 
 export const formatCopy = {
   fitsTitle: opaqueId("Fits the venue time"),
+  notCheckedTitle: opaqueId("Not checked"),
   doesNotFitTitle: opaqueId("Doesn’t fit"),
+  scheduleNotCheckedNotice: opaqueId("Schedule feasibility has not been checked yet."),
   matches: opaqueId("Matches"),
   fewestGames: opaqueId("Fewest games for a team"),
   slotsUsed: opaqueId("Slots used"),
@@ -184,6 +220,7 @@ export function formatFitStatus(candidate: {
   readonly advantage?: string;
 }): {
   readonly fits: boolean;
+  readonly isUnverified: boolean;
   readonly badgeLabel: string;
   readonly reason: string;
   readonly fix: string;
@@ -194,13 +231,17 @@ export function formatFitStatus(candidate: {
     candidate.scheduling_status !== "infeasible";
 
   if (fits) {
+    const isUnverified =
+      candidate.scheduling_status === "not_checked" ||
+      Boolean(candidate.warning_codes?.includes("SCHEDULE_UNVERIFIED"));
     const spare = candidate.available_match_slots - candidate.match_count;
     const spareReason = spare > 0 ? formatCopy.leaveSpareSlots(spare) : opaqueId("Uses all available match slots.");
     const explanation = candidate.advantage ? `${spareReason} ${candidate.advantage}` : spareReason;
     return {
       fits: true,
-      badgeLabel: formatCopy.fitsTitle,
-      reason: explanation,
+      isUnverified,
+      badgeLabel: isUnverified ? formatCopy.notCheckedTitle : formatCopy.fitsTitle,
+      reason: isUnverified ? `${explanation} ${formatCopy.scheduleNotCheckedNotice}` : explanation,
       fix: "",
     };
   }
@@ -209,6 +250,7 @@ export function formatFitStatus(candidate: {
   const copy = formatWarningCopy(firstWarning);
   return {
     fits: false,
+    isUnverified: false,
     badgeLabel: formatCopy.doesNotFitTitle,
     reason: copy.reason,
     fix: copy.fix,
