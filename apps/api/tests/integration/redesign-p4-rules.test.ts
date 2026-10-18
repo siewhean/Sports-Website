@@ -623,6 +623,17 @@ describeInfrastructure("Results-exist confirmation guard & recalculation (Sectio
       SELECT result_version FROM bracket_snapshots WHERE competition_id=${comp.id} AND division_id=${div1.id} AND result_version=2`;
     expect(bracketSnap?.result_version).toBe(2);
 
+    // An explicit recalculation after the confirmed rule change succeeds (no STANDINGS_SOURCE_STALE) and the
+    // standings still reflect the new winPoints rule.
+    await expect(federationRuntime.recalculateStandings(actor, comp.id, div1.id, randomUUID())).resolves.toBeDefined();
+    const recalculated = (await federationRuntime.readStandings(actor, comp.id, div1.id)) as unknown as {
+      result_version: number;
+      standings: { groups: Record<string, { rows: { entryId: string; tablePoints: number }[] }> };
+    };
+    expect(recalculated.result_version).toBe(2);
+    const recalculatedWinner = Object.values(recalculated.standings.groups)[0]?.rows.find((r) => r.entryId === homeId);
+    expect(recalculatedWinner?.tablePoints).toBe(4);
+
     // Verify match state and event/result scores were untouched
     const [match] = await client<{ state: string }[]>`SELECT state FROM matches WHERE id=${matchId}`;
     expect(match?.state).toBe("final");
@@ -772,6 +783,23 @@ describeInfrastructure("Update to latest federation defaults (Section C)", () =>
     const updated = await federationRuntime.updateToFederationDefaults(actor, comp.id, undefined, randomUUID());
     expect(updated.override).toEqual({});
     expect(updated.revision).toBe(3);
+
+    // One action, one history row: a single sport_settings.defaults_updated event (no separate pack_switched)
+    // carrying the before/after pack versions.
+    const defaultsEvents = await client<{ action: string; after_state: Record<string, unknown> }[]>`
+      SELECT action, after_state FROM audit_events
+      WHERE target_type='competition' AND target_id=${comp.id}
+        AND action IN ('sport_settings.defaults_updated','sport_settings.pack_switched')`;
+    expect(defaultsEvents).toHaveLength(1);
+    expect(defaultsEvents[0]?.action).toBe("sport_settings.defaults_updated");
+    const defaultsState =
+      typeof defaultsEvents[0]?.after_state === "string"
+        ? (JSON.parse(defaultsEvents[0].after_state) as Record<string, unknown>)
+        : defaultsEvents[0]?.after_state;
+    expect(defaultsState).toMatchObject({ previous_pack_version: "1.0.0", pack_version: expect.any(String) });
+    const defaultsHistory = await federationRuntime.settingsHistory(actor, comp.id);
+    expect(defaultsHistory.filter((h) => h.action === "sport_settings.defaults_updated")).toHaveLength(1);
+    expect(defaultsHistory.some((h) => h.action === "sport_settings.pack_switched")).toBe(false);
 
     // Calling again when already on latest with zero overrides is a no-op
     const noop = await federationRuntime.updateToFederationDefaults(actor, comp.id, undefined, randomUUID());
