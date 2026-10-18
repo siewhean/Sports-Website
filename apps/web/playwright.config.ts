@@ -83,7 +83,7 @@ export default defineConfig({
     {
       name: "phone-chromium",
       testMatch:
-        /gate-c-c2-scoring\.spec\.ts|phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts|responsive-pages-accessibility\.spec\.ts|info-tip-accessibility\.spec\.ts|organiser-redesign-shell\.spec\.ts/,
+        /redesign-(?:rules|p4-dialogs)\.spec\.ts|gate-c-c2-scoring\.spec\.ts|phase-(?:2|3)-(?:responsive|accessibility|visual)\.spec\.ts|phase-4-.*(?:responsive|accessibility|visual)\.spec\.ts|phase-4-assisted-setup-revision\.spec\.ts|responsive-pages-accessibility\.spec\.ts|info-tip-accessibility\.spec\.ts|organiser-redesign-shell\.spec\.ts/,
       use: { ...devices["Pixel 7"] },
     },
   ],

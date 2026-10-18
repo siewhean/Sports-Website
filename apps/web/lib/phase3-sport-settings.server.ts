@@ -159,6 +159,8 @@ export async function getSportSettingsDocument(input: {
   divisionId?: string;
   divisionName?: string;
   previewState?: string;
+  /** Demo builds only: "available" previews a newer federation pack, so "Update to latest defaults" is offered. */
+  previewUpdate?: string;
 }): Promise<SportSettingsDocument> {
   const context: SportSettingsContext = {
     scope: input.divisionId ? "division" : "competition",
@@ -172,7 +174,16 @@ export async function getSportSettingsDocument(input: {
     if (context.scope === "division" && preview === "ready") return documentForState(context, "unavailable");
     // The Rules page preview shows a federation pack, so its sources and "Federation default" labels can be seen.
     const pack = (await redesignRulesEnabled()) ? CANOE_POLO_FEDERATION_SPORT_PACK : SPORT_PACKS.canoe_polo;
-    return documentForState(context, preview, pack);
+    const document = documentForState(context, preview, pack);
+    if (preview === "ready" && context.scope === "competition" && input.previewUpdate === "available") {
+      return {
+        ...document,
+        capabilities: { ...document.capabilities, updateDefaults: true },
+        latestPackVersion: CANOE_POLO_FEDERATION_SPORT_PACK.version,
+        updateAvailable: CANOE_POLO_FEDERATION_SPORT_PACK.version !== pack.version,
+      };
+    }
+    return document;
   }
   return readSettings(context);
 }

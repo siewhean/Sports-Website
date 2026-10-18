@@ -13,7 +13,7 @@ export default async function CompetitionSettingsPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ state?: string }>;
+  searchParams: Promise<{ state?: string; update?: string }>;
 }) {
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const competitionResult = await getOrganiserCompetitionView(id);
@@ -24,6 +24,7 @@ export default async function CompetitionSettingsPage({
     competitionId: competitionResult.competition.id,
     competitionName: competitionResult.competition.name,
     previewState: query.state,
+    previewUpdate: query.update,
   });
   const divisionHref = `/organiser/competitions/${encodeURIComponent(id)}/settings/divisions/${encodeURIComponent(competitionResult.competition.division.id)}`;
   const sync = settingsSyncPresentation(document);
