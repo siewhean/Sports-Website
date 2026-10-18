@@ -112,7 +112,8 @@ export function formatRecommendationRibbon(
   }
   if (strategy === "championship_focus") {
     if (ordinal === 1) return { label: opaqueId("Best balance"), isBest: true };
-    return { label: opaqueId("Shortest day"), isBest: false };
+    // "Shortest day" belongs to Compact knockout, which often sits beside this card.
+    return { label: opaqueId("Shorter finals"), isBest: false };
   }
   if (ordinal === 1) {
     return { label: opaqueId("Best balance"), isBest: true };

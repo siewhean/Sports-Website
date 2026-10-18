@@ -36,6 +36,10 @@ const copy = {
   lb2: opaqueId("LB 2"),
   lbFinal: opaqueId("LB Final"),
   teamsSuffix: (count: number) => opaqueId(`${count} teams`),
+  moreGroups: (count: number) => opaqueId(`+${count} more`),
+  championshipAriaMany: (groups: number) => opaqueId(`${groups} groups of four, then knockouts and final`),
+  fullPlacementAriaMany: (groups: number) =>
+    opaqueId(`${groups} groups of four, then knockouts, final and full placings`),
 };
 
 export function FormatPreviewDiagram({
@@ -49,8 +53,8 @@ export function FormatPreviewDiagram({
         <g stroke="currentColor" strokeWidth={2} fill="none">
           <rect x={40} y={4} width={180} height={102} rx={4} />
         </g>
+        <rect x={48} y={10} width={164} height={5} rx={2} fill="var(--signal)" />
         <g fill="var(--ink-muted)" opacity={0.4}>
-          <rect x={48} y={10} width={164} height={5} rx={2} fill="var(--signal)" opacity={1} />
           <rect x={48} y={19} width={158} height={5} rx={2} />
           <rect x={48} y={28} width={152} height={5} rx={2} />
           <rect x={48} y={37} width={146} height={5} rx={2} />
@@ -127,10 +131,15 @@ export function FormatPreviewDiagram({
       );
     }
 
-    // 16+ teams: 4 groups of 4 -> QFs -> SFs -> Final
-    const teamsPerGroup = Math.max(4, Math.round(entryCount / 4));
+    // 16+ teams: the domain always builds groups of 4; beyond four groups the last row counts the rest.
+    const groupCount = Math.ceil(entryCount / 4);
+    const fourthGroup = groupCount > 4 ? copy.moreGroups(groupCount - 3) : `${copy.d} · 4`;
     return (
-      <svg viewBox="0 0 260 110" role="img" aria-label={ariaLabel ?? copy.championshipAria16}>
+      <svg
+        viewBox="0 0 260 110"
+        role="img"
+        aria-label={ariaLabel ?? (groupCount === 4 ? copy.championshipAria16 : copy.championshipAriaMany(groupCount))}
+      >
         <g fill="none" stroke="currentColor" strokeWidth={2}>
           <rect x={4} y={4} width={54} height={22} rx={3} />
           <rect x={4} y={30} width={54} height={22} rx={3} />
@@ -148,10 +157,12 @@ export function FormatPreviewDiagram({
           <rect x={214} y={47} width={42} height={16} rx={3} fill="var(--signal)" />
         </g>
         <g fontSize={10} fontWeight={800} fill="currentColor">
-          <text x={10} y={19}>{`${copy.a} · ${teamsPerGroup}`}</text>
-          <text x={10} y={45}>{`${copy.b} · ${teamsPerGroup}`}</text>
-          <text x={10} y={71}>{`${copy.c} · ${teamsPerGroup}`}</text>
-          <text x={10} y={97}>{`${copy.d} · ${teamsPerGroup}`}</text>
+          <text x={10} y={19}>{`${copy.a} · 4`}</text>
+          <text x={10} y={45}>{`${copy.b} · 4`}</text>
+          <text x={10} y={71}>{`${copy.c} · 4`}</text>
+          <text x={10} y={97}>
+            {fourthGroup}
+          </text>
           <text x={219} y={59} fontSize={9} fill="var(--signal-ink)">
             {copy.final}
           </text>
@@ -315,10 +326,15 @@ export function FormatPreviewDiagram({
     );
   }
 
-  // 16+ teams
-  const teamsPerGroup = Math.max(4, Math.round(entryCount / 4));
+  // 16+ teams: the domain always builds groups of 4; beyond four groups the last row counts the rest.
+  const groupCount = Math.ceil(entryCount / 4);
+  const fourthGroup = groupCount > 4 ? copy.moreGroups(groupCount - 3) : `${copy.d} · 4`;
   return (
-    <svg viewBox="0 0 260 110" role="img" aria-label={ariaLabel ?? copy.fullPlacementAria16}>
+    <svg
+      viewBox="0 0 260 110"
+      role="img"
+      aria-label={ariaLabel ?? (groupCount === 4 ? copy.fullPlacementAria16 : copy.fullPlacementAriaMany(groupCount))}
+    >
       <g fill="none" stroke="currentColor" strokeWidth={2}>
         <rect x={4} y={4} width={56} height={18} rx={3} />
         <rect x={4} y={24} width={56} height={18} rx={3} />
@@ -333,10 +349,12 @@ export function FormatPreviewDiagram({
         <rect x={224} y={36} width={32} height={18} rx={3} fill="var(--signal)" />
       </g>
       <g fontSize={9} fontWeight={800} fill="currentColor">
-        <text x={10} y={17}>{`${copy.a} · ${teamsPerGroup}`}</text>
-        <text x={10} y={37}>{`${copy.b} · ${teamsPerGroup}`}</text>
-        <text x={10} y={57}>{`${copy.c} · ${teamsPerGroup}`}</text>
-        <text x={10} y={77}>{`${copy.d} · ${teamsPerGroup}`}</text>
+        <text x={10} y={17}>{`${copy.a} · 4`}</text>
+        <text x={10} y={37}>{`${copy.b} · 4`}</text>
+        <text x={10} y={57}>{`${copy.c} · 4`}</text>
+        <text x={10} y={77}>
+          {fourthGroup}
+        </text>
         <text x={98} y={28} fontSize={8}>
           {copy.sf1}
         </text>
