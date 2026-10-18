@@ -5543,8 +5543,10 @@ export class Phase2Runtime {
       );
     }
     const publicCompetitionStatus = competition.status;
-    const divisions = await tx.unsafe<{ id: string; name: string; short_code: string | null }>(
-      `SELECT id,name,short_code FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`,
+    // Division short codes stay internal: placeholder labels are resolved server-side by
+    // loadCompetitionPlaceholderLabels, so the public projection only needs id and name.
+    const divisions = await tx.unsafe<{ id: string; name: string }>(
+      `SELECT id,name FROM divisions WHERE competition_id=$1 ORDER BY created_at,id`,
       [competitionId],
     );
     required(divisions, "Division not found");
