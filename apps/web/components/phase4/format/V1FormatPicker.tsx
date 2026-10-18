@@ -13,10 +13,23 @@ import {
   parseV1FormatRecommendations,
 } from "@/lib/phase4-v1-format-picker";
 import type { V1FormatReadiness } from "@/lib/v1-format-readiness";
+import {
+  detectFormatFamily,
+  formatDescriptiveTitle,
+  formatFitStatus,
+  formatRecommendationRibbon,
+} from "@/lib/format-copy";
+import { FormatPreviewDiagram } from "./FormatPreviewDiagram";
 import styles from "./V1FormatPicker.module.css";
 
 type PickerState = "idle" | "loading" | "ready" | "applying" | "error";
 const readyByDefault: V1FormatReadiness = { ready: true, prerequisites: [] };
+// The subhead counts the cards actually shown: a recommendation set can hold fewer than three.
+function waysToRun(cardCount: number): string {
+  if (cardCount === 1) return opaqueId("Here is one way");
+  return cardCount === 2 ? opaqueId("Here are two ways") : opaqueId("Here are three ways");
+}
+
 const copy = {
   idle: opaqueId("idle"),
   loading: opaqueId("loading"),
@@ -64,6 +77,34 @@ const copy = {
   scheduleFeasible: opaqueId("Fits the schedule"),
   scheduleNotChecked: opaqueId("Not checked"),
   rulesSuggestion: opaqueId("Rules-based suggestion"),
+  division: opaqueId("Division"),
+  formatFor: (name: string) => opaqueId(`Format for ${name}`),
+  formatSubhead: (teamCount: number, cardCount: number, availableSlots: number, otherDivisionsText: string) =>
+    opaqueId(
+      `${teamCount} team${teamCount === 1 ? "" : "s"}. ${waysToRun(cardCount)} to run it, checked against your venue time (${availableSlots} match slots${otherDivisionsText}).`,
+    ),
+  formatSubheadUnknown: (cardCount: number, availableSlots: number, otherDivisionsText: string) =>
+    opaqueId(
+      `${waysToRun(cardCount)} to run your format, checked against your venue time (${availableSlots} match slots${otherDivisionsText}).`,
+    ),
+  fitsVenueTime: opaqueId("Fits the venue time"),
+  doesNotFit: opaqueId("Doesn’t fit"),
+  matches: opaqueId("Matches"),
+  fewestGames: opaqueId("Fewest games for a team"),
+  slotsUsed: opaqueId("Slots used"),
+  slotsUsedBoth: opaqueId("Slots used (both divisions)"),
+  slotsUsedAll: opaqueId("Slots used (all divisions)"),
+  everyTeamRanked: opaqueId("Every team ranked"),
+  yes: opaqueId("Yes"),
+  no: opaqueId("No"),
+  useThisFormat: opaqueId("Use this format"),
+  currentFormat: opaqueId("Current format"),
+  customise: opaqueId("Customise"),
+  designYourOwn: opaqueId("Design your own"),
+  somethingElse: opaqueId("Something else in mind?"),
+  blankPageText: opaqueId(
+    "Start from a blank page: add groups, knockouts, double elimination or placement matches yourself.",
+  ),
 } as const;
 
 function errorDetails(payload: unknown): { code: string | null; message: string | null } {
@@ -85,6 +126,26 @@ function recommendationError(status: number, payload: unknown): string {
   return error.message ?? copy.prepareError;
 }
 
+export type V1FormatPickerDivision = {
+  readonly id: string;
+  readonly name: string;
+  readonly entryCount?: number;
+};
+
+export type V1FormatPickerProps = {
+  readonly competitionId: string;
+  readonly readiness?: V1FormatReadiness;
+  readonly hasAppliedFormat?: boolean;
+  readonly advancedHref?: string;
+  readonly entriesHref?: string;
+  readonly capacityHref?: string;
+  readonly scheduleHref?: string;
+  readonly divisions?: readonly V1FormatPickerDivision[];
+  readonly initialDivisionId?: string;
+  readonly initialDocument?: Phase4SetupDocument | null;
+  readonly isRedesignP5CardsEnabled?: boolean;
+};
+
 export function V1FormatPicker({
   competitionId,
   readiness,
@@ -93,24 +154,23 @@ export function V1FormatPicker({
   entriesHref,
   capacityHref,
   scheduleHref,
-}: {
-  competitionId: string;
-  readiness?: V1FormatReadiness;
-  hasAppliedFormat?: boolean;
-  advancedHref?: string;
-  entriesHref?: string;
-  capacityHref?: string;
-  scheduleHref?: string;
-}) {
+  divisions,
+  initialDivisionId,
+  initialDocument,
+  isRedesignP5CardsEnabled = false,
+}: V1FormatPickerProps) {
   const router = useRouter();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [state, setState] = useState<PickerState>(copy.idle);
-  const [document, setDocument] = useState<Phase4SetupDocument | null>(null);
+  const [document, setDocument] = useState<Phase4SetupDocument | null>(initialDocument ?? null);
+  const [activeDivisionId, setActiveDivisionId] = useState<string>(initialDivisionId ?? divisions?.[0]?.id ?? "");
   const [message, setMessage] = useState("");
   const effectiveReadiness = readiness ?? readyByDefault;
   const effectiveEntriesHref = entriesHref ?? `/organiser/competitions/${encodeURIComponent(competitionId)}/entries`;
   const effectiveCapacityHref = capacityHref ?? `/organiser/competitions/${encodeURIComponent(competitionId)}/capacity`;
   const effectiveScheduleHref = scheduleHref ?? `/organiser/competitions/${encodeURIComponent(competitionId)}/schedule`;
+
+  const isRedesignCards = isRedesignP5CardsEnabled;
 
   const recommend = async () => {
     if (!effectiveReadiness.ready) return;
@@ -167,6 +227,244 @@ export function V1FormatPicker({
 
   const options = document ? fittingV1Recommendations(document) : [];
   const linkFor = (id: "entries" | "capacity") => (id === "entries" ? effectiveEntriesHref : effectiveCapacityHref);
+
+  if (isRedesignCards) {
+    if (!effectiveReadiness.ready) {
+      return (
+        <section
+          className={styles.workspace}
+          aria-labelledby="v1-format-prerequisite-heading"
+          data-testid="v1-format-blocked"
+        >
+          <header className={styles.heading}>
+            <p className={styles.eyebrow}>{copy.format}</p>
+            <h2 id="v1-format-prerequisite-heading">{copy.finishSetup}</h2>
+            <p>{copy.readinessBody}</p>
+          </header>
+          <div className={styles.blockedIntro} role="status">
+            <WarningCircle aria-hidden="true" />
+            <div>
+              <h3>{copy.completeSetup}</h3>
+              <p>{copy.returnToFormat}</p>
+            </div>
+          </div>
+          <ol className={styles.prerequisiteList} aria-label={copy.prerequisites}>
+            {effectiveReadiness.prerequisites.map((item) => (
+              <li className={styles.prerequisiteItem} key={item.id} data-ready={item.ready}>
+                <span className={styles.prerequisiteIcon}>{item.ready ? <Check aria-hidden="true" /> : null}</span>
+                <div>
+                  <strong>{item.label}</strong>
+                  <p>{item.detail}</p>
+                </div>
+                {item.ready ? null : (
+                  <Link className={styles.prerequisiteLink} href={linkFor(item.id)}>
+                    {copy.goTo} {item.label} <ArrowRight aria-hidden="true" />
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ol>
+        </section>
+      );
+    }
+
+    const activeDivision = divisions?.find((d) => d.id === activeDivisionId) ??
+      divisions?.[0] ?? { id: "", name: opaqueId("Main"), entryCount: undefined };
+    const otherDivisions = divisions?.filter((d) => d.id !== activeDivision.id) ?? [];
+
+    const recommendationSet = document?.values?.format_recommendations;
+    const normalRecs = recommendationSet?.recommendations ?? [];
+    const requiresChanges = recommendationSet?.requires_changes ?? null;
+    const candidates = [...normalRecs, ...(requiresChanges ? [requiresChanges] : [])].slice(0, 3);
+
+    const firstCandidate = candidates[0];
+    let otherDivisionsText = "";
+    if (firstCandidate && otherDivisions.length === 1) {
+      const otherDiv = otherDivisions[0]!;
+      const otherDivisionFormat = firstCandidate.division_formats.find((df) => df.division_id === otherDiv.id);
+      if (otherDivisionFormat) {
+        otherDivisionsText = `, with ${otherDiv.name} already using ${otherDivisionFormat.match_count}`;
+      }
+    } else if (firstCandidate && otherDivisions.length > 1) {
+      const otherSlotsTotal = otherDivisions.reduce((sum, d) => {
+        const df = firstCandidate.division_formats.find((item) => item.division_id === d.id);
+        return sum + (df?.match_count ?? 0);
+      }, 0);
+      if (otherSlotsTotal > 0) {
+        otherDivisionsText = `, with other divisions using ${otherSlotsTotal}`;
+      }
+    }
+
+    const slotsUsedLabel =
+      divisions && divisions.length === 2
+        ? copy.slotsUsedBoth
+        : divisions && divisions.length > 2
+          ? copy.slotsUsedAll
+          : copy.slotsUsed;
+
+    const totalAvailableSlots = firstCandidate?.available_match_slots ?? 0;
+    const divisionEditorHref = `/organiser/competitions/${encodeURIComponent(competitionId)}/format?division=${encodeURIComponent(activeDivision.id)}&mode=editor`;
+
+    return (
+      <section className={styles.workspace} aria-labelledby="v1-format-picker-heading" data-testid="v1-format-picker">
+        <header className={styles.pageHeader}>
+          <div className={styles.pageHeaderInfo}>
+            <h1 ref={headingRef} id="v1-format-picker-heading" tabIndex={-1}>
+              {copy.formatFor(activeDivision.name)}
+            </h1>
+            <p>
+              {activeDivision.entryCount !== undefined
+                ? copy.formatSubhead(
+                    activeDivision.entryCount,
+                    candidates.length,
+                    totalAvailableSlots,
+                    otherDivisionsText,
+                  )
+                : copy.formatSubheadUnknown(candidates.length, totalAvailableSlots, otherDivisionsText)}
+            </p>
+          </div>
+          {divisions && divisions.length > 1 ? (
+            <div className={styles.divisionSegmented} role="group" aria-label={copy.division}>
+              {divisions.map((div) => (
+                <button
+                  key={div.id}
+                  className={styles.divisionButton}
+                  type="button"
+                  aria-pressed={div.id === activeDivision.id}
+                  onClick={() => setActiveDivisionId(div.id)}
+                >
+                  {div.entryCount !== undefined ? `${div.name} · ${div.entryCount}` : div.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </header>
+
+        {candidates.length === 0 ? (
+          <div className={styles.readyBar}>
+            <div>
+              <h3>{copy.readyTitle}</h3>
+              <p>{copy.readyBody}</p>
+            </div>
+            {state === copy.idle || state === copy.loading || state === copy.error ? (
+              <button
+                className={styles.primaryButton}
+                type="button"
+                onClick={() => void recommend()}
+                disabled={state === copy.loading}
+              >
+                {state === copy.loading ? copy.finding : state === copy.error ? copy.retry : copy.show}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {message ? (
+          <p
+            className={state === copy.error ? styles.error : styles.eyebrow}
+            aria-live="polite"
+            role={state === copy.error ? "alert" : "status"}
+          >
+            {message}
+          </p>
+        ) : null}
+
+        {candidates.length > 0 ? (
+          <div className={styles.cardsGrid}>
+            {candidates.map((candidate, index) => {
+              const family = detectFormatFamily({
+                strategy: candidate.name,
+                name: candidate.name,
+                structure: candidate.structure,
+              });
+              const fitInfo = formatFitStatus(candidate);
+              const ribbon = formatRecommendationRibbon(family, index + 1, fitInfo.fits);
+              const title = formatDescriptiveTitle(family, activeDivision.entryCount, candidate.structure);
+              const divisionFormat =
+                candidate.division_formats.find((df) => df.division_id === activeDivision.id) ??
+                candidate.division_formats[0];
+              const isPicked = document?.values?.format_recommendations?.selected_recommendation_id === candidate.id;
+              const rankingCoverage = divisionFormat?.ranking_coverage ?? candidate.ranking_coverage;
+
+              return (
+                <article
+                  key={candidate.id}
+                  className={`${styles.formatCard} ${isPicked ? styles.formatCardSelected : ""}`}
+                >
+                  <span className={`${styles.cardRibbon} ${ribbon.isBest ? styles.cardRibbonBest : ""}`}>
+                    {ribbon.label}
+                  </span>
+                  <h2 className={styles.cardTitle}>{title}</h2>
+                  <div className={styles.cardPreview}>
+                    <FormatPreviewDiagram strategy={family} entryCount={activeDivision.entryCount} />
+                  </div>
+                  <dl className={styles.cardMetrics}>
+                    <div>
+                      <dt>{copy.matches}</dt>
+                      <dd>{divisionFormat ? divisionFormat.match_count : candidate.match_count}</dd>
+                    </div>
+                    <div>
+                      <dt>{copy.fewestGames}</dt>
+                      <dd>{divisionFormat ? divisionFormat.guaranteed_matches : candidate.guaranteed_matches}</dd>
+                    </div>
+                    <div>
+                      <dt>{slotsUsedLabel}</dt>
+                      <dd>{`${candidate.match_count} / ${candidate.available_match_slots}`}</dd>
+                    </div>
+                    <div>
+                      <dt>{copy.everyTeamRanked}</dt>
+                      <dd>{rankingCoverage === "all_entries" ? copy.yes : copy.no}</dd>
+                    </div>
+                  </dl>
+                  <span
+                    className={`${styles.badge} ${
+                      fitInfo.isUnverified
+                        ? styles.badgeNotChecked
+                        : fitInfo.fits
+                          ? styles.badgeFits
+                          : styles.badgeNoFit
+                    }`}
+                  >
+                    {fitInfo.badgeLabel}
+                  </span>
+                  <p className={styles.cardWhy}>{`${fitInfo.reason}${fitInfo.fix ? ` ${fitInfo.fix}` : ""}`}</p>
+                  <div className={styles.cardActions}>
+                    <button
+                      className={styles.primaryButton}
+                      type="button"
+                      data-pick={candidate.name}
+                      aria-pressed={isPicked}
+                      disabled={state === copy.applying || !fitInfo.fits}
+                      onClick={() => void apply(candidate.id)}
+                    >
+                      {state === copy.applying && isPicked
+                        ? copy.applyingLabel
+                        : isPicked
+                          ? copy.currentFormat
+                          : copy.useThisFormat}
+                    </button>
+                    <Link className={styles.secondaryLink} href={divisionEditorHref}>
+                      {copy.customise}
+                    </Link>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
+
+        <div className={styles.designOwnSheet}>
+          <div>
+            <h2>{copy.somethingElse}</h2>
+            <p>{copy.blankPageText}</p>
+          </div>
+          <Link className={styles.secondaryLink} href={divisionEditorHref}>
+            {copy.designYourOwn}
+          </Link>
+        </div>
+      </section>
+    );
+  }
 
   if (hasAppliedFormat) {
     return (

@@ -10,6 +10,7 @@ const environmentKeys: Partial<Record<keyof typeof featureFlags, string>> = {
   "scoring.phase2-route": "MATCHDAY_FEATURE_SCORING_PHASE2_ROUTE",
   "organiser.redesign-shell": "MATCHDAY_FEATURE_ORGANISER_REDESIGN_SHELL",
   "organiser.redesign-p4-rules": "MATCHDAY_FEATURE_REDESIGN_P4_RULES",
+  "organiser.redesign-p5-cards": "MATCHDAY_FEATURE_REDESIGN_P5_CARDS",
 };
 
 const environmentFlagReader: FeatureFlagReader = {
@@ -44,3 +45,10 @@ export async function isRedesignRulesEnabled(): Promise<boolean> {
 }
 
 export const isOrganiserRedesignP4RulesEnabled = isRedesignRulesEnabled;
+
+/** Redesign Phase 5 format cards (redesign_p5_cards). Off unless MATCHDAY_FEATURE_REDESIGN_P5_CARDS=true. */
+export async function isRedesignP5CardsEnabled(): Promise<boolean> {
+  return (await evaluator.evaluate("organiser.redesign-p5-cards")).value;
+}
+
+export const isOrganiserRedesignP5CardsEnabled = isRedesignP5CardsEnabled;

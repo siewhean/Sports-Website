@@ -955,9 +955,46 @@ export const phase2GroupsWalkoverCompetition: CompetitionView = {
   ],
 };
 
+/**
+ * Unlisted demo fixture (reachable only by slug) for the Phase 5 format cards browser tests. Its divisions carry
+ * entries and use the same ids as the demo Assisted Setup document, so the cards page is ready and every card
+ * reads the right division's numbers without disturbing the main demo competition's visual baselines.
+ */
+export const phase5FormatCardsCompetition: CompetitionView = {
+  ...phase2Competition,
+  id: "cmp_sgopen_format_2026",
+  slug: "singapore-open-format",
+  name: "Singapore Open Format 2026",
+  division: { ...phase2Competition.division, id: "a641f08e-23de-4611-8893-01bfebf42684" },
+  divisions: [
+    {
+      id: "a641f08e-23de-4611-8893-01bfebf42684",
+      name: "Open division",
+      entries: phase2Competition.teams.map((name, index) => ({
+        id: `demo-entry-open-${index + 1}`,
+        name,
+        seed: index + 1,
+        status: "active",
+      })),
+    },
+    {
+      id: "fd16448b-61ab-4dd0-a0a1-b61e77fd5c3a",
+      name: "Women's division",
+      entries: phase2Competition.teams.map((name, index) => ({
+        id: `demo-entry-women-${index + 1}`,
+        name: `${name} Women`,
+        seed: index + 1,
+        status: "active",
+      })),
+    },
+  ],
+};
+
 export const demoCompetitionReadPort: CompetitionReadPort = {
   async getBySlug(slug) {
     if (slug === phase2GroupsWalkoverCompetition.slug) return phase2GroupsWalkoverCompetition;
+    if (slug === phase5FormatCardsCompetition.slug || slug === phase5FormatCardsCompetition.id)
+      return phase5FormatCardsCompetition;
     return slug === phase2Competition.slug ? phase2Competition : null;
   },
   async list() {

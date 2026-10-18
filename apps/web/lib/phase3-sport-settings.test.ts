@@ -61,7 +61,12 @@ describe("Phase 3 sport settings view model", () => {
     const document = parseSportSettingsResponse(payload, context);
     expect(document?.state).toBe("read-only");
     expect(document?.canEdit).toBe(false);
-    expect(document?.capabilities).toEqual({ save: false, saveDefault: false, copyPrevious: false });
+    expect(document?.capabilities).toEqual({
+      save: false,
+      saveDefault: false,
+      copyPrevious: false,
+      updateDefaults: false,
+    });
   });
 
   it("rejects unknown fields, permission drift and inconsistent effective settings", () => {
