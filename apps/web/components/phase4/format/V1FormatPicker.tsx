@@ -77,6 +77,10 @@ const copy = {
     opaqueId(
       `${teamCount} team${teamCount === 1 ? "" : "s"}. Here are three ways to run it, checked against your venue time (${availableSlots} match slots${otherDivisionsText}).`,
     ),
+  formatSubheadUnknown: (availableSlots: number, otherDivisionsText: string) =>
+    opaqueId(
+      `Here are three ways to run your format, checked against your venue time (${availableSlots} match slots${otherDivisionsText}).`,
+    ),
   fitsVenueTime: opaqueId("Fits the venue time"),
   doesNotFit: opaqueId("Doesn’t fit"),
   matches: opaqueId("Matches"),
@@ -160,9 +164,7 @@ export function V1FormatPicker({
   const effectiveCapacityHref = capacityHref ?? `/organiser/competitions/${encodeURIComponent(competitionId)}/capacity`;
   const effectiveScheduleHref = scheduleHref ?? `/organiser/competitions/${encodeURIComponent(competitionId)}/schedule`;
 
-  const isRedesignCards =
-    isRedesignP5CardsEnabled ||
-    (typeof window !== "undefined" && window.document.cookie.includes("matchday-redesign-p5-cards=1"));
+  const isRedesignCards = isRedesignP5CardsEnabled;
 
   const recommend = async () => {
     if (!effectiveReadiness.ready) return;
@@ -261,7 +263,7 @@ export function V1FormatPicker({
     }
 
     const activeDivision = divisions?.find((d) => d.id === activeDivisionId) ??
-      divisions?.[0] ?? { id: "", name: opaqueId("Main"), entryCount: 12 };
+      divisions?.[0] ?? { id: "", name: opaqueId("Main"), entryCount: undefined };
     const otherDivisions = divisions?.filter((d) => d.id !== activeDivision.id) ?? [];
 
     const recommendationSet = document?.values?.format_recommendations;
@@ -295,6 +297,7 @@ export function V1FormatPicker({
           : copy.slotsUsed;
 
     const totalAvailableSlots = firstCandidate?.available_match_slots ?? 0;
+    const divisionEditorHref = `/organiser/competitions/${encodeURIComponent(competitionId)}/format?division=${encodeURIComponent(activeDivision.id)}&mode=editor`;
 
     return (
       <section className={styles.workspace} aria-labelledby="v1-format-picker-heading" data-testid="v1-format-picker">
@@ -303,7 +306,11 @@ export function V1FormatPicker({
             <h1 ref={headingRef} id="v1-format-picker-heading" tabIndex={-1}>
               {copy.formatFor(activeDivision.name)}
             </h1>
-            <p>{copy.formatSubhead(activeDivision.entryCount ?? 12, totalAvailableSlots, otherDivisionsText)}</p>
+            <p>
+              {activeDivision.entryCount !== undefined
+                ? copy.formatSubhead(activeDivision.entryCount, totalAvailableSlots, otherDivisionsText)
+                : copy.formatSubheadUnknown(totalAvailableSlots, otherDivisionsText)}
+            </p>
           </div>
           {divisions && divisions.length > 1 ? (
             <div className={styles.divisionSegmented} role="group" aria-label={copy.division}>
@@ -315,7 +322,7 @@ export function V1FormatPicker({
                   aria-pressed={div.id === activeDivision.id}
                   onClick={() => setActiveDivisionId(div.id)}
                 >
-                  {`${div.name} · ${div.entryCount ?? 0}`}
+                  {div.entryCount !== undefined ? `${div.name} · ${div.entryCount}` : div.name}
                 </button>
               ))}
             </div>
@@ -359,16 +366,14 @@ export function V1FormatPicker({
                 name: candidate.name,
                 structure: candidate.structure,
               });
-              const ribbon = formatRecommendationRibbon(family, index + 1);
-              const title = formatDescriptiveTitle(family, activeDivision.entryCount ?? 12);
+              const fitInfo = formatFitStatus(candidate);
+              const ribbon = formatRecommendationRibbon(family, index + 1, fitInfo.fits);
+              const title = formatDescriptiveTitle(family, activeDivision.entryCount, candidate.structure);
               const divisionFormat =
                 candidate.division_formats.find((df) => df.division_id === activeDivision.id) ??
                 candidate.division_formats[0];
-              const fitInfo = formatFitStatus(candidate);
               const isPicked = document?.values?.format_recommendations?.selected_recommendation_id === candidate.id;
-              const customiseHref =
-                advancedHref ??
-                `/organiser/competitions/${encodeURIComponent(competitionId)}/format?division=${encodeURIComponent(activeDivision.id)}&mode=editor`;
+              const rankingCoverage = divisionFormat?.ranking_coverage ?? candidate.ranking_coverage;
 
               return (
                 <article
@@ -380,7 +385,7 @@ export function V1FormatPicker({
                   </span>
                   <h2 className={styles.cardTitle}>{title}</h2>
                   <div className={styles.cardPreview}>
-                    <FormatPreviewDiagram strategy={family} entryCount={activeDivision.entryCount ?? 12} />
+                    <FormatPreviewDiagram strategy={family} entryCount={activeDivision.entryCount} />
                   </div>
                   <dl className={styles.cardMetrics}>
                     <div>
@@ -397,10 +402,18 @@ export function V1FormatPicker({
                     </div>
                     <div>
                       <dt>{copy.everyTeamRanked}</dt>
-                      <dd>{candidate.ranking_coverage === "all_entries" ? copy.yes : copy.no}</dd>
+                      <dd>{rankingCoverage === "all_entries" ? copy.yes : copy.no}</dd>
                     </div>
                   </dl>
-                  <span className={`${styles.badge} ${fitInfo.fits ? styles.badgeFits : styles.badgeNoFit}`}>
+                  <span
+                    className={`${styles.badge} ${
+                      fitInfo.isUnverified
+                        ? styles.badgeNotChecked
+                        : fitInfo.fits
+                          ? styles.badgeFits
+                          : styles.badgeNoFit
+                    }`}
+                  >
                     {fitInfo.badgeLabel}
                   </span>
                   <p className={styles.cardWhy}>{`${fitInfo.reason}${fitInfo.fix ? ` ${fitInfo.fix}` : ""}`}</p>
@@ -419,7 +432,7 @@ export function V1FormatPicker({
                           ? copy.currentFormat
                           : copy.useThisFormat}
                     </button>
-                    <Link className={styles.secondaryLink} href={customiseHref}>
+                    <Link className={styles.secondaryLink} href={divisionEditorHref}>
                       {copy.customise}
                     </Link>
                   </div>
@@ -434,13 +447,7 @@ export function V1FormatPicker({
             <h2>{copy.somethingElse}</h2>
             <p>{copy.blankPageText}</p>
           </div>
-          <Link
-            className={styles.secondaryLink}
-            href={
-              advancedHref ??
-              `/organiser/competitions/${encodeURIComponent(competitionId)}/format?division=${encodeURIComponent(activeDivision.id)}&mode=editor`
-            }
-          >
+          <Link className={styles.secondaryLink} href={divisionEditorHref}>
             {copy.designYourOwn}
           </Link>
         </div>

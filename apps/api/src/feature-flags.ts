@@ -34,8 +34,6 @@ export async function isRedesignRulesEnabled(): Promise<boolean> {
   return (await evaluator.evaluate("organiser.redesign-p4-rules")).value;
 }
 
-export const isOrganiserRedesignP4RulesEnabled = isRedesignRulesEnabled;
-
 /**
  * Redesign Phase 5 (`redesign_p5_cards`): format selection uses 3-card recommendation view.
  * Off unless MATCHDAY_FEATURE_REDESIGN_P5_CARDS=true.

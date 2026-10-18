@@ -9,10 +9,14 @@ type FormatPreviewDiagramProps = {
 
 const copy = {
   roundRobinAria: opaqueId("One league table, everyone plays everyone"),
-  championshipAria: opaqueId("Four groups, then quarter-finals, semi-finals and final"),
+  championshipAria8: opaqueId("Two groups of four, then semi-finals and final"),
+  championshipAria12: opaqueId("Three groups of four, then knockouts and final"),
+  championshipAria16: opaqueId("Four groups of four, then quarter-finals, semi-finals and final"),
   compactKnockoutAria: opaqueId("Single elimination knockout bracket"),
   doubleEliminationAria: opaqueId("Double elimination upper and lower brackets"),
-  fullPlacementAria: opaqueId("Two groups, then semi-finals, final and full placings"),
+  fullPlacementAria8: opaqueId("Two groups of four, then semi-finals, final and full placings"),
+  fullPlacementAria12: opaqueId("Three groups of four, then knockouts, final and full placings"),
+  fullPlacementAria16: opaqueId("Four groups of four, then quarter-finals, final and full placings"),
   a: opaqueId("A"),
   b: opaqueId("B"),
   c: opaqueId("C"),
@@ -45,8 +49,8 @@ export function FormatPreviewDiagram({
         <g stroke="currentColor" strokeWidth={2} fill="none">
           <rect x={40} y={4} width={180} height={102} rx={4} />
         </g>
-        <g fill="var(--muted)">
-          <rect x={48} y={10} width={164} height={5} rx={2} fill="var(--signal)" />
+        <g fill="var(--ink-muted)" opacity={0.4}>
+          <rect x={48} y={10} width={164} height={5} rx={2} fill="var(--signal)" opacity={1} />
           <rect x={48} y={19} width={158} height={5} rx={2} />
           <rect x={48} y={28} width={152} height={5} rx={2} />
           <rect x={48} y={37} width={146} height={5} rx={2} />
@@ -63,9 +67,70 @@ export function FormatPreviewDiagram({
   }
 
   if (strategy === "championship_focus") {
-    const teamsPerGroup = Math.max(3, Math.round(entryCount / 4));
+    if (entryCount <= 8) {
+      return (
+        <svg viewBox="0 0 260 110" role="img" aria-label={ariaLabel ?? copy.championshipAria8}>
+          <g fill="none" stroke="currentColor" strokeWidth={2}>
+            <rect x={8} y={16} width={64} height={32} rx={3} />
+            <rect x={8} y={62} width={64} height={32} rx={3} />
+            <path d="M72 32h36v12h18M72 78h36V66h18" />
+            <rect x={126} y={35} width={44} height={18} rx={3} />
+            <rect x={126} y={57} width={44} height={18} rx={3} />
+            <path d="M170 44h22v11h18M170 66h22V55" />
+            <rect x={210} y={46} width={44} height={18} rx={3} fill="var(--signal)" />
+          </g>
+          <g fontSize={10} fontWeight={800} fill="currentColor">
+            <text x={16} y={36}>{`${copy.a} · 4`}</text>
+            <text x={16} y={82}>{`${copy.b} · 4`}</text>
+            <text x={132} y={48} fontSize={9}>
+              {copy.sf1}
+            </text>
+            <text x={132} y={70} fontSize={9}>
+              {copy.sf2}
+            </text>
+            <text x={216} y={58} fontSize={9} fill="var(--signal-ink)">
+              {copy.final}
+            </text>
+          </g>
+        </svg>
+      );
+    }
+
+    if (entryCount === 12) {
+      return (
+        <svg viewBox="0 0 260 110" role="img" aria-label={ariaLabel ?? copy.championshipAria12}>
+          <g fill="none" stroke="currentColor" strokeWidth={2}>
+            <rect x={6} y={10} width={58} height={26} rx={3} />
+            <rect x={6} y={42} width={58} height={26} rx={3} />
+            <rect x={6} y={74} width={58} height={26} rx={3} />
+            <path d="M64 23h30v21h18M64 55h48M64 87h30V65h18" />
+            <rect x={112} y={35} width={44} height={18} rx={3} />
+            <rect x={112} y={57} width={44} height={18} rx={3} />
+            <path d="M156 44h28v11h22M156 66h28V55" />
+            <rect x={206} y={46} width={46} height={18} rx={3} fill="var(--signal)" />
+          </g>
+          <g fontSize={10} fontWeight={800} fill="currentColor">
+            <text x={12} y={27}>{`${copy.a} · 4`}</text>
+            <text x={12} y={59}>{`${copy.b} · 4`}</text>
+            <text x={12} y={91}>{`${copy.c} · 4`}</text>
+            <text x={118} y={48} fontSize={9}>
+              {copy.sf1}
+            </text>
+            <text x={118} y={70} fontSize={9}>
+              {copy.sf2}
+            </text>
+            <text x={212} y={58} fontSize={9} fill="var(--signal-ink)">
+              {copy.final}
+            </text>
+          </g>
+        </svg>
+      );
+    }
+
+    // 16+ teams: 4 groups of 4 -> QFs -> SFs -> Final
+    const teamsPerGroup = Math.max(4, Math.round(entryCount / 4));
     return (
-      <svg viewBox="0 0 260 110" role="img" aria-label={ariaLabel ?? copy.championshipAria}>
+      <svg viewBox="0 0 260 110" role="img" aria-label={ariaLabel ?? copy.championshipAria16}>
         <g fill="none" stroke="currentColor" strokeWidth={2}>
           <rect x={4} y={4} width={54} height={22} rx={3} />
           <rect x={4} y={30} width={54} height={22} rx={3} />
@@ -182,44 +247,109 @@ export function FormatPreviewDiagram({
   }
 
   // Default: full_placement (Groups -> Knockout -> Placement rows)
-  const teamsPerGroup = Math.max(3, Math.round(entryCount / 2));
+  if (entryCount <= 8) {
+    return (
+      <svg viewBox="0 0 260 110" role="img" aria-label={ariaLabel ?? copy.fullPlacementAria8}>
+        <g fill="none" stroke="currentColor" strokeWidth={2}>
+          <rect x={6} y={10} width={64} height={32} rx={3} />
+          <rect x={6} y={50} width={64} height={32} rx={3} />
+          <path d="M70 26h30v14h18M70 66h30V52h18" />
+          <rect x={118} y={33} width={42} height={16} rx={3} />
+          <rect x={118} y={53} width={42} height={16} rx={3} />
+          <path d="M160 41h24v11h18M160 61h24V52" />
+          <rect x={202} y={43} width={46} height={18} rx={3} fill="var(--signal)" />
+        </g>
+        <g fontSize={10} fontWeight={800} fill="currentColor">
+          <text x={12} y={30}>{`${copy.a} · 4`}</text>
+          <text x={12} y={70}>{`${copy.b} · 4`}</text>
+          <text x={124} y={45} fontSize={9}>
+            {copy.sf1}
+          </text>
+          <text x={124} y={65} fontSize={9}>
+            {copy.sf2}
+          </text>
+          <text x={208} y={56} fontSize={9} fill="var(--signal-ink)">
+            {copy.final}
+          </text>
+        </g>
+        <g fill="var(--ink-muted)" opacity={0.4}>
+          <rect x={118} y={86} width={130} height={6} rx={2} />
+          <rect x={118} y={96} width={130} height={6} rx={2} />
+        </g>
+      </svg>
+    );
+  }
+
+  if (entryCount === 12) {
+    return (
+      <svg viewBox="0 0 260 110" role="img" aria-label={ariaLabel ?? copy.fullPlacementAria12}>
+        <g fill="none" stroke="currentColor" strokeWidth={2}>
+          <rect x={6} y={8} width={58} height={22} rx={3} />
+          <rect x={6} y={34} width={58} height={22} rx={3} />
+          <rect x={6} y={60} width={58} height={22} rx={3} />
+          <path d="M64 19h28v17h18M64 45h46M64 71h28V53h18" />
+          <rect x={110} y={28} width={42} height={16} rx={3} />
+          <rect x={110} y={48} width={42} height={16} rx={3} />
+          <path d="M152 36h26v11h24M152 56h26V47" />
+          <rect x={202} y={38} width={46} height={18} rx={3} fill="var(--signal)" />
+        </g>
+        <g fontSize={10} fontWeight={800} fill="currentColor">
+          <text x={12} y={23}>{`${copy.a} · 4`}</text>
+          <text x={12} y={49}>{`${copy.b} · 4`}</text>
+          <text x={12} y={75}>{`${copy.c} · 4`}</text>
+          <text x={116} y={40} fontSize={9}>
+            {copy.sf1}
+          </text>
+          <text x={116} y={60} fontSize={9}>
+            {copy.sf2}
+          </text>
+          <text x={208} y={51} fontSize={9} fill="var(--signal-ink)">
+            {copy.final}
+          </text>
+        </g>
+        <g fill="var(--ink-muted)" opacity={0.4}>
+          <rect x={110} y={86} width={138} height={6} rx={2} />
+          <rect x={110} y={96} width={138} height={6} rx={2} />
+        </g>
+      </svg>
+    );
+  }
+
+  // 16+ teams
+  const teamsPerGroup = Math.max(4, Math.round(entryCount / 4));
   return (
-    <svg viewBox="0 0 260 110" role="img" aria-label={ariaLabel ?? copy.fullPlacementAria}>
+    <svg viewBox="0 0 260 110" role="img" aria-label={ariaLabel ?? copy.fullPlacementAria16}>
       <g fill="none" stroke="currentColor" strokeWidth={2}>
-        <rect x={4} y={6} width={70} height={44} rx={4} />
-        <rect x={4} y={60} width={70} height={44} rx={4} />
-        <path d="M74 28h30v18h26M74 82h30V64h26" />
-        <rect x={130} y={34} width={44} height={18} rx={3} />
-        <rect x={130} y={58} width={44} height={18} rx={3} />
-        <path d="M174 43h20v12h18M174 67h20V55" />
-        <rect x={212} y={46} width={44} height={18} rx={3} fill="var(--signal)" />
+        <rect x={4} y={4} width={56} height={18} rx={3} />
+        <rect x={4} y={24} width={56} height={18} rx={3} />
+        <rect x={4} y={44} width={56} height={18} rx={3} />
+        <rect x={4} y={64} width={56} height={18} rx={3} />
+        <path d="M60 13h18v11h14M60 33h18V24h14M60 53h18v11h14M60 73h18V64h14" />
+        <rect x={92} y={17} width={42} height={14} rx={3} />
+        <rect x={92} y={57} width={42} height={14} rx={3} />
+        <path d="M134 24h20v14h18M134 64h20V50h18" />
+        <rect x={172} y={38} width={38} height={14} rx={3} />
+        <path d="M210 45h14" />
+        <rect x={224} y={36} width={32} height={18} rx={3} fill="var(--signal)" />
       </g>
-      <g fontSize={11} fontWeight={800} fill="currentColor">
-        <text x={12} y={24}>
-          {copy.a}
-        </text>
-        <text x={12} y={78}>
-          {copy.b}
-        </text>
-        <text x={12} y={40} fontWeight={400} fontSize={9}>
-          {copy.teamsSuffix(teamsPerGroup)}
-        </text>
-        <text x={12} y={94} fontWeight={400} fontSize={9}>
-          {copy.teamsSuffix(teamsPerGroup)}
-        </text>
-        <text x={136} y={47} fontSize={9}>
+      <g fontSize={9} fontWeight={800} fill="currentColor">
+        <text x={10} y={17}>{`${copy.a} · ${teamsPerGroup}`}</text>
+        <text x={10} y={37}>{`${copy.b} · ${teamsPerGroup}`}</text>
+        <text x={10} y={57}>{`${copy.c} · ${teamsPerGroup}`}</text>
+        <text x={10} y={77}>{`${copy.d} · ${teamsPerGroup}`}</text>
+        <text x={98} y={28} fontSize={8}>
           {copy.sf1}
         </text>
-        <text x={136} y={71} fontSize={9}>
+        <text x={98} y={68} fontSize={8}>
           {copy.sf2}
         </text>
-        <text x={218} y={59} fontSize={9} fill="var(--signal-ink)">
+        <text x={228} y={48} fontSize={8} fill="var(--signal-ink)">
           {copy.final}
         </text>
       </g>
-      <g fill="var(--muted)">
-        <rect x={130} y={86} width={126} height={6} rx={2} />
-        <rect x={130} y={96} width={126} height={6} rx={2} />
+      <g fill="var(--ink-muted)" opacity={0.4}>
+        <rect x={92} y={88} width={164} height={5} rx={2} />
+        <rect x={92} y={97} width={164} height={5} rx={2} />
       </g>
     </svg>
   );
