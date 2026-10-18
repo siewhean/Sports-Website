@@ -2444,3 +2444,60 @@ export function registeredSportPack(sportId: SportId, version?: string | null): 
   if (version === undefined || version === null || version === draft.version) return draft;
   return resolveSportPack(SPORT_PACK_REGISTRY, sportId, version);
 }
+
+export const SCORING_AND_STANDINGS_SETTING_KEYS = Object.freeze([
+  "standingsOrder",
+  "winPoints",
+  "drawPoints",
+  "lossPoints",
+  "forfeitLossPoints",
+  "defaultLossPoints",
+  "bestOf",
+  "regularTargetPoints",
+  "decidingTargetPoints",
+  "winBy",
+  "pointCap",
+  "periods",
+  "periodDurationMinutes",
+  "overtimeDurationMinutes",
+  "successiveOvertime",
+  "goldenGoal",
+  "forfeitWinnerScore",
+  "forfeitLoserScore",
+  "defaultWinnerScore",
+  "defaultLoserScore",
+  "greenCardsAllowed",
+  "yellowCardPoints",
+  "redCardPoints",
+  "expediteAfterMinutes",
+  "expediteNotAfterPoints",
+  "expediteReturns",
+] as const);
+
+export type ScoringAndStandingsSettingKey = (typeof SCORING_AND_STANDINGS_SETTING_KEYS)[number];
+
+export function isScoringOrStandingsSettingKey(key: string): key is ScoringAndStandingsSettingKey {
+  return (SCORING_AND_STANDINGS_SETTING_KEYS as readonly string[]).includes(key);
+}
+
+export function isFederationSportPackVersion(version: string): boolean {
+  return version === FEDERATION_SPORT_PACK_VERSION || version === BADMINTON_3X15_SPORT_PACK_VERSION;
+}
+
+export function containsScoringOrStandingsRuleChange(
+  currentOverrides: Record<string, unknown> | null | undefined,
+  nextOverrides: Record<string, unknown> | null | undefined,
+): boolean {
+  const current = currentOverrides ?? {};
+  const next = nextOverrides ?? {};
+  const allKeys = new Set([...Object.keys(current), ...Object.keys(next)]);
+  for (const key of allKeys) {
+    if (!isScoringOrStandingsSettingKey(key)) continue;
+    const a = current[key];
+    const b = next[key];
+    if (JSON.stringify(a) !== JSON.stringify(b)) {
+      return true;
+    }
+  }
+  return false;
+}

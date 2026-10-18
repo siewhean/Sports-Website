@@ -243,6 +243,7 @@ export type Phase4SetupAutosaveRequest = {
     | { readonly kind: "save_step"; readonly step: Phase4SetupStepValue }
     | { readonly kind: "go_to_step"; readonly step_id: Phase4SetupStepId }
     | { readonly kind: "complete"; readonly review: Phase4SetupReviewSelection };
+  readonly confirm_pack_switch?: boolean;
 };
 
 export type Phase4SetupAutosaveResponse =

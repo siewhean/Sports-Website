@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { InfoTip } from "@matchday/ui/react";
 import { useRouter } from "next/navigation";
 import { ArrowCounterClockwise, FloppyDisk, Warning } from "@phosphor-icons/react";
@@ -8,6 +8,9 @@ import type { SettingValue, SportPackSettings } from "@matchday/domain";
 import {
   changedAnnouncement,
   deriveSportSettingsOverride,
+  formatAffectedMatchesTitle,
+  formatAffectedMatchItem,
+  formatMoreMatches,
   phase3CommandMachine,
   phase3SettingsCopy,
   phase3SettingsMachine,
@@ -45,6 +48,13 @@ type Props = Readonly<{
  * default, a "Changed" mark and Reset, where it comes from, the tie-break rules in plain words and the list of
  * rules changes. Saving uses the existing sport-settings command, so every save is a new version.
  */
+type ConfirmDialogState = {
+  title: string;
+  body: string;
+  affectedMatches?: { id: string; division_id: string; status: string }[];
+  onConfirm: () => Promise<void>;
+};
+
 export function RulesPage({ document, history, competitionHref, divisionHref }: Props) {
   const router = useRouter();
   const [values, setValues] = useState<SportPackSettings>(document.effective);
@@ -54,6 +64,44 @@ export function RulesPage({ document, history, competitionHref, divisionHref }: 
   const [announcement, setAnnouncement] = useState("");
   const [commandError, setCommandError] = useState("");
   const [commandState, setCommandState] = useState<SportSettingsSurfaceState | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const modalTriggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (confirmDialog) {
+      modalTriggerRef.current = window.document.activeElement as HTMLElement | null;
+      const controls = modalRef.current?.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      );
+      controls?.[0]?.focus();
+    } else {
+      modalTriggerRef.current?.focus();
+      modalTriggerRef.current = null;
+    }
+  }, [confirmDialog]);
+
+  function handleModalKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setConfirmDialog(null);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(
+      modalRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), [tabindex]:not([tabindex='-1'])") ?? [],
+    );
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (!first || !last) return;
+    if (event.shiftKey && window.document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && window.document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
   const pack = document.packDefinition;
   const snapshot = document.recommended;
   const scopeBaseline = sportSettingsScopeBaseline(document);
@@ -79,7 +127,7 @@ export function RulesPage({ document, history, competitionHref, divisionHref }: 
     setAnnouncement(changedAnnouncement(pack.settingsSchema[setting]?.label ?? setting));
   }
 
-  async function save() {
+  async function save(confirmResultsAffected = false) {
     setBusy(true);
     setCommandError("");
     const competitionId = encodeURIComponent(document.context.competitionId);
@@ -95,12 +143,39 @@ export function RulesPage({ document, history, competitionHref, divisionHref }: 
           pack_version: document.packVersion,
           revision,
           override: deriveSportSettingsOverride(values, scopeBaseline),
+          ...(confirmResultsAffected ? { confirm_results_affected: true } : {}),
         }),
       });
       if (!response.ok) {
-        if (response.status === 409) setCommandState(phase3SettingsMachine.conflict);
-        else if (response.status === 401 || response.status === 403) setCommandState(phase3SettingsMachine.permission);
-        else setCommandError(phase3SettingsCopy.commandFailed);
+        const errorPayload = (await response.json().catch(() => null)) as {
+          error?: {
+            code?: string;
+            message?: string;
+            details?: {
+              affected_matches?: { id: string; division_id: string; status: string }[];
+            };
+          };
+        } | null;
+        const errorCode = errorPayload?.error?.code;
+        if (response.status === 409) {
+          if (errorCode === "RESULTS_EXIST_CONFIRMATION_REQUIRED") {
+            setConfirmDialog({
+              title: phase3SettingsCopy.resultsExistConfirmTitle,
+              body: phase3SettingsCopy.resultsExistConfirmBody,
+              affectedMatches: errorPayload?.error?.details?.affected_matches ?? [],
+              onConfirm: async () => {
+                setConfirmDialog(null);
+                await save(true);
+              },
+            });
+          } else {
+            setCommandState(phase3SettingsMachine.conflict);
+          }
+        } else if (response.status === 401 || response.status === 403) {
+          setCommandState(phase3SettingsMachine.permission);
+        } else {
+          setCommandError(phase3SettingsCopy.commandFailed);
+        }
         return;
       }
       const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
@@ -269,6 +344,8 @@ export function RulesPage({ document, history, competitionHref, divisionHref }: 
                     {item.divisionId ? <span>{rulesCopy.divisionScope}</span> : null}
                   </p>
                   {item.action === "sport_settings.copied" ? <p>{rulesCopy.historyCopied}</p> : null}
+                  {item.action === "sport_settings.pack_switched" ? <p>{rulesCopy.historyPackSwitched}</p> : null}
+                  {item.action === "sport_settings.defaults_updated" ? <p>{rulesCopy.historyDefaultsUpdated}</p> : null}
                   {lines.length > 0 ? (
                     <ul>
                       {lines.map((line) => (
@@ -284,6 +361,53 @@ export function RulesPage({ document, history, competitionHref, divisionHref }: 
           </ol>
         )}
       </section>
+
+      {confirmDialog ? (
+        <div
+          ref={modalRef}
+          className={editorStyles["p3-modal-overlay"]}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="p3-confirm-title"
+          onKeyDown={handleModalKeyDown}
+        >
+          <div className={editorStyles["p3-modal"]}>
+            <h3 id="p3-confirm-title">{confirmDialog.title}</h3>
+            <p>{confirmDialog.body}</p>
+            {confirmDialog.affectedMatches && confirmDialog.affectedMatches.length > 0 ? (
+              <div className={editorStyles["p3-modal-matches"]}>
+                <p className={editorStyles["p3-modal-matches-header"]}>
+                  {formatAffectedMatchesTitle(confirmDialog.affectedMatches.length)}
+                </p>
+                <ul>
+                  {confirmDialog.affectedMatches.slice(0, 10).map((m) => (
+                    <li key={m.id}>{formatAffectedMatchItem(m.id, m.status)}</li>
+                  ))}
+                  {confirmDialog.affectedMatches.length > 10 ? (
+                    <li>{formatMoreMatches(confirmDialog.affectedMatches.length - 10)}</li>
+                  ) : null}
+                </ul>
+              </div>
+            ) : null}
+            <div className={editorStyles["p3-modal-actions"]}>
+              <button
+                className={cx("p3-button", "p3-button--secondary")}
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+              >
+                {phase3SettingsCopy.confirmCancel}
+              </button>
+              <button
+                className={cx("p3-button", "p3-button--primary")}
+                type="button"
+                onClick={() => void confirmDialog.onConfirm()}
+              >
+                {phase3SettingsCopy.confirmProceed}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,25 +1,24 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import {
-  forwardPhase3Mutation,
-  hasExactKeys,
-  isSettingsMutationResponse,
-  jsonBody,
-} from "@/lib/phase3-settings-command.server";
+import { forwardPhase3Mutation, isSettingsMutationResponse, jsonBody } from "@/lib/phase3-settings-command.server";
 import { phase3CommandMachine } from "@/lib/phase3-sport-settings";
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ competitionId: string }> }) {
   const body = await jsonBody(request);
+  const keys = body ? Object.keys(body).sort().join(",") : "";
+  const validKeys =
+    keys === "override,pack_version,revision" || keys === "confirm_results_affected,override,pack_version,revision";
   if (
     !body ||
-    !hasExactKeys(body, phase3CommandMachine.settingsKeys) ||
+    !validKeys ||
     typeof body.pack_version !== "string" ||
     body.pack_version.length === 0 ||
     !Number.isInteger(body.revision) ||
     (body.revision as number) < 1 ||
     !body.override ||
     typeof body.override !== "object" ||
-    Array.isArray(body.override)
+    Array.isArray(body.override) ||
+    (body.confirm_results_affected !== undefined && typeof body.confirm_results_affected !== "boolean")
   ) {
     return NextResponse.json(
       { error: { code: phase3CommandMachine.requestInvalid, message: phase3CommandMachine.invalidSettings } },

@@ -394,6 +394,7 @@ const SetupAutosaveBody = strict({
     strict({ kind: Type.Literal("go_to_step"), step_id: SetupStep }),
     strict({ kind: Type.Literal("complete"), review: ReviewSelection }),
   ]),
+  confirm_pack_switch: Type.Optional(Type.Boolean()),
 });
 
 const MoveTarget = strict({

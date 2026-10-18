@@ -117,6 +117,8 @@ export const rulesCopy = {
   historyEmpty: "No rules have been changed yet.",
   historyUnavailable: "The list of rules changes could not be loaded.",
   historyCopied: "Copied from a previous competition",
+  historyPackSwitched: "Switched to federation sport pack",
+  historyDefaultsUpdated: "Updated to latest federation defaults",
   historyNoDetail: "Saved without a list of changes.",
   historyBy: (name: string | null) => (name ? `by ${name}` : "by an organiser"),
   historyChange: (label: string, before: string, after: string) => `${label}: ${before} → ${after}`,
@@ -181,7 +183,11 @@ export type RulesHistoryChange = Readonly<{ setting: string; before: unknown; af
 
 export type RulesHistoryItem = Readonly<{
   id: string;
-  action: "sport_settings.updated" | "sport_settings.copied";
+  action:
+    | "sport_settings.updated"
+    | "sport_settings.copied"
+    | "sport_settings.pack_switched"
+    | "sport_settings.defaults_updated";
   occurredAt: string;
   actorName: string | null;
   divisionId: string | null;
@@ -195,6 +201,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+const SUPPORTED_HISTORY_ACTIONS = new Set([
+  "sport_settings.updated",
+  "sport_settings.copied",
+  "sport_settings.pack_switched",
+  "sport_settings.defaults_updated",
+]);
+
 /** Parses the API's history response; anything unexpected makes the whole list unavailable, never half-shown. */
 export function parseRulesHistory(payload: unknown): RulesHistory {
   if (!isRecord(payload) || !Array.isArray(payload.items)) return { state: "unavailable", items: [] };
@@ -203,7 +216,7 @@ export function parseRulesHistory(payload: unknown): RulesHistory {
     if (
       !isRecord(item) ||
       typeof item.id !== "string" ||
-      (item.action !== "sport_settings.updated" && item.action !== "sport_settings.copied") ||
+      !SUPPORTED_HISTORY_ACTIONS.has(item.action as string) ||
       typeof item.occurred_at !== "string" ||
       Number.isNaN(Date.parse(item.occurred_at)) ||
       (item.actor_name !== null && typeof item.actor_name !== "string") ||
@@ -215,7 +228,7 @@ export function parseRulesHistory(payload: unknown): RulesHistory {
       return { state: "unavailable", items: [] };
     items.push({
       id: item.id,
-      action: item.action,
+      action: item.action as RulesHistoryItem["action"],
       occurredAt: item.occurred_at,
       actorName: item.actor_name as string | null,
       divisionId: item.division_id as string | null,

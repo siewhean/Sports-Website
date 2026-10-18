@@ -578,7 +578,14 @@ export async function buildApp(options: BuildAppOptions) {
         },
       });
     }
-    const envelope: ApiErrorEnvelope = { error: { code, message, request_id: request.id } };
+    const envelope: ApiErrorEnvelope = {
+      error: {
+        code,
+        message,
+        request_id: request.id,
+        ...(apiError?.details !== undefined ? { details: apiError.details } : {}),
+      },
+    };
     if (databaseBusy) reply.header("retry-after", "2");
     return reply.code(statusCode).send(envelope);
   });

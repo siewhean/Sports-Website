@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { messages } from "@matchday/ui";
 import { InfoTip, NumberField } from "@matchday/ui/react";
 import { useRouter } from "next/navigation";
@@ -24,6 +24,10 @@ import {
   changedAnnouncement,
   divisionSettingsTitle,
   moveSettingLabel,
+  formatAffectedMatchesTitle,
+  formatAffectedMatchItem,
+  formatMoreMatches,
+  formatPackVersionStatus,
   phase3SettingsCopy,
   phase3SettingsMachine,
   phase3CommandMachine,
@@ -58,6 +62,14 @@ const stateCopy: Record<Exclude<SportSettingsSurfaceState, "ready">, { title: st
   unavailable: { title: phase3SettingsCopy.unavailableTitle, body: phase3SettingsCopy.unavailableBody },
 };
 
+type ConfirmDialogState = null | {
+  kind: "results_exist" | "published";
+  title: string;
+  body: string;
+  affectedMatches?: readonly { id: string; division_id: string; status: string }[];
+  onConfirm: () => Promise<void>;
+};
+
 export function SportSettingsEditor({ document, divisionHref, competitionHref }: Props) {
   const router = useRouter();
   const [values, setValues] = useState<SportPackSettings>(document.effective);
@@ -65,8 +77,46 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
   const [announcement, setAnnouncement] = useState("");
   const [commandError, setCommandError] = useState("");
   const [commandState, setCommandState] = useState<SportSettingsSurfaceState | null>(null);
-  const [busyAction, setBusyAction] = useState<"save" | "default" | "copy" | null>(null);
+  const [busyAction, setBusyAction] = useState<"save" | "default" | "copy" | "updateDefaults" | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
   const [revision, setRevision] = useState(document.revision);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const modalTriggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (confirmDialog) {
+      modalTriggerRef.current = window.document.activeElement as HTMLElement | null;
+      const controls = modalRef.current?.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      );
+      controls?.[0]?.focus();
+    } else {
+      modalTriggerRef.current?.focus();
+      modalTriggerRef.current = null;
+    }
+  }, [confirmDialog]);
+
+  function handleModalKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setConfirmDialog(null);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(
+      modalRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), [tabindex]:not([tabindex='-1'])") ?? [],
+    );
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (!first || !last) return;
+    if (event.shiftKey && window.document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && window.document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
   const scopeBaseline = sportSettingsScopeBaseline(document);
   const errors = useMemo(
     () => validateSettingsDraft(document.packDefinition, values),
@@ -94,7 +144,10 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
     setAnnouncement(phase3SettingsCopy.restoredAnnouncement);
   }
 
-  async function command(action: "save" | "default" | "copy") {
+  async function command(
+    action: "save" | "default" | "copy" | "updateDefaults",
+    confirmations?: { confirm_results_affected?: boolean; confirm_published?: boolean },
+  ) {
     setBusyAction(action);
     setCommandError("");
     const competitionId = encodeURIComponent(document.context.competitionId);
@@ -104,29 +157,73 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
         ? `/api/phase3/account/sport-defaults/${encodeURIComponent(document.sportId)}`
         : action === "copy"
           ? `/api/phase3/competitions/${competitionId}/settings/copy-previous`
-          : divisionId
-            ? `/api/phase3/competitions/${competitionId}/divisions/${divisionId}/settings`
-            : `/api/phase3/competitions/${competitionId}/settings`;
+          : action === "updateDefaults"
+            ? `/api/phase3/competitions/${competitionId}/settings/update-defaults`
+            : divisionId
+              ? `/api/phase3/competitions/${competitionId}/divisions/${divisionId}/settings`
+              : `/api/phase3/competitions/${competitionId}/settings`;
     const body =
       action === "save"
         ? {
             pack_version: document.packVersion,
             revision,
             override: deriveSportSettingsOverride(values, scopeBaseline),
+            ...(confirmations?.confirm_results_affected !== undefined
+              ? { confirm_results_affected: confirmations.confirm_results_affected }
+              : {}),
           }
         : action === "default"
           ? { pack_version: document.packVersion, settings: values }
-          : undefined;
+          : action === "copy" || action === "updateDefaults"
+            ? confirmations
+            : undefined;
     try {
+      const method =
+        action === "copy" || action === "updateDefaults" ? phase3CommandMachine.post : phase3CommandMachine.put;
       const response = await fetch(target, {
-        method: action === "copy" ? phase3CommandMachine.post : phase3CommandMachine.put,
+        method,
         headers: body ? { "content-type": phase3CommandMachine.applicationJson } : undefined,
         body: body ? JSON.stringify(body) : undefined,
       });
       if (!response.ok) {
-        if (response.status === 409) setCommandState(phase3SettingsMachine.conflict);
-        else if (response.status === 401 || response.status === 403) setCommandState(phase3SettingsMachine.permission);
-        else setCommandError(phase3SettingsCopy.commandFailed);
+        const errorPayload = (await response.json().catch(() => null)) as {
+          error?: {
+            code?: string;
+            message?: string;
+            details?: { matches?: { id: string; division_id: string; status: string }[] };
+          };
+        } | null;
+        const errorCode = errorPayload?.error?.code;
+        if (response.status === 409) {
+          if (errorCode === "RESULTS_EXIST_CONFIRMATION_REQUIRED") {
+            setConfirmDialog({
+              kind: "results_exist",
+              title: phase3SettingsCopy.resultsExistConfirmTitle,
+              body: phase3SettingsCopy.resultsExistConfirmBody,
+              affectedMatches: errorPayload?.error?.details?.matches ?? [],
+              onConfirm: async () => {
+                setConfirmDialog(null);
+                await command(action, { ...confirmations, confirm_results_affected: true });
+              },
+            });
+          } else if (errorCode === "PUBLISHED_COMPETITION_CONFIRMATION_REQUIRED") {
+            setConfirmDialog({
+              kind: "published",
+              title: phase3SettingsCopy.publishedConfirmTitle,
+              body: phase3SettingsCopy.publishedConfirmBody,
+              onConfirm: async () => {
+                setConfirmDialog(null);
+                await command(action, { ...confirmations, confirm_published: true });
+              },
+            });
+          } else {
+            setCommandState(phase3SettingsMachine.conflict);
+          }
+        } else if (response.status === 401 || response.status === 403) {
+          setCommandState(phase3SettingsMachine.permission);
+        } else {
+          setCommandError(phase3SettingsCopy.commandFailed);
+        }
         return;
       }
       const payload: unknown = await response.json();
@@ -135,19 +232,22 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
         return;
       }
       if (action === "save") {
-        const revision = (payload as Record<string, unknown>).revision;
-        if (!Number.isInteger(revision)) {
+        const nextRevision = (payload as Record<string, unknown>).revision;
+        if (!Number.isInteger(nextRevision)) {
           setCommandError(phase3SettingsCopy.commandInvalid);
           return;
         }
         setSavedValues(values);
-        setRevision(revision as number);
+        setRevision(nextRevision as number);
         setAnnouncement(phase3SettingsCopy.savedAnnouncement);
       } else if (action === "default") {
         setAnnouncement(phase3SettingsCopy.defaultAnnouncement);
+      } else if (action === "updateDefaults") {
+        setAnnouncement(phase3SettingsCopy.defaultsUpdatedAnnouncement);
+        router.refresh();
       } else {
-        const revision = (payload as Record<string, unknown>).revision;
-        if (!Number.isInteger(revision)) {
+        const nextRevision = (payload as Record<string, unknown>).revision;
+        if (!Number.isInteger(nextRevision)) {
           setCommandError(phase3SettingsCopy.commandInvalid);
           return;
         }
@@ -349,8 +449,76 @@ export function SportSettingsEditor({ document, divisionHref, competitionHref }:
                 : phase3SettingsCopy.saveDefault}
             </button>
           </section>
+
+          {document.capabilities.updateDefaults && Boolean(document.latestPackVersion) ? (
+            <section>
+              <p className={cx("p3-kicker")}>
+                {document.updateAvailable ? phase3SettingsCopy.updateAvailable : phase3SettingsCopy.federationRules}
+              </p>
+              <h2>{phase3SettingsCopy.updateDefaultsTitle}</h2>
+              <p className={styles["p3-rail-meta"]}>
+                {formatPackVersionStatus(document.packVersion, document.latestPackVersion)}
+              </p>
+              <button
+                className={cx("p3-button", "p3-button--secondary")}
+                type="button"
+                disabled={busyAction !== null}
+                onClick={() => void command(phase3SettingsMachine.updateDefaults)}
+              >
+                <ArrowCounterClockwise aria-hidden="true" />
+                {phase3SettingsCopy.updateDefaults}
+              </button>
+            </section>
+          ) : null}
         </aside>
       </div>
+
+      {confirmDialog ? (
+        <div
+          ref={modalRef}
+          className={styles["p3-modal-overlay"]}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="p3-confirm-title"
+          onKeyDown={handleModalKeyDown}
+        >
+          <div className={styles["p3-modal"]}>
+            <h3 id="p3-confirm-title">{confirmDialog.title}</h3>
+            <p>{confirmDialog.body}</p>
+            {confirmDialog.affectedMatches && confirmDialog.affectedMatches.length > 0 ? (
+              <div className={styles["p3-modal-matches"]}>
+                <p className={styles["p3-modal-matches-header"]}>
+                  {formatAffectedMatchesTitle(confirmDialog.affectedMatches.length)}
+                </p>
+                <ul>
+                  {confirmDialog.affectedMatches.slice(0, 10).map((m) => (
+                    <li key={m.id}>{formatAffectedMatchItem(m.id, m.status)}</li>
+                  ))}
+                  {confirmDialog.affectedMatches.length > 10 ? (
+                    <li>{formatMoreMatches(confirmDialog.affectedMatches.length - 10)}</li>
+                  ) : null}
+                </ul>
+              </div>
+            ) : null}
+            <div className={styles["p3-modal-actions"]}>
+              <button
+                className={cx("p3-button", "p3-button--secondary")}
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+              >
+                {phase3SettingsCopy.confirmCancel}
+              </button>
+              <button
+                className={cx("p3-button", "p3-button--primary")}
+                type="button"
+                onClick={() => void confirmDialog.onConfirm()}
+              >
+                {phase3SettingsCopy.confirmProceed}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

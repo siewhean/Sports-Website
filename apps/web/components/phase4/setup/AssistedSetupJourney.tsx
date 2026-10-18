@@ -6,6 +6,10 @@ import type { Phase4SetupDocument, Phase4SetupStepId, Phase4SetupStepValue } fro
 import { opaqueId } from "@matchday/ui";
 import {
   assistedSetupSteps,
+  formatPackOfferDescription,
+  formatPackOfferResetRules,
+  formatPackOfferKeep,
+  formatPackOfferSwitch,
   parseAssistedSetupAutosaveResponse,
   parseAssistedSetupCreateResponse,
   parseAssistedSetupDocument,
@@ -24,10 +28,22 @@ import {
 } from "@/lib/phase4-assisted-setup-flow";
 import { setupPatchBody } from "@/lib/phase4-assisted-setup-patch";
 import { AssistedSetupJourneyView } from "./AssistedSetupJourneyView";
+import styles from "./AssistedSetupWorkspace.module.css";
 
 type BasicsDraft = NonNullable<Phase4SetupDocument["values"]["basics"]>;
 type PreferencesDraft = NonNullable<Phase4SetupDocument["values"]["format_preferences"]>;
 type SetupMutationMethod = "PATCH" | "PUT";
+
+type PackOfferDialogState = {
+  currentPackVersion: string;
+  offeredPackVersion: string;
+  lostOverrides?: {
+    competition?: Record<string, unknown>;
+    divisions?: unknown[];
+  };
+  startsOn: string;
+  endsOn: string;
+};
 
 const copy = {
   autosaveError: opaqueId("Draft autosave failed. Your local edits are preserved."),
@@ -59,6 +75,7 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
   const [brief, setBrief] = useState("");
   const [briefMessage, setBriefMessage] = useState("");
   const [missingFields, setMissingFields] = useState<readonly string[]>([]);
+  const [packOfferDialog, setPackOfferDialog] = useState<PackOfferDialogState | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mutationQueueRef = useRef<Promise<Phase4SetupDocument | null>>(Promise.resolve(document.setup));
@@ -145,10 +162,22 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
             body: JSON.stringify(body),
           },
         );
-        const parsed = parseAssistedSetupAutosaveResponse(
-          await response.json().catch(() => null),
-          document.competitionId,
-        );
+        const rawPayload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+        if (response.status === 409 && rawPayload) {
+          const error = rawPayload.error as Record<string, unknown> | undefined;
+          if (error?.code === "SPORT_PACK_UPDATE_OFFERED") {
+            const details = error.details as Record<string, unknown> | undefined;
+            setPackOfferDialog({
+              currentPackVersion: typeof details?.current_pack_version === "string" ? details.current_pack_version : "",
+              offeredPackVersion: typeof details?.offered_pack_version === "string" ? details.offered_pack_version : "",
+              lostOverrides: details?.lost_overrides as PackOfferDialogState["lostOverrides"],
+              startsOn: basicsRef.current?.starts_on ?? "",
+              endsOn: basicsRef.current?.ends_on ?? "",
+            });
+            return null;
+          }
+        }
+        const parsed = parseAssistedSetupAutosaveResponse(rawPayload, document.competitionId);
         if (!parsed) {
           if (response.status === 401 || response.status === 403) setViewState(opaqueId("permission"));
           else if (response.status === 409) setViewState(opaqueId("conflict"));
@@ -542,31 +571,148 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
       });
   }, [reloadSetupState, setViewState]);
 
+  const modalRef = useRef<HTMLDivElement>(null);
+  const modalTriggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (packOfferDialog) {
+      modalTriggerRef.current = window.document.activeElement as HTMLElement | null;
+      const controls = modalRef.current?.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      );
+      controls?.[0]?.focus();
+    } else {
+      modalTriggerRef.current?.focus();
+      modalTriggerRef.current = null;
+    }
+  }, [packOfferDialog]);
+
+  function handleModalKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setPackOfferDialog(null);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(
+      modalRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), [tabindex]:not([tabindex='-1'])") ?? [],
+    );
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (!first || !last) return;
+    if (event.shiftKey && window.document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && window.document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  const handleConfirmPackSwitch = useCallback(
+    async (confirm: boolean) => {
+      if (!packOfferDialog) return;
+      setCommandBusy(true);
+      try {
+        const current = setupRef.current;
+        if (!current) return;
+        const currentBasics = basicsRef.current ?? current.values.basics;
+        if (!currentBasics) return;
+        const step = stepValue(opaqueId("basics"), {
+          ...currentBasics,
+          starts_on: packOfferDialog.startsOn,
+          ends_on: packOfferDialog.endsOn,
+        });
+        const res = await sendMutation(
+          "PATCH",
+          {
+            expected_revision: expectedRevisionRef.current,
+            idempotency_key: crypto.randomUUID(),
+            step,
+            confirm_pack_switch: confirm,
+          },
+          step,
+        );
+        if (res) {
+          setPackOfferDialog(null);
+        } else {
+          setPackOfferDialog(null);
+          setViewState(opaqueId("conflict"));
+        }
+      } catch {
+        setPackOfferDialog(null);
+        setViewState(opaqueId("error"));
+      } finally {
+        setCommandBusy(false);
+      }
+    },
+    [expectedRevisionRef, packOfferDialog, sendMutation, setViewState],
+  );
+
   return (
-    <AssistedSetupJourneyView
-      document={document}
-      setup={setup}
-      viewState={viewState}
-      commandBusy={commandBusy || resumePending}
-      autosaving={autosaving}
-      announcement={announcement}
-      basics={basics}
-      preferences={preferences}
-      brief={brief}
-      briefMessage={briefMessage}
-      missingFields={missingFields}
-      headingRef={headingRef}
-      onBasics={setBasics}
-      onPreferences={setPreferences}
-      onBrief={setBrief}
-      onConvertBrief={() => void convertBrief()}
-      onCreateDraft={() => void createDraft()}
-      onGoTo={(step) => void goTo(step)}
-      onContinue={() => void continueToNext()}
-      onSelectRecommendation={(id, acknowledged) => void selectRecommendation(id, acknowledged)}
-      onComplete={() => void completeSetup()}
-      onRetry={retry}
-    />
+    <>
+      <AssistedSetupJourneyView
+        document={document}
+        setup={setup}
+        viewState={viewState}
+        commandBusy={commandBusy || resumePending}
+        autosaving={autosaving}
+        announcement={announcement}
+        basics={basics}
+        preferences={preferences}
+        brief={brief}
+        briefMessage={briefMessage}
+        missingFields={missingFields}
+        headingRef={headingRef}
+        onBasics={setBasics}
+        onPreferences={setPreferences}
+        onBrief={setBrief}
+        onConvertBrief={() => void convertBrief()}
+        onCreateDraft={() => void createDraft()}
+        onGoTo={(step) => void goTo(step)}
+        onContinue={() => void continueToNext()}
+        onSelectRecommendation={(id, acknowledged) => void selectRecommendation(id, acknowledged)}
+        onComplete={() => void completeSetup()}
+        onRetry={retry}
+      />
+      {packOfferDialog ? (
+        <div
+          ref={modalRef}
+          className={styles.modalOverlay}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="pack-offer-title"
+          onKeyDown={handleModalKeyDown}
+        >
+          <div className={styles.modal}>
+            <h3 id="pack-offer-title">{phase4SetupCopy.packOfferTitle}</h3>
+            <p>{formatPackOfferDescription(packOfferDialog.offeredPackVersion)}</p>
+            {packOfferDialog.lostOverrides?.competition &&
+            Object.keys(packOfferDialog.lostOverrides.competition).length > 0 ? (
+              <p className={styles.modalResetNote}>
+                {formatPackOfferResetRules(Object.keys(packOfferDialog.lostOverrides.competition).join(", "))}
+              </p>
+            ) : null}
+            <div className={styles.modalActions}>
+              <button
+                type="button"
+                className="p3-button p3-button--secondary"
+                onClick={() => void handleConfirmPackSwitch(false)}
+              >
+                {formatPackOfferKeep(packOfferDialog.currentPackVersion)}
+              </button>
+              <button
+                type="button"
+                className="p3-button p3-button--primary"
+                onClick={() => void handleConfirmPackSwitch(true)}
+              >
+                {formatPackOfferSwitch(packOfferDialog.offeredPackVersion)}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 

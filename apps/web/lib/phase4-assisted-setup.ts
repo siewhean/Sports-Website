@@ -56,6 +56,7 @@ export const phase4SetupCopy = {
   quota: "AI setup allowance is unavailable",
   plan: "This action is not included in the current plan",
   rulesSuggestion: "Rules-based suggestion",
+  packOfferTitle: "Update to latest sport rules?",
 } as const;
 
 const stepIds = new Set<Phase4SetupStepId>(assistedSetupSteps.map((step) => step.id));
@@ -553,11 +554,16 @@ export function parseAssistedSetupDocument(payload: unknown, competitionId: stri
 
 export function isAssistedSetupAutosaveRequest(value: unknown): value is Phase4SetupAutosaveRequest {
   const item = record(value);
+  if (!item) return false;
+  const allowed =
+    item.confirm_pack_switch === undefined
+      ? ["expected_revision", "idempotency_key", "transition"]
+      : ["confirm_pack_switch", "expected_revision", "idempotency_key", "transition"];
   if (
-    !item ||
-    !exactKeys(item, ["expected_revision", "idempotency_key", "transition"]) ||
+    !exactKeys(item, allowed) ||
     !integer(item.expected_revision, 1) ||
-    !isPhase4SetupIdempotencyKey(item.idempotency_key)
+    !isPhase4SetupIdempotencyKey(item.idempotency_key) ||
+    (item.confirm_pack_switch !== undefined && typeof item.confirm_pack_switch !== "boolean")
   )
     return false;
   const transition = record(item.transition);
@@ -604,8 +610,14 @@ export function parseAssistedSetupCreateResponse(
 export function setupAutosaveBody(
   revision: number,
   transition: Phase4SetupAutosaveRequest["transition"],
+  confirmPackSwitch?: boolean,
 ): Phase4SetupAutosaveRequest {
-  return { expected_revision: revision, idempotency_key: crypto.randomUUID(), transition };
+  return {
+    expected_revision: revision,
+    idempotency_key: crypto.randomUUID(),
+    transition,
+    ...(confirmPackSwitch !== undefined ? { confirm_pack_switch: confirmPackSwitch } : {}),
+  };
 }
 
 export function stepValue<Step extends Phase4SetupStepId>(
@@ -613,4 +625,20 @@ export function stepValue<Step extends Phase4SetupStepId>(
   value: NonNullable<Phase4SetupDocument["values"][Step]>,
 ): Phase4SetupStepValue {
   return { step_id: stepId, value } as Phase4SetupStepValue;
+}
+
+export function formatPackOfferDescription(version: string): string {
+  return `Changing the start date offers rule set ${version}. Switching will reset custom rules to federation defaults.`;
+}
+
+export function formatPackOfferResetRules(rulesList: string): string {
+  return `Custom rules that will be reset: ${rulesList}`;
+}
+
+export function formatPackOfferKeep(version: string): string {
+  return `Keep ${version}`;
+}
+
+export function formatPackOfferSwitch(version: string): string {
+  return `Switch to ${version}`;
 }

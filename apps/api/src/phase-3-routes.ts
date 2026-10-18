@@ -54,6 +54,8 @@ const SportSettingsResponse = Type.Object(
     permission: Type.Union([Type.Literal("read"), Type.Literal("write")]),
     read_only: Type.Boolean(),
     organisation_id: Id,
+    latest_pack_version: Type.Optional(Type.String()),
+    update_available: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -574,6 +576,8 @@ export async function registerPhase3Routes(
       ends_on?: string;
       timezone?: string;
       locale?: string;
+      confirm_pack_switch?: boolean;
+      confirm_results_affected?: boolean;
     };
   }>(
     "/api/v1/competitions/:competitionId/phase3",
@@ -596,6 +600,8 @@ export async function registerPhase3Routes(
             ends_on: Type.Optional(Type.String({ format: "date" })),
             timezone: Type.Optional(Type.String({ minLength: 1 })),
             locale: Type.Optional(Type.String({ minLength: 1 })),
+            confirm_pack_switch: Type.Optional(Type.Boolean()),
+            confirm_results_affected: Type.Optional(Type.Boolean()),
           },
           { additionalProperties: false },
         ),
@@ -603,13 +609,21 @@ export async function registerPhase3Routes(
         tags: ["phase3-competitions"],
       },
     },
-    async (request) =>
-      options.runtime.mutateCompetition(
-        await actor(request),
+    async (request) => {
+      const mutationActor =
+        request.body.confirm_pack_switch !== undefined ? await rulesActor(request) : await actor(request);
+      return options.runtime.mutateCompetition(
+        mutationActor,
         request.params.competitionId,
         {
           revision: request.body.revision,
           action: "update",
+          ...(request.body.confirm_pack_switch !== undefined
+            ? { confirm_pack_switch: request.body.confirm_pack_switch }
+            : {}),
+          ...(request.body.confirm_results_affected !== undefined
+            ? { confirm_results_affected: request.body.confirm_results_affected }
+            : {}),
           patch: {
             ...(request.body.name === undefined ? {} : { name: request.body.name }),
             ...(request.body.slug === undefined ? {} : { slug: request.body.slug }),
@@ -625,7 +639,8 @@ export async function registerPhase3Routes(
           },
         },
         request.id,
-      ),
+      );
+    },
   );
 
   app.delete<{ Params: { competitionId: string }; Headers: { origin?: string; "x-csrf-token"?: string } }>(
@@ -1310,7 +1325,12 @@ export async function registerPhase3Routes(
   app.put<{
     Params: { competitionId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
-    Body: { pack_version: string; revision: number; override: Record<string, unknown> };
+    Body: {
+      pack_version: string;
+      revision: number;
+      override: Record<string, unknown>;
+      confirm_results_affected?: boolean;
+    };
   }>(
     "/api/v1/competitions/:competitionId/settings",
     {
@@ -1323,6 +1343,7 @@ export async function registerPhase3Routes(
             pack_version: Type.String(),
             revision: Type.Integer({ minimum: 1 }),
             override: Type.Record(Type.String(), Type.Any()),
+            confirm_results_affected: Type.Optional(Type.Boolean()),
           },
           { additionalProperties: false },
         ),
@@ -1334,7 +1355,14 @@ export async function registerPhase3Routes(
       options.runtime.updateSettings(
         await rulesActor(request),
         request.params.competitionId,
-        { packVersion: request.body.pack_version, revision: request.body.revision, override: request.body.override },
+        {
+          packVersion: request.body.pack_version,
+          revision: request.body.revision,
+          override: request.body.override,
+          ...(request.body.confirm_results_affected !== undefined
+            ? { confirmResultsAffected: request.body.confirm_results_affected }
+            : {}),
+        },
         request.id,
       ),
   );
@@ -1371,7 +1399,12 @@ export async function registerPhase3Routes(
   app.put<{
     Params: { competitionId: string; divisionId: string };
     Headers: { origin?: string; "x-csrf-token"?: string };
-    Body: { pack_version: string; revision: number; override: Record<string, unknown> };
+    Body: {
+      pack_version: string;
+      revision: number;
+      override: Record<string, unknown>;
+      confirm_results_affected?: boolean;
+    };
   }>(
     "/api/v1/competitions/:competitionId/divisions/:divisionId/settings",
     {
@@ -1380,7 +1413,12 @@ export async function registerPhase3Routes(
         headers: MutationHeaders,
         params: Type.Object({ competitionId: Id, divisionId: Id }),
         body: Type.Object(
-          { pack_version: Type.String(), revision: Type.Integer({ minimum: 1 }), override: Generic },
+          {
+            pack_version: Type.String(),
+            revision: Type.Integer({ minimum: 1 }),
+            override: Generic,
+            confirm_results_affected: Type.Optional(Type.Boolean()),
+          },
           { additionalProperties: false },
         ),
         response: { 200: Generic, 401: ErrorResponse, 403: ErrorResponse, 409: ErrorResponse, 422: ErrorResponse },
@@ -1396,23 +1434,97 @@ export async function registerPhase3Routes(
           revision: request.body.revision,
           override: request.body.override,
           divisionId: request.params.divisionId,
+          ...(request.body.confirm_results_affected !== undefined
+            ? { confirmResultsAffected: request.body.confirm_results_affected }
+            : {}),
         },
         request.id,
       ),
   );
-  app.post<{ Params: { competitionId: string }; Headers: { origin?: string; "x-csrf-token"?: string } }>(
+  app.post<{
+    Params: { competitionId: string };
+    Headers: { origin?: string; "x-csrf-token"?: string };
+    Body?: { confirm_results_affected?: boolean };
+  }>(
     "/api/v1/competitions/:competitionId/settings/copy-previous",
     {
+      preValidation: async (request) => {
+        if (request.body === undefined) (request as { body: unknown }).body = {};
+      },
       schema: {
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,
         params: Type.Object({ competitionId: Id }),
-        response: { 200: Generic, 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse },
+        body: Type.Object(
+          {
+            confirm_results_affected: Type.Optional(Type.Boolean()),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: Generic, 401: ErrorResponse, 403: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse },
         tags: ["phase3-settings"],
       },
     },
-    async (request) =>
-      options.runtime.copyPreviousSettings(await rulesActor(request), request.params.competitionId, request.id),
+    async (request) => {
+      const body = request.body as { confirm_results_affected?: boolean } | undefined;
+      return options.runtime.copyPreviousSettings(
+        await rulesActor(request),
+        request.params.competitionId,
+        request.id,
+        body?.confirm_results_affected !== undefined
+          ? { confirmResultsAffected: body.confirm_results_affected }
+          : undefined,
+      );
+    },
+  );
+
+  app.post<{
+    Params: { competitionId: string };
+    Headers: { origin?: string; "x-csrf-token"?: string };
+    Body?: { confirm_published?: boolean; confirm_results_affected?: boolean };
+  }>(
+    "/api/v1/competitions/:competitionId/settings/update-defaults",
+    {
+      preValidation: async (request) => {
+        if (request.body === undefined) (request as { body: unknown }).body = {};
+      },
+      schema: {
+        security: [{ sessionCookie: [] }],
+        headers: MutationHeaders,
+        params: Type.Object({ competitionId: Id }),
+        body: Type.Object(
+          {
+            confirm_published: Type.Optional(Type.Boolean()),
+            confirm_results_affected: Type.Optional(Type.Boolean()),
+          },
+          { additionalProperties: false },
+        ),
+        response: {
+          200: SportSettingsResponse,
+          401: ErrorResponse,
+          403: ErrorResponse,
+          404: ErrorResponse,
+          409: ErrorResponse,
+        },
+        tags: ["phase3-settings"],
+      },
+    },
+    async (request) => {
+      const body = request.body as { confirm_published?: boolean; confirm_results_affected?: boolean } | undefined;
+      return options.runtime.updateToFederationDefaults(
+        await rulesActor(request),
+        request.params.competitionId,
+        body
+          ? {
+              ...(body.confirm_published !== undefined ? { confirmPublished: body.confirm_published } : {}),
+              ...(body.confirm_results_affected !== undefined
+                ? { confirmResultsAffected: body.confirm_results_affected }
+                : {}),
+            }
+          : undefined,
+        request.id,
+      );
+    },
   );
 
   app.get<{ Params: { sportCode: "canoe_polo" | "badminton" | "table_tennis" | "volleyball" | "basketball" } }>(

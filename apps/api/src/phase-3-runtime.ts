@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { Phase3SportCode } from "@matchday/contracts";
 import {
   competitionDomain,
+  containsScoringOrStandingsRuleChange,
+  federationSportPackFor,
+  isFederationSportPackVersion,
   type AdvancementRule,
   type AdvancementSlot,
   type FormatGraph,
@@ -13,6 +16,11 @@ import {
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
+
+export function isRedesignP4RulesEnabled(): boolean {
+  const env = process.env.MATCHDAY_FEATURE_REDESIGN_P4_RULES?.trim().toLowerCase();
+  return env === "true" || env === "1" || env === "yes";
+}
 import { resultWinnerEntryId, standingsResultFromSnapshot } from "./standings-results.js";
 import { assertDivisionInCompetition } from "./tenant-scope.js";
 import type { Phase3DomainAdapter } from "./phase-3-domain-adapter.js";
@@ -183,7 +191,11 @@ export type SettingsHistoryChange = Readonly<{ setting: string; before: unknown;
 
 export type SettingsHistoryItem = Readonly<{
   id: string;
-  action: "sport_settings.updated" | "sport_settings.copied";
+  action:
+    | "sport_settings.updated"
+    | "sport_settings.copied"
+    | "sport_settings.pack_switched"
+    | "sport_settings.defaults_updated";
   occurred_at: string;
   actor_name: string | null;
   division_id: string | null;
@@ -344,9 +356,11 @@ export class Phase3Runtime {
       organisation_id: string;
       sport_code: Phase3SportCode;
       status: string;
+      starts_on: string | null;
+      revision: number;
       membership_role: "owner" | "organiser" | "viewer";
     }>(
-      `SELECT c.id,c.organisation_id,c.sport_code,c.status,m.role AS membership_role FROM competitions c
+      `SELECT c.id,c.organisation_id,c.sport_code,c.status,c.starts_on::text,c.revision,m.role AS membership_role FROM competitions c
        JOIN organisation_memberships m ON m.organisation_id=c.organisation_id
        WHERE c.id=$1 AND m.account_id=$2 AND m.status='active' AND m.role=ANY($3::text[])`,
       [id, actor.accountId, roles],
@@ -399,13 +413,17 @@ export class Phase3Runtime {
    * federation pack effective on the start date (badminton 3×21 before 4 Jan 2027, 3×15 from then; D34),
    * registered in `sport_pack_versions` as a non-active version; otherwise `fallback` (today's active pack).
    */
+  async isFederationRulesActive(): Promise<boolean> {
+    return (this.options.federationRulesEnabled ?? isRedesignRulesEnabled)();
+  }
+
   private async startingSportPack(
     tx: PostgresJsSql,
     sportCode: Phase3SportCode,
     startsOn: string,
     fallback: () => Promise<SportPack>,
   ): Promise<SportPack> {
-    const enabled = await (this.options.federationRulesEnabled ?? isRedesignRulesEnabled)();
+    const enabled = await this.isFederationRulesActive();
     if (!enabled) return fallback();
     const pack = this.domain.federationSportPack(sportCode, startsOn);
     const packHash = this.domain.hash(pack);
@@ -649,6 +667,8 @@ export class Phase3Runtime {
       action: "update" | "archive" | "restore";
       patch?: Phase3CompetitionUpdateInput;
       name?: string;
+      confirm_pack_switch?: boolean | undefined;
+      confirm_results_affected?: boolean | undefined;
     },
     requestId: string,
   ) {
@@ -656,9 +676,82 @@ export class Phase3Runtime {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
       if (competition.status === "archived" && input.action !== "restore")
         throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
+      if (competition.revision !== input.revision) {
+        throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Competition revision or lifecycle state is stale");
+      }
       const current = await this.domainCompetition(tx, competitionId);
       const context = this.context(actor);
       const patch = input.patch ?? (input.name === undefined ? {} : { name: input.name });
+
+      let pendingPackSwitch: SportPack | null = null;
+      let previousPackVersionForAudit: string | null = null;
+      if (
+        (await this.isFederationRulesActive()) &&
+        input.action === "update" &&
+        (competition.status === "draft" || competition.status === "ready")
+      ) {
+        const targetDate = patch.startsOn ?? current.startDate;
+        const dateChanged = patch.startsOn !== undefined && patch.startsOn !== current.startDate;
+        if (dateChanged || input.confirm_pack_switch === true) {
+          const [settingsRow] = await tx.unsafe<{
+            pack_version: string | null;
+            settings_override: Record<string, unknown> | null;
+          }>(`SELECT pack_version, settings_override FROM competition_sport_settings WHERE competition_id=$1`, [
+            competitionId,
+          ]);
+          const currentPackVersion = settingsRow?.pack_version;
+          if (currentPackVersion && isFederationSportPackVersion(currentPackVersion)) {
+            const offeredPack = federationSportPackFor(competition.sport_code, targetDate);
+            if (offeredPack.version !== currentPackVersion) {
+              if (competition.membership_role !== "owner" && competition.membership_role !== "organiser") {
+                throw new ApiError(
+                  403,
+                  ErrorCode.ORGANISATION_ACCESS_DENIED,
+                  "Organiser permission required to switch sport pack",
+                );
+              }
+              if (input.confirm_pack_switch === undefined) {
+                const compOverrides = settingsRow?.settings_override ?? {};
+                const divOverridesRows = await tx.unsafe<{
+                  division_id: string;
+                  settings_override: Record<string, unknown>;
+                }>(
+                  `SELECT division_id, settings_override FROM division_sport_settings WHERE competition_id=$1 AND settings_override <> '{}'::jsonb`,
+                  [competitionId],
+                );
+                throw new ApiError(
+                  409,
+                  ErrorCode.SPORT_PACK_UPDATE_OFFERED,
+                  `Changing the start date offers sport pack ${offeredPack.version} (${offeredPack.displayName}). Switching will reset custom rules.`,
+                  {
+                    current_pack_version: currentPackVersion,
+                    offered_pack_version: offeredPack.version,
+                    lost_overrides: {
+                      competition: compOverrides,
+                      divisions: divOverridesRows,
+                    },
+                  },
+                );
+              }
+              if (input.confirm_pack_switch === true) {
+                pendingPackSwitch = offeredPack;
+                previousPackVersionForAudit = currentPackVersion;
+              }
+            }
+          }
+        }
+      }
+
+      let affectedMatchesForPackSwitch: readonly { id: string; division_id: string; state: string }[] = [];
+      if (pendingPackSwitch) {
+        affectedMatchesForPackSwitch = await this.assertResultsConfirmationIfRequired(
+          tx,
+          competitionId,
+          null,
+          input.confirm_results_affected,
+        );
+      }
+
       if (input.action === "update") {
         expectDomain(
           this.domain.updateCompetition(
@@ -767,6 +860,53 @@ export class Phase3Runtime {
              revision=revision+1,updated_by=$4,updated_at=$5 WHERE competition_id=$1`,
           [competitionId, patch.sportCode, pack.version, actor.accountId, occurredAt],
         );
+      }
+      if (pendingPackSwitch) {
+        await tx.unsafe(
+          `INSERT INTO sport_pack_versions (sport_code,version,schema_version,definition,definition_hash)
+           VALUES ($1,$2,$3,$4::jsonb,$5) ON CONFLICT (sport_code,version) DO NOTHING`,
+          [
+            competition.sport_code,
+            pendingPackSwitch.version,
+            pendingPackSwitch.schemaVersion,
+            pendingPackSwitch,
+            this.domain.hash(pendingPackSwitch),
+          ],
+        );
+        await tx.unsafe(
+          `UPDATE competition_sport_settings SET pack_version=$2,pack_schema_version=$3,
+             recommended_snapshot=$4::jsonb,settings_override='{}'::jsonb,customised=false,
+             revision=revision+1,updated_by=$5,updated_at=$6 WHERE competition_id=$1`,
+          [
+            competitionId,
+            pendingPackSwitch.version,
+            pendingPackSwitch.schemaVersion,
+            pendingPackSwitch.recommendedSettings,
+            actor.accountId,
+            occurredAt,
+          ],
+        );
+        await tx.unsafe(
+          `UPDATE division_sport_settings SET pack_version=$2,settings_override='{}'::jsonb,
+             revision=revision+1,updated_by=$3,updated_at=$4 WHERE competition_id=$1`,
+          [competitionId, pendingPackSwitch.version, actor.accountId, occurredAt],
+        );
+        await this.evidence(
+          tx,
+          actor,
+          competition.organisation_id,
+          requestId,
+          "sport_settings.pack_switched",
+          "competition",
+          competitionId,
+          {
+            previous_pack_version: previousPackVersionForAudit,
+            pack_version: pendingPackSwitch.version,
+          },
+        );
+        if (affectedMatchesForPackSwitch.length > 0) {
+          await this.recalculateStandingsAfterRuleChange(tx, actor, competitionId, null, affectedMatchesForPackSwitch);
+        }
       }
       await this.evidence(
         tx,
@@ -2096,10 +2236,10 @@ export class Phase3Runtime {
     });
   }
 
-  async readSettings(actor: Phase3Actor, competitionId: string, divisionId?: string) {
-    const competition = await this.competitionAccess(this.sql, competitionId, actor, false);
+  async readSettings(actor: Phase3Actor, competitionId: string, divisionId?: string, client: PostgresJsSql = this.sql) {
+    const competition = await this.competitionAccess(client, competitionId, actor, false);
     const rows = divisionId
-      ? await this.sql.unsafe<Record<string, unknown>>(
+      ? await client.unsafe<Record<string, unknown>>(
           `SELECT d.competition_id,d.division_id,d.sport_code,d.pack_version,p.schema_version AS pack_schema_version,
                   c.recommended_snapshot,c.settings_override AS competition_override,d.settings_override AS override,
                   d.revision,p.definition_hash,p.definition
@@ -2108,7 +2248,7 @@ export class Phase3Runtime {
            WHERE d.competition_id=$1 AND d.division_id=$2`,
           [competitionId, divisionId],
         )
-      : await this.sql.unsafe<Record<string, unknown>>(
+      : await client.unsafe<Record<string, unknown>>(
           `SELECT c.competition_id,NULL::uuid AS division_id,c.sport_code,c.pack_schema_version,c.pack_version,
                   c.recommended_snapshot,'{}'::jsonb AS competition_override,c.settings_override AS override,
                   c.revision,p.definition_hash,p.definition
@@ -2129,6 +2269,23 @@ export class Phase3Runtime {
     if (resolved.issues.length) {
       throw new ApiError(409, ErrorCode.SETTINGS_CORRUPT, "Persisted sport settings do not satisfy their pinned pack");
     }
+    let latestPackVersion: string | undefined;
+    let updateAvailable: boolean | undefined;
+    if (await this.isFederationRulesActive()) {
+      const startDate = competition.starts_on ?? this.now().toISOString().slice(0, 10);
+      try {
+        const latestPack = federationSportPackFor(competition.sport_code, startDate);
+        latestPackVersion = latestPack.version;
+        const hasOverrides = Object.keys(override).length > 0;
+        const divOverrides = await client.unsafe<{ count: number }>(
+          `SELECT count(*)::int AS count FROM division_sport_settings WHERE competition_id=$1 AND settings_override <> '{}'::jsonb`,
+          [competitionId],
+        );
+        updateAvailable = row.pack_version !== latestPackVersion || hasOverrides || (divOverrides[0]?.count ?? 0) > 0;
+      } catch {
+        // sport has no federation pack
+      }
+    }
     return {
       competition_id: row.competition_id,
       division_id: row.division_id,
@@ -2146,6 +2303,8 @@ export class Phase3Runtime {
       permission: competition.membership_role === "viewer" ? "read" : "write",
       read_only: competition.membership_role === "viewer",
       organisation_id: competition.organisation_id,
+      ...(latestPackVersion !== undefined ? { latest_pack_version: latestPackVersion } : {}),
+      ...(updateAvailable !== undefined ? { update_available: updateAvailable } : {}),
     };
   }
 
@@ -2166,7 +2325,7 @@ export class Phase3Runtime {
       `SELECT e.id,e.action,e.occurred_at,a.display_name AS actor_name,e.before_state,e.after_state
        FROM audit_events e LEFT JOIN accounts a ON a.id=e.actor_account_id
        WHERE e.target_type='competition' AND e.target_id=$1
-         AND e.action IN ('sport_settings.updated','sport_settings.copied')
+         AND e.action IN ('sport_settings.updated','sport_settings.copied','sport_settings.pack_switched','sport_settings.defaults_updated')
        ORDER BY e.occurred_at DESC,e.id DESC LIMIT 100`,
       [competitionId],
     );
@@ -2191,7 +2350,13 @@ export class Phase3Runtime {
   async updateSettings(
     actor: Phase3Actor,
     competitionId: string,
-    input: { revision: number; packVersion: string; override: Record<string, unknown>; divisionId?: string },
+    input: {
+      revision: number;
+      packVersion: string;
+      override: Record<string, unknown>;
+      divisionId?: string | undefined;
+      confirmResultsAffected?: boolean | undefined;
+    },
     requestId: string,
   ) {
     return this.transaction(async (tx) => {
@@ -2223,6 +2388,18 @@ export class Phase3Runtime {
       const pack = await this.sportPack(tx, competition.sport_code, settings.pack_version);
       const recommended = decodedJson(settings.recommended_snapshot);
       const competitionOverride = decodedJson(settings.competition_override);
+      const previousOverride = decodedJson(settings.division_override);
+
+      let affectedMatches: readonly { id: string; division_id: string; state: string }[] = [];
+      if (containsScoringOrStandingsRuleChange(previousOverride, input.override)) {
+        affectedMatches = await this.assertResultsConfirmationIfRequired(
+          tx,
+          competitionId,
+          input.divisionId ?? null,
+          input.confirmResultsAffected,
+        );
+      }
+
       const resolved = input.divisionId
         ? this.domain.resolveSettings(pack, recommended, competitionOverride, input.override)
         : this.domain.resolveSettings(pack, recommended, input.override);
@@ -2240,8 +2417,17 @@ export class Phase3Runtime {
             [id, input.override, actor.accountId, this.now(), input.revision, input.packVersion],
           );
       if (!updated[0]) throw new ApiError(409, ErrorCode.REVISION_CONFLICT, "Sport settings revision is stale");
+
+      if (affectedMatches.length > 0) {
+        await this.recalculateStandingsAfterRuleChange(
+          tx,
+          actor,
+          competitionId,
+          input.divisionId ?? null,
+          affectedMatches,
+        );
+      }
       // Redesign Phase 4 "Rules changes" history: every save records the settings before and after, with the actor.
-      const previousOverride = decodedJson(settings.division_override);
       const previous = input.divisionId
         ? this.domain.resolveSettings(pack, recommended, competitionOverride, previousOverride).effective
         : this.domain.resolveSettings(pack, recommended, previousOverride).effective;
@@ -2335,7 +2521,12 @@ export class Phase3Runtime {
     });
   }
 
-  async copyPreviousSettings(actor: Phase3Actor, competitionId: string, requestId: string) {
+  async copyPreviousSettings(
+    actor: Phase3Actor,
+    competitionId: string,
+    requestId: string,
+    input?: { confirmResultsAffected?: boolean | undefined },
+  ) {
     return this.transaction(async (tx) => {
       const competition = await this.competitionAccess(tx, competitionId, actor, true);
       this.assertMutable(competition);
@@ -2380,6 +2571,17 @@ export class Phase3Runtime {
         "Sport settings not found",
       );
       const currentOverride = decodedJson(current.settings_override);
+
+      let affectedMatches: readonly { id: string; division_id: string; state: string }[] = [];
+      if (containsScoringOrStandingsRuleChange(currentOverride, override)) {
+        affectedMatches = await this.assertResultsConfirmationIfRequired(
+          tx,
+          competitionId,
+          null,
+          input?.confirmResultsAffected,
+        );
+      }
+
       const updated = required(
         await tx.unsafe<{ revision: number }>(
           `UPDATE competition_sport_settings SET settings_override=$2::jsonb,customised=$3,
@@ -2397,6 +2599,9 @@ export class Phase3Runtime {
         ),
         "Sport settings not found",
       );
+      if (affectedMatches.length > 0) {
+        await this.recalculateStandingsAfterRuleChange(tx, actor, competitionId, null, affectedMatches);
+      }
       await this.evidence(
         tx,
         actor,
@@ -2416,6 +2621,210 @@ export class Phase3Runtime {
         pack_schema_version: previous.target_pack_schema_version,
         effective,
       };
+    });
+  }
+
+  private async assertResultsConfirmationIfRequired(
+    tx: PostgresJsSql,
+    competitionId: string,
+    divisionId: string | null,
+    confirmResultsAffected?: boolean,
+  ): Promise<readonly { id: string; division_id: string; state: string }[]> {
+    const affectedMatches = await tx.unsafe<{
+      id: string;
+      division_id: string;
+      state: string;
+    }>(
+      `SELECT m.id, m.division_id, m.state
+       FROM matches m
+       WHERE m.competition_id = $1
+         AND ($2::uuid IS NULL OR m.division_id = $2::uuid)
+         AND m.state IN ('in_progress', 'final', 'corrected')`,
+      [competitionId, divisionId],
+    );
+
+    if (affectedMatches.length > 0 && !confirmResultsAffected) {
+      throw new ApiError(
+        409,
+        ErrorCode.RESULTS_EXIST_CONFIRMATION_REQUIRED,
+        "Matches with recorded results exist. Updating scoring or standings rules will recalculate standings tables. Confirmation required.",
+        {
+          affected_match_count: affectedMatches.length,
+          affected_matches: affectedMatches.map((m) => ({
+            id: m.id,
+            division_id: m.division_id,
+            status: m.state,
+          })),
+        },
+      );
+    }
+
+    return affectedMatches;
+  }
+
+  private async recalculateStandingsAfterRuleChange(
+    tx: PostgresJsSql,
+    actor: Phase3Actor,
+    competitionId: string,
+    divisionId: string | null,
+    affectedMatches: readonly { id: string; division_id: string; state: string }[],
+  ): Promise<void> {
+    if (affectedMatches.length === 0) return;
+
+    const targetDivisionIds = divisionId
+      ? [divisionId]
+      : Array.from(new Set(affectedMatches.map((m) => m.division_id)));
+
+    const pubRows = await tx.unsafe<{ result_version: number }>(
+      `SELECT result_version FROM competition_publications WHERE competition_id=$1 FOR UPDATE`,
+      [competitionId],
+    );
+    const publication = pubRows[0];
+    if (publication && publication.result_version >= 1) {
+      await tx.unsafe(
+        `UPDATE competition_publications SET result_version = result_version + 1 WHERE competition_id=$1`,
+        [competitionId],
+      );
+      for (const divId of targetDivisionIds) {
+        const hasPublishedFormat = (
+          await tx.unsafe<{ id: string }>(
+            `SELECT id FROM format_revisions WHERE division_id=$1 AND status='published' LIMIT 1`,
+            [divId],
+          )
+        )[0];
+        if (hasPublishedFormat) {
+          await this.recalculateStandingsInTransaction(tx, actor, competitionId, divId, randomUUID());
+        }
+      }
+    }
+  }
+
+  async updateToFederationDefaults(
+    actor: Phase3Actor,
+    competitionId: string,
+    input: { confirmPublished?: boolean | undefined; confirmResultsAffected?: boolean | undefined } | undefined,
+    requestId: string,
+  ) {
+    if (!(await this.isFederationRulesActive())) {
+      throw new ApiError(404, ErrorCode.ROUTE_NOT_FOUND, "Feature not enabled");
+    }
+    return this.transaction(async (tx) => {
+      const competition = await this.competitionAccess(tx, competitionId, actor, true);
+      if (competition.membership_role !== "owner" && competition.membership_role !== "organiser") {
+        throw new ApiError(
+          403,
+          ErrorCode.ORGANISATION_ACCESS_DENIED,
+          "Organiser permission required to update defaults",
+        );
+      }
+      if (competition.status === "archived") {
+        throw new ApiError(409, ErrorCode.COMPETITION_ARCHIVED, "Archived competitions are immutable");
+      }
+      if (competition.status === "completed") {
+        throw new ApiError(409, ErrorCode.LIFECYCLE_CONFLICT, "Completed competitions cannot update defaults");
+      }
+      if (
+        (competition.status === "published" || competition.status === "active" || competition.status === "live") &&
+        !input?.confirmPublished
+      ) {
+        throw new ApiError(
+          409,
+          ErrorCode.PUBLISHED_COMPETITION_CONFIRMATION_REQUIRED,
+          "Updating defaults on a published or active competition requires confirmation",
+        );
+      }
+
+      const startDate = competition.starts_on ?? this.now().toISOString().slice(0, 10);
+      let latestPack: SportPack;
+      try {
+        latestPack = federationSportPackFor(competition.sport_code, startDate);
+      } catch {
+        throw new ApiError(
+          400,
+          ErrorCode.REQUEST_INVALID,
+          `No federation sport pack available for sport ${competition.sport_code}`,
+        );
+      }
+
+      const [currentSettings] = await tx.unsafe<{
+        pack_version: string;
+        settings_override: Record<string, unknown>;
+      }>(`SELECT pack_version, settings_override FROM competition_sport_settings WHERE competition_id=$1`, [
+        competitionId,
+      ]);
+      if (!currentSettings) throw new ApiError(404, ErrorCode.SETTINGS_CORRUPT, "Sport settings not found");
+
+      const divOverrides = await tx.unsafe<{ count: number }>(
+        `SELECT count(*)::int AS count FROM division_sport_settings WHERE competition_id=$1 AND settings_override <> '{}'::jsonb`,
+        [competitionId],
+      );
+
+      const hasOverrides = Object.keys(currentSettings.settings_override).length > 0;
+      const hasDivOverrides = (divOverrides[0]?.count ?? 0) > 0;
+      const isAlreadyLatest = currentSettings.pack_version === latestPack.version;
+
+      if (isAlreadyLatest && !hasOverrides && !hasDivOverrides) {
+        return this.readSettings(actor, competitionId, undefined, tx);
+      }
+
+      const affectedMatches = await this.assertResultsConfirmationIfRequired(
+        tx,
+        competitionId,
+        null,
+        input?.confirmResultsAffected,
+      );
+
+      await tx.unsafe(
+        `INSERT INTO sport_pack_versions (sport_code,version,schema_version,definition,definition_hash)
+         VALUES ($1,$2,$3,$4::jsonb,$5) ON CONFLICT (sport_code,version) DO NOTHING`,
+        [
+          competition.sport_code,
+          latestPack.version,
+          latestPack.schemaVersion,
+          latestPack,
+          this.domain.hash(latestPack),
+        ],
+      );
+
+      const occurredAt = this.now();
+      await tx.unsafe(
+        `UPDATE competition_sport_settings SET pack_version=$2,pack_schema_version=$3,
+           recommended_snapshot=$4::jsonb,settings_override='{}'::jsonb,customised=false,
+           revision=revision+1,updated_by=$5,updated_at=$6 WHERE competition_id=$1`,
+        [
+          competitionId,
+          latestPack.version,
+          latestPack.schemaVersion,
+          latestPack.recommendedSettings,
+          actor.accountId,
+          occurredAt,
+        ],
+      );
+      await tx.unsafe(
+        `UPDATE division_sport_settings SET pack_version=$2,settings_override='{}'::jsonb,
+           revision=revision+1,updated_by=$3,updated_at=$4 WHERE competition_id=$1`,
+        [competitionId, latestPack.version, actor.accountId, occurredAt],
+      );
+
+      await this.evidence(
+        tx,
+        actor,
+        competition.organisation_id,
+        requestId,
+        "sport_settings.defaults_updated",
+        "competition",
+        competitionId,
+        {
+          previous_pack_version: currentSettings.pack_version,
+          pack_version: latestPack.version,
+        },
+      );
+
+      if (affectedMatches.length > 0) {
+        await this.recalculateStandingsAfterRuleChange(tx, actor, competitionId, null, affectedMatches);
+      }
+
+      return this.readSettings(actor, competitionId, undefined, tx);
     });
   }
 

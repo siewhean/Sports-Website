@@ -91,6 +91,7 @@ const PatchBody = strict({
     strict({ step_id: Type.Literal("basics"), value: Basics }),
     strict({ step_id: Type.Literal("format_preferences"), value: Preferences }),
   ]),
+  confirm_pack_switch: Type.Optional(Type.Boolean()),
 });
 const ResumeBody = strict({ idempotency_key: IdempotencyKey });
 
@@ -142,7 +143,7 @@ export async function registerPhase4SetupPatchRoutes(
   }>(
     "/api/v1/competitions/:competitionId/setup-draft",
     {
-      preValidation: rejectUnknownBodyFields(["expected_revision", "idempotency_key", "step"]),
+      preValidation: rejectUnknownBodyFields(["expected_revision", "idempotency_key", "step", "confirm_pack_switch"]),
       schema: {
         security: [{ sessionCookie: [] }],
         headers: MutationHeaders,

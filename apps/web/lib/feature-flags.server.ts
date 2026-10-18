@@ -42,3 +42,5 @@ export async function isOrganiserRedesignShellEnabled(): Promise<boolean> {
 export async function isRedesignRulesEnabled(): Promise<boolean> {
   return (await evaluator.evaluate("organiser.redesign-p4-rules")).value;
 }
+
+export const isOrganiserRedesignP4RulesEnabled = isRedesignRulesEnabled;

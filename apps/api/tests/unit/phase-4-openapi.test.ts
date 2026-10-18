@@ -69,7 +69,12 @@ describe("Phase 4 OpenAPI contract", () => {
     const patch = document.paths[setupPath]?.patch?.requestBody?.content?.["application/json"]?.schema as
       { additionalProperties?: boolean; properties?: Record<string, unknown> } | undefined;
     expect(patch?.additionalProperties).toBe(false);
-    expect(Object.keys(patch?.properties ?? {}).sort()).toEqual(["expected_revision", "idempotency_key", "step"]);
+    expect(Object.keys(patch?.properties ?? {}).sort()).toEqual([
+      "confirm_pack_switch",
+      "expected_revision",
+      "idempotency_key",
+      "step",
+    ]);
 
     const job = document.paths["/api/v1/competitions/{competitionId}/schedule-jobs"]?.post?.requestBody?.content?.[
       "application/json"

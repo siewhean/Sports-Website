@@ -31,6 +31,7 @@ describe("Phase 3 OpenAPI contract", () => {
       "/api/v1/competitions/{competitionId}/settings",
       "/api/v1/competitions/{competitionId}/divisions/{divisionId}/settings",
       "/api/v1/competitions/{competitionId}/settings/copy-previous",
+      "/api/v1/competitions/{competitionId}/settings/update-defaults",
       "/api/v1/account/sport-defaults/{sportCode}",
       "/api/v1/admin/sport-packs/drafts",
       "/api/v1/admin/sport-packs/{sportCode}",
@@ -45,6 +46,9 @@ describe("Phase 3 OpenAPI contract", () => {
     ];
     expect(paths.every((path) => document.paths[path])).toBe(true);
     expect(document.paths[paths[1] ?? ""]?.get?.security).toEqual([{ sessionCookie: [] }]);
+    const updateDefaults = document.paths["/api/v1/competitions/{competitionId}/settings/update-defaults"]?.post;
+    expect(updateDefaults?.security).toEqual([{ sessionCookie: [] }]);
+    expect(updateDefaults?.responses).toHaveProperty("409");
     const settingsMutation = document.paths["/api/v1/competitions/{competitionId}/settings"]?.put;
     expect(settingsMutation?.security).toEqual([{ sessionCookie: [] }]);
     expect(settingsMutation?.parameters?.map((parameter) => parameter.name)).toEqual(

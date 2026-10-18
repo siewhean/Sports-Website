@@ -8,10 +8,17 @@ import type {
   Phase4SetupStepId,
   Phase4SetupValues,
 } from "@matchday/contracts";
-import { deriveAssistedSetupProgress, validateAssistedSetupStep } from "@matchday/domain";
+import {
+  deriveAssistedSetupProgress,
+  federationSportPackFor,
+  isFederationSportPackVersion,
+  type SportPack,
+  validateAssistedSetupStep,
+} from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import type { ScheduleEnqueuePort } from "@matchday/scheduler";
 import { ApiError, ErrorCode, type ApiErrorCode } from "./errors.js";
+import { phase3DomainAdapter } from "./phase-3-domain-adapter.js";
 import type { Phase3Actor, Phase3Runtime } from "./phase-3-runtime.js";
 import { Phase4Runtime, type Phase4AiOptions, type Phase4PublicProjectionPort } from "./phase-4-runtime.js";
 import {
@@ -124,6 +131,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
         request.transition.step,
         request.idempotency_key,
         requestId,
+        request.confirm_pack_switch,
       );
     }
     return super.autosaveSetupDraft(actor, competitionId, request, requestId, options);
@@ -143,6 +151,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
       request.step,
       request.idempotency_key,
       requestId,
+      request.confirm_pack_switch,
     );
   }
 
@@ -238,6 +247,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
     previous: Phase4SetupValues,
     next: MutableSetupValues,
     requestId: string,
+    confirmPackSwitch?: boolean,
   ): Promise<void> {
     const basics = next.basics;
     if (!basics) throw new ApiError(422, ErrorCode.SETUP_STEP_INVALID, "Basics are required");
@@ -246,11 +256,64 @@ export class GateBPhase4Runtime extends Phase4Runtime {
 
     const oldBasics = previous.basics;
     const sportChanged = access.sport_code !== basics.sport_code;
+    const dateChanged = access.starts_on !== basics.starts_on;
     const capacityInputsChanged =
-      sportChanged ||
-      access.timezone !== basics.time_zone ||
-      access.starts_on !== basics.starts_on ||
-      access.ends_on !== basics.ends_on;
+      sportChanged || access.timezone !== basics.time_zone || dateChanged || access.ends_on !== basics.ends_on;
+
+    let pendingPackSwitch: SportPack | null = null;
+    let previousPackVersionForAudit: string | null = null;
+    if (
+      (await this.phase3.isFederationRulesActive()) &&
+      (access.status === "draft" || access.status === "ready") &&
+      !sportChanged
+    ) {
+      if (dateChanged || confirmPackSwitch === true) {
+        const [settingsRow] = await tx.unsafe<{
+          pack_version: string | null;
+          settings_override: Record<string, unknown> | null;
+        }>(`SELECT pack_version, settings_override FROM competition_sport_settings WHERE competition_id=$1`, [
+          access.id,
+        ]);
+        const currentPackVersion = settingsRow?.pack_version;
+        if (currentPackVersion && isFederationSportPackVersion(currentPackVersion)) {
+          let offeredPack: SportPack | null = null;
+          try {
+            offeredPack = federationSportPackFor(basics.sport_code, basics.starts_on);
+          } catch {
+            offeredPack = null;
+          }
+          if (offeredPack && offeredPack.version !== currentPackVersion) {
+            if (confirmPackSwitch === undefined) {
+              const compOverrides = settingsRow?.settings_override ?? {};
+              const divOverridesRows = await tx.unsafe<{
+                division_id: string;
+                settings_override: Record<string, unknown>;
+              }>(
+                `SELECT division_id, settings_override FROM division_sport_settings WHERE competition_id=$1 AND settings_override <> '{}'::jsonb`,
+                [access.id],
+              );
+              throw new ApiError(
+                409,
+                ErrorCode.SPORT_PACK_UPDATE_OFFERED,
+                `Changing the start date offers sport pack ${offeredPack.version} (${offeredPack.displayName}). Switching will reset custom rules.`,
+                {
+                  current_pack_version: currentPackVersion,
+                  offered_pack_version: offeredPack.version,
+                  lost_overrides: {
+                    competition: compOverrides,
+                    divisions: divOverridesRows,
+                  },
+                },
+              );
+            }
+            if (confirmPackSwitch === true) {
+              pendingPackSwitch = offeredPack;
+              previousPackVersionForAudit = currentPackVersion;
+            }
+          }
+        }
+      }
+    }
     const newPack = sportChanged ? await this.activePack(tx, basics.sport_code) : null;
     const oldPack = sportChanged ? await this.pinnedCompetitionPack(tx, access.id) : null;
     let capacityDefaultsChanged = false;
@@ -314,6 +377,51 @@ export class GateBPhase4Runtime extends Phase4Runtime {
         [access.id, basics.sport_code, newPack.version, actor.accountId, this.gateNow()],
       );
       next.settings = await this.settingsReferences(tx, access.id);
+    }
+
+    if (pendingPackSwitch) {
+      await tx.unsafe(
+        `INSERT INTO sport_pack_versions (sport_code,version,schema_version,definition,definition_hash)
+         VALUES ($1,$2,$3,$4::jsonb,$5) ON CONFLICT (sport_code,version) DO NOTHING`,
+        [
+          basics.sport_code,
+          pendingPackSwitch.version,
+          pendingPackSwitch.schemaVersion,
+          pendingPackSwitch,
+          phase3DomainAdapter.hash(pendingPackSwitch),
+        ],
+      );
+      await tx.unsafe(
+        `UPDATE competition_sport_settings SET pack_version=$2,pack_schema_version=$3,
+           recommended_snapshot=$4::jsonb,settings_override='{}'::jsonb,customised=false,
+           revision=revision+1,updated_by=$5,updated_at=$6 WHERE competition_id=$1`,
+        [
+          access.id,
+          pendingPackSwitch.version,
+          pendingPackSwitch.schemaVersion,
+          pendingPackSwitch.recommendedSettings ?? {},
+          actor.accountId,
+          this.gateNow(),
+        ],
+      );
+      await tx.unsafe(
+        `UPDATE division_sport_settings SET pack_version=$2,settings_override='{}'::jsonb,
+           revision=revision+1,updated_by=$3,updated_at=$4 WHERE competition_id=$1`,
+        [access.id, pendingPackSwitch.version, actor.accountId, this.gateNow()],
+      );
+      next.settings = await this.settingsReferences(tx, access.id);
+      await tx.unsafe(
+        `INSERT INTO audit_events(request_id,actor_account_id,actor_type,organisation_id,action,target_type,target_id,before_state,after_state)
+         VALUES($1,$2,'account',$3,'sport_settings.pack_switched','competition',$4,$5::jsonb,$6::jsonb)`,
+        [
+          requestId,
+          actor.accountId,
+          access.organisation_id,
+          access.id,
+          { previous_pack_version: previousPackVersionForAudit },
+          { pack_version: pendingPackSwitch.version },
+        ],
+      );
     }
 
     if (capacityInputsChanged || capacityDefaultsChanged) next.capacity = null;
@@ -389,6 +497,7 @@ export class GateBPhase4Runtime extends Phase4Runtime {
     step: Phase4PatchableSetupStep,
     idempotencyKey: string,
     requestId: string,
+    confirmPackSwitch?: boolean,
   ): Promise<Phase4SetupPatchResponse | Phase4SetupAutosaveResponse> {
     if (!this.gateSql.begin) throw new Error("Phase 4 setup mutations require a transaction-capable PostgreSQL client");
     try {
@@ -414,7 +523,8 @@ export class GateBPhase4Runtime extends Phase4Runtime {
         const previous = phase4SetupValuesFromStorage(row);
         const next = structuredClone(previous) as MutableSetupValues;
         (next as Record<string, unknown>)[step.step_id] = step.value;
-        if (step.step_id === "basics") await this.applyCanonicalBasics(tx, actor, access, previous, next, requestId);
+        if (step.step_id === "basics")
+          await this.applyCanonicalBasics(tx, actor, access, previous, next, requestId, confirmPackSwitch);
         else {
           const issues = validateAssistedSetupStep(step.step_id, phase4SetupDomainValues(next));
           if (issues.length > 0) throw new ApiError(422, ErrorCode.SETUP_STEP_INVALID, issues[0]!.message);

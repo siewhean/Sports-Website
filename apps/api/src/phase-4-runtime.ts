@@ -507,7 +507,7 @@ export class Phase4Runtime {
 
   constructor(
     private readonly sql: PostgresJsSql,
-    private readonly phase3: Phase3Runtime,
+    protected readonly phase3: Phase3Runtime,
     private readonly enqueue: ScheduleEnqueuePort,
     private readonly ai: Phase4AiOptions,
     private readonly now: () => Date = () => new Date(),

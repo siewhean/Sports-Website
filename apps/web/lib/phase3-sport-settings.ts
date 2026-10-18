@@ -26,6 +26,7 @@ export type SportSettingsCapabilities = Readonly<{
   save: boolean;
   saveDefault: boolean;
   copyPrevious: boolean;
+  updateDefaults?: boolean;
 }>;
 
 export type SportSettingsDocument = Readonly<{
@@ -48,6 +49,8 @@ export type SportSettingsDocument = Readonly<{
   packDefinition: SportPack;
   canEdit: boolean;
   capabilities: SportSettingsCapabilities;
+  latestPackVersion?: string;
+  updateAvailable?: boolean;
 }>;
 
 export type SettingsSyncPresentation = Readonly<{
@@ -90,6 +93,8 @@ const responseKeys = new Set([
   "organisation_id",
 ]);
 
+const optionalResponseKeys = new Set(["latest_pack_version", "update_available"]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -109,8 +114,8 @@ export function parseSportSettingsResponse(
 ): SportSettingsDocument | null {
   if (
     !isRecord(payload) ||
-    Object.keys(payload).length !== responseKeys.size ||
-    Object.keys(payload).some((key) => !responseKeys.has(key))
+    Object.keys(payload).some((key) => !responseKeys.has(key) && !optionalResponseKeys.has(key)) ||
+    [...responseKeys].some((key) => !(key in payload))
   )
     return null;
   const sportId = payload.sport_code;
@@ -176,7 +181,10 @@ export function parseSportSettingsResponse(
       save: !readOnly,
       saveDefault: !readOnly,
       copyPrevious: !readOnly && context.scope === "competition",
+      updateDefaults: !readOnly && context.scope === "competition",
     },
+    latestPackVersion: typeof payload.latest_pack_version === "string" ? payload.latest_pack_version : undefined,
+    updateAvailable: typeof payload.update_available === "boolean" ? payload.update_available : undefined,
   };
 }
 
@@ -337,6 +345,19 @@ export const phase3SettingsCopy = {
   accessUnavailableStatus: "Settings access unavailable",
   revisionUnavailableStatus: "Saved version unavailable",
   emptyStatus: "No saved settings",
+  updateDefaults: "Update to latest defaults",
+  updateDefaultsTitle: "Latest federation rules",
+  updateAvailable: "Update available",
+  federationRules: "Federation rules",
+  updatingDefaults: "Updating to defaults…",
+  defaultsUpdatedAnnouncement: "Settings reset to latest federation defaults.",
+  resultsExistConfirmTitle: "Match results will be recalculated",
+  resultsExistConfirmBody:
+    "Match results have already been entered. Changing scoring or standings rules requires recalculating standings tables.",
+  publishedConfirmTitle: "Competition is published",
+  publishedConfirmBody: "This competition is published, active, or live. Updating rules requires confirmation.",
+  confirmProceed: "Confirm and proceed",
+  confirmCancel: "Cancel",
 } as const;
 
 export const phase3SettingsMachine = {
@@ -346,6 +367,7 @@ export const phase3SettingsMachine = {
   save: "save" as const,
   copy: "copy" as const,
   default: "default" as const,
+  updateDefaults: "updateDefaults" as const,
   up: "up" as const,
   down: "down" as const,
   unavailable: "unavailable" as const,
@@ -419,4 +441,23 @@ export function settingsSyncPresentation(document: SportSettingsDocument): Setti
 
 export function unavailableSettingLabel(label: string): string {
   return `${phase3SettingsCopy.edit} ${label} — ${phase3SettingsCopy.unavailable}`;
+}
+
+export function formatAffectedMatchesTitle(count: number): string {
+  return `Affected matches (${count}):`;
+}
+
+export function formatAffectedMatchItem(id: string, status: string): string {
+  return `Match ${id.slice(0, 8)}… (${status})`;
+}
+
+export function formatMoreMatches(count: number): string {
+  return `…and ${count} more`;
+}
+
+export function formatPackVersionStatus(currentVersion: string, latestVersion?: string): string {
+  if (latestVersion && latestVersion !== currentVersion) {
+    return `Active pack: ${currentVersion} · Available: ${latestVersion}`;
+  }
+  return `Active pack: ${currentVersion}`;
 }

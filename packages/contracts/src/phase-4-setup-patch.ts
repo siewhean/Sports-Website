@@ -13,6 +13,7 @@ export type Phase4SetupPatchRequest = {
   readonly expected_revision: number;
   readonly idempotency_key: string;
   readonly step: Phase4PatchableSetupStep;
+  readonly confirm_pack_switch?: boolean;
 };
 
 export type Phase4SetupPatchResponse = Extract<
