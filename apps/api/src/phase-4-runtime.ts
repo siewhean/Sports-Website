@@ -564,7 +564,7 @@ export class Phase4Runtime {
     if (!rows[0]) throw new ApiError(403, ErrorCode.ORGANISATION_ACCESS_DENIED, "Organisation access denied");
   }
 
-  private async evidence(
+  protected async evidence(
     tx: PostgresJsSql,
     actor: Phase3Actor,
     organisationId: string,

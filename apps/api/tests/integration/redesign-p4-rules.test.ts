@@ -56,7 +56,7 @@ beforeAll(async () => {
   federationRuntime = new Phase3Runtime(sql, phase3DomainAdapter, undefined, {
     federationRulesEnabled: async () => true,
   });
-});
+}, 60_000);
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())));
@@ -64,7 +64,7 @@ afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())));
 afterAll(async () => {
   await client?.end({ timeout: 2 });
   await dropTestSchema(databaseUrl, schema);
-});
+}, 60_000);
 
 async function create(
   runtime: Phase3Runtime,
@@ -601,18 +601,27 @@ describeInfrastructure("Results-exist confirmation guard & recalculation (Sectio
     );
     expect(confirmed.revision).toBe(3);
 
-    // Verify publication result_version was bumped
-    const [pub] = await client<{ result_version: number }[]>`
-      SELECT result_version FROM competition_publications WHERE competition_id=${comp.id}`;
+    // Verify publication result_version was bumped and results_published_at was set
+    const [pub] = await client<{ result_version: number; results_published_at: Date | null }[]>`
+      SELECT result_version, results_published_at FROM competition_publications WHERE competition_id=${comp.id}`;
     expect(pub?.result_version).toBe(2);
+    expect(pub?.results_published_at).not.toBeNull();
 
     // Standings are readable after confirm with result_version 2 (recalculated with new rules, no STANDINGS_SOURCE_STALE)
     const standings = (await federationRuntime.readStandings(actor, comp.id, div1.id)) as unknown as {
       result_version: number;
-      standings: unknown;
+      standings: { groups: Record<string, { rows: { entryId: string; tablePoints: number }[] }> };
     };
     expect(standings.result_version).toBe(2);
     expect(standings.standings).toBeDefined();
+    const groupRows = Object.values(standings.standings.groups)[0]?.rows;
+    const winnerRow = groupRows?.find((r) => r.entryId === homeId);
+    expect(winnerRow?.tablePoints).toBe(4);
+
+    // Verify bracket_snapshots was updated for result_version 2
+    const [bracketSnap] = await client<{ result_version: number }[]>`
+      SELECT result_version FROM bracket_snapshots WHERE competition_id=${comp.id} AND division_id=${div1.id} AND result_version=2`;
+    expect(bracketSnap?.result_version).toBe(2);
 
     // Verify match state and event/result scores were untouched
     const [match] = await client<{ state: string }[]>`SELECT state FROM matches WHERE id=${matchId}`;
@@ -621,6 +630,127 @@ describeInfrastructure("Results-exist confirmation guard & recalculation (Sectio
       SELECT home_score, away_score FROM match_result_snapshots WHERE match_id=${matchId}`;
     expect(resultSnapshot?.home_score).toBe(2);
     expect(resultSnapshot?.away_score).toBe(0);
+  });
+
+  it("refreshes public standings and bracket snapshots on published competitions after rule changes", async () => {
+    const comp = await create(federationRuntime, "canoe_polo", "2027-03-01");
+    const actor = { accountId: ownerId };
+    const div = (await federationRuntime.createDivision(
+      actor,
+      comp.id,
+      { name: "Open", entryLimit: 8 },
+      randomUUID(),
+      `div-open-${randomUUID()}`,
+    )) as { id: string };
+
+    const t1 = randomUUID();
+    const t2 = randomUUID();
+    await client`INSERT INTO division_entries(id, division_id, name, seed, entry_type, status)
+      VALUES (${t1}, ${div.id}, 'Team Alpha', 1, 'team', 'confirmed'),
+             (${t2}, ${div.id}, 'Team Beta', 2, 'team', 'confirmed')`;
+
+    await federationRuntime.replaceCapacity(
+      actor,
+      comp.id,
+      {
+        revision: 1,
+        areas: [
+          {
+            name: "Pitch 1",
+            slotMinutes: 40,
+            availability: [{ date: "2027-03-01", startTime: "08:00", endTime: "20:00" }],
+          },
+        ],
+      },
+      randomUUID(),
+    );
+
+    const graph = createRoundRobinFormatGraph(2);
+    const format = await federationRuntime.createFormatRevision(actor, comp.id, div.id, graph, randomUUID());
+
+    const matchId = randomUUID();
+    const matchCode = graph.matches[0]!.id;
+    await client`INSERT INTO matches(
+      id, competition_id, division_id, format_revision_id, code, stage, round_number, ordinal, home_entry_id, away_entry_id, state
+    ) VALUES (
+      ${matchId}, ${comp.id}, ${div.id}, ${format.id}, ${matchCode}, 'group', 1, 1, ${t1}, ${t2}, 'final'
+    )`;
+
+    await federationRuntime.publishFormat(actor, comp.id, format.id, format.definition_hash, randomUUID());
+
+    await client`INSERT INTO match_result_snapshots(
+      match_id, result_version, through_sequence, home_score, away_score, state, snapshot
+    ) VALUES (
+      ${matchId}, 1, 1, 3, 1, 'final', ${client.json({ homeSegments: [3], awaySegments: [1] })}
+    )`;
+
+    // Set competition to published with publication at result_version 1
+    await client`UPDATE competitions SET status='ready' WHERE id=${comp.id}`;
+    await client`UPDATE competitions SET status='published' WHERE id=${comp.id}`;
+    await client`INSERT INTO competition_publications (competition_id, schedule_version, result_version, results_published_at)
+      VALUES (${comp.id}, 0, 1, now())
+      ON CONFLICT (competition_id) DO UPDATE SET schedule_version = 0, result_version = 1, results_published_at = now()`;
+
+    // Initial recalculation & projection write at result_version 1
+    await federationRuntime.recalculateStandings(actor, comp.id, div.id, randomUUID());
+    const phase2 = new Phase2Runtime(
+      client as unknown as PostgresJsSql,
+      phase2DomainAdapter,
+      undefined,
+      undefined,
+      "redesign-p4-rules-fallback-code-hmac-secret",
+    );
+    federationRuntime.setPublicProjection(phase2);
+    await phase2.writePublicProjection(client as unknown as PostgresJsSql, comp.id, 0, 1);
+
+    // Initial public projection at result_version 1
+    const [initialProj] = await client<{ result_version: number; projection: unknown }[]>`
+      SELECT result_version, projection FROM public_competition_projections WHERE competition_id=${comp.id}`;
+    expect(initialProj?.result_version).toBe(1);
+
+    // Now change winPoints to 5 with confirmResultsAffected: true
+    await federationRuntime.updateSettings(
+      actor,
+      comp.id,
+      { packVersion: "1.0.0", revision: 1, override: { winPoints: 5 }, confirmResultsAffected: true },
+      randomUUID(),
+    );
+
+    // Verify publication result_version bumped to 2 and results_published_at updated
+    const [pub] = await client<{ result_version: number; results_published_at: Date | null }[]>`
+      SELECT result_version, results_published_at FROM competition_publications WHERE competition_id=${comp.id}`;
+    expect(pub?.result_version).toBe(2);
+    expect(pub?.results_published_at).not.toBeNull();
+
+    // Verify bracket_snapshots exists at result_version 2
+    const [bracketSnap] = await client<{ result_version: number }[]>`
+      SELECT result_version FROM bracket_snapshots WHERE competition_id=${comp.id} AND division_id=${div.id} AND result_version=2`;
+    expect(bracketSnap?.result_version).toBe(2);
+
+    // Verify public_competition_projections is automatically refreshed at result_version 2
+    const [refreshedProj] = await client<{ result_version: number; projection: unknown }[]>`
+      SELECT result_version, projection FROM public_competition_projections
+      WHERE competition_id=${comp.id} AND result_version=2`;
+    expect(refreshedProj?.result_version).toBe(2);
+
+    // Spectators see the updated standings (winner points = 5) in the refreshed public projection
+    const rawProj =
+      typeof refreshedProj?.projection === "string"
+        ? (JSON.parse(refreshedProj.projection) as Record<string, unknown>)
+        : (refreshedProj?.projection as Record<string, unknown> | undefined);
+    const proj = rawProj as {
+      divisions?: Array<{
+        standings?: {
+          standings?: {
+            groups?: Record<string, { rows?: Array<{ entryId: string; tablePoints: number }> }>;
+          };
+        };
+      }>;
+    };
+    const publicStandings = proj?.divisions?.[0]?.standings?.standings;
+    const firstGroup = publicStandings?.groups ? Object.values(publicStandings.groups)[0] : undefined;
+    const winnerRow = firstGroup?.rows?.find((r) => r.entryId === t1);
+    expect(winnerRow?.tablePoints).toBe(5);
   });
 });
 

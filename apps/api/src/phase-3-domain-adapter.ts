@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
 import {
   SPORT_PACKS,
   STANDINGS_SPORT_PACKS,
@@ -230,6 +231,9 @@ export const phase3DomainAdapter = {
     crossGroupStandings?: ReturnType<typeof compareAcrossGroups>;
   }) {
     return applyAutomaticAdvancement(input);
+  },
+  resolveBracket(input: Parameters<typeof phase2DomainAdapter.resolveBracket>[0]) {
+    return phase2DomainAdapter.resolveBracket(input);
   },
 };
 

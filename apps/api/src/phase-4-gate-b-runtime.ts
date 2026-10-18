@@ -410,17 +410,18 @@ export class GateBPhase4Runtime extends Phase4Runtime {
         [access.id, pendingPackSwitch.version, actor.accountId, this.gateNow()],
       );
       next.settings = await this.settingsReferences(tx, access.id);
-      await tx.unsafe(
-        `INSERT INTO audit_events(request_id,actor_account_id,actor_type,organisation_id,action,target_type,target_id,before_state,after_state)
-         VALUES($1,$2,'account',$3,'sport_settings.pack_switched','competition',$4,$5::jsonb,$6::jsonb)`,
-        [
-          requestId,
-          actor.accountId,
-          access.organisation_id,
-          access.id,
-          { previous_pack_version: previousPackVersionForAudit },
-          { pack_version: pendingPackSwitch.version },
-        ],
+      await this.evidence(
+        tx,
+        actor,
+        access.organisation_id,
+        requestId,
+        "sport_settings.pack_switched",
+        "competition",
+        access.id,
+        {
+          previous_pack_version: previousPackVersionForAudit,
+          pack_version: pendingPackSwitch.version,
+        },
       );
     }
 

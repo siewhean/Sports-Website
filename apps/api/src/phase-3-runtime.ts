@@ -16,6 +16,8 @@ import {
 } from "@matchday/domain";
 import type { PostgresJsSql } from "@matchday/identity";
 import { ApiError, ErrorCode } from "./errors.js";
+import { Phase2Runtime } from "./phase-2-runtime.js";
+import { phase2DomainAdapter } from "./phase-2-domain-adapter.js";
 
 export function isRedesignP4RulesEnabled(): boolean {
   const env = process.env.MATCHDAY_FEATURE_REDESIGN_P4_RULES?.trim().toLowerCase();
@@ -229,12 +231,24 @@ export function settingsHistoryChanges(before: unknown, after: unknown): readonl
     .map((key) => ({ setting: key, before: left[key] ?? null, after: right[key] ?? null }));
 }
 
+export type Phase3PublicProjectionPort = {
+  writePublicProjection(
+    tx: PostgresJsSql,
+    competitionId: string,
+    scheduleVersion: number,
+    resultVersion: number,
+    options?: { liveScores?: Map<string, { home: number; away: number }> },
+  ): Promise<void>;
+};
+
 export type Phase3RuntimeOptions = Readonly<{
   /** Redesign Phase 4 flag `redesign_p4_rules`: new competitions start from the federation packs. */
   federationRulesEnabled?: () => Promise<boolean>;
+  publicProjection?: Phase3PublicProjectionPort | undefined;
 }>;
 
 export class Phase3Runtime {
+  private publicProjection?: Phase3PublicProjectionPort | undefined;
   private readonly competitionRepo: CompetitionRepository;
   private readonly organisationRepo: OrganisationRepository;
   private readonly divisionRepo: DivisionRepository;
@@ -250,6 +264,7 @@ export class Phase3Runtime {
     private readonly now: () => Date = () => new Date(),
     private readonly options: Phase3RuntimeOptions = {},
   ) {
+    this.publicProjection = options.publicProjection;
     this.competitionRepo = new CompetitionRepository(sql);
     this.organisationRepo = new OrganisationRepository(sql);
     this.divisionRepo = new DivisionRepository(sql);
@@ -270,6 +285,14 @@ export class Phase3Runtime {
       schedule: this.scheduleRepo,
       official: this.officialRepo,
     };
+  }
+
+  setPublicProjection(publicProjection: Phase3PublicProjectionPort): void {
+    this.publicProjection = publicProjection;
+  }
+
+  hasPublicProjection(): boolean {
+    return Boolean(this.publicProjection);
   }
 
   private async transaction<T>(operation: (tx: PostgresJsSql) => Promise<T>): Promise<T> {
@@ -2675,15 +2698,26 @@ export class Phase3Runtime {
       ? [divisionId]
       : Array.from(new Set(affectedMatches.map((m) => m.division_id)));
 
-    const pubRows = await tx.unsafe<{ result_version: number }>(
-      `SELECT result_version FROM competition_publications WHERE competition_id=$1 FOR UPDATE`,
+    const pubRows = await tx.unsafe<{
+      result_version: number;
+      schedule_version: number;
+      status: string;
+    }>(
+      `SELECT cp.result_version, cp.schedule_version, c.status
+       FROM competition_publications cp
+       JOIN competitions c ON c.id=cp.competition_id
+       WHERE cp.competition_id=$1 FOR UPDATE OF cp`,
       [competitionId],
     );
     const publication = pubRows[0];
     if (publication && publication.result_version >= 1) {
+      const now = this.now();
+      const newResultVersion = publication.result_version + 1;
       await tx.unsafe(
-        `UPDATE competition_publications SET result_version = result_version + 1 WHERE competition_id=$1`,
-        [competitionId],
+        `UPDATE competition_publications
+         SET result_version=$2, results_published_at=$3, updated_at=$3
+         WHERE competition_id=$1`,
+        [competitionId, newResultVersion, now],
       );
       for (const divId of targetDivisionIds) {
         const hasPublishedFormat = (
@@ -2694,6 +2728,30 @@ export class Phase3Runtime {
         )[0];
         if (hasPublishedFormat) {
           await this.recalculateStandingsInTransaction(tx, actor, competitionId, divId, randomUUID());
+        }
+      }
+      if (publication.status !== "draft") {
+        if (this.publicProjection) {
+          await this.publicProjection.writePublicProjection(
+            tx,
+            competitionId,
+            publication.schedule_version,
+            newResultVersion,
+          );
+        } else {
+          const projectionWriter = new Phase2Runtime(
+            this.sql,
+            phase2DomainAdapter,
+            this.now,
+            undefined,
+            "phase3-internal-projection-fallback-hmac-secret-min-32-bytes",
+          );
+          await projectionWriter.writePublicProjection(
+            tx,
+            competitionId,
+            publication.schedule_version,
+            newResultVersion,
+          );
         }
       }
     }
@@ -4079,6 +4137,42 @@ export class Phase3Runtime {
         ],
       );
     }
+    const groupRankings: Record<string, readonly string[]> = {};
+    for (const [groupId, groupSnapshot] of Object.entries(groupSnapshots)) {
+      groupRankings[groupId] = groupSnapshot.rows.filter((row) => row.status !== "withdrawn").map((row) => row.entryId);
+    }
+    const graphMatchIds = Object.fromEntries(
+      Array.from(matchesByCode.entries()).map(([code, match]) => [code, match.id]),
+    );
+    const persistedResults = resultRows.map((row) => ({
+      matchId: row.match_id,
+      homeEntryId: row.home_entry_id,
+      awayEntryId: row.away_entry_id,
+      homeScore: row.home_score,
+      awayScore: row.away_score,
+      state: row.state,
+    }));
+    const resolvedBracket = this.domain.resolveBracket({
+      format: graph,
+      results: persistedResults,
+      entries: participants.filter((p) => p.status !== "withdrawn"),
+      graphMatchIds,
+      groupRankings,
+    });
+    await tx.unsafe(
+      `INSERT INTO bracket_snapshots (
+         competition_id,division_id,result_version,bracket,conflicts
+       ) VALUES ($1,$2,$3,$4::jsonb,$5::jsonb)
+       ON CONFLICT (division_id,result_version) DO UPDATE
+       SET bracket=EXCLUDED.bracket,conflicts=EXCLUDED.conflicts`,
+      [
+        competitionId,
+        divisionId,
+        publication.result_version,
+        JSON.stringify(resolvedBracket.bracket),
+        JSON.stringify(conflicts),
+      ],
+    );
     await this.evidence(
       tx,
       actor,

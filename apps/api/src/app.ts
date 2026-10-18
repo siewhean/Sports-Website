@@ -760,6 +760,9 @@ export async function buildApp(options: BuildAppOptions) {
       });
     }
     if (options.phase3Runtime) {
+      if (options.phase2Runtime && !options.phase3Runtime.hasPublicProjection()) {
+        options.phase3Runtime.setPublicProjection(options.phase2Runtime);
+      }
       await registerPhase3Routes(app as unknown as FastifyInstance, {
         runtime: options.phase3Runtime,
         identityRuntime: options.identityRuntime,

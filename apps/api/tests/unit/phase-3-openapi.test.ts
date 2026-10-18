@@ -48,6 +48,7 @@ describe("Phase 3 OpenAPI contract", () => {
     expect(document.paths[paths[1] ?? ""]?.get?.security).toEqual([{ sessionCookie: [] }]);
     const updateDefaults = document.paths["/api/v1/competitions/{competitionId}/settings/update-defaults"]?.post;
     expect(updateDefaults?.security).toEqual([{ sessionCookie: [] }]);
+    expect(updateDefaults?.responses).toHaveProperty("400");
     expect(updateDefaults?.responses).toHaveProperty("409");
     const settingsMutation = document.paths["/api/v1/competitions/{competitionId}/settings"]?.put;
     expect(settingsMutation?.security).toEqual([{ sessionCookie: [] }]);

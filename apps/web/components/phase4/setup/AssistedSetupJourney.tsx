@@ -39,7 +39,7 @@ type PackOfferDialogState = {
   offeredPackVersion: string;
   lostOverrides?: {
     competition?: Record<string, unknown>;
-    divisions?: unknown[];
+    divisions?: Array<{ division_id: string; settings_override?: Record<string, unknown> }>;
   };
   startsOn: string;
   endsOn: string;
@@ -591,6 +591,15 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
     if (event.key === "Escape") {
       event.preventDefault();
       setPackOfferDialog(null);
+      const serverBasics = setupRef.current?.values?.basics;
+      const current = basicsRef.current;
+      if (serverBasics && current) {
+        setBasics({
+          ...current,
+          starts_on: serverBasics.starts_on,
+          ends_on: serverBasics.ends_on,
+        });
+      }
       return;
     }
     if (event.key !== "Tab") return;
@@ -687,12 +696,16 @@ export function AssistedSetupJourney({ document }: { document: AssistedSetupPage
           <div className={styles.modal}>
             <h3 id="pack-offer-title">{phase4SetupCopy.packOfferTitle}</h3>
             <p>{formatPackOfferDescription(packOfferDialog.offeredPackVersion)}</p>
-            {packOfferDialog.lostOverrides?.competition &&
-            Object.keys(packOfferDialog.lostOverrides.competition).length > 0 ? (
-              <p className={styles.modalResetNote}>
-                {formatPackOfferResetRules(Object.keys(packOfferDialog.lostOverrides.competition).join(", "))}
-              </p>
-            ) : null}
+            {(() => {
+              const lostComp = Object.keys(packOfferDialog.lostOverrides?.competition ?? {});
+              const lostDivs = (packOfferDialog.lostOverrides?.divisions ?? []).flatMap((d) =>
+                d?.settings_override && typeof d.settings_override === "object" ? Object.keys(d.settings_override) : [],
+              );
+              const lostKeys = [...new Set([...lostComp, ...lostDivs])];
+              return lostKeys.length > 0 ? (
+                <p className={styles.modalResetNote}>{formatPackOfferResetRules(lostKeys.join(", "))}</p>
+              ) : null;
+            })()}
             <div className={styles.modalActions}>
               <button
                 type="button"

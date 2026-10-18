@@ -163,7 +163,9 @@ const phase2Runtime = new FallbackKeyringPhase2Runtime(
 const competitionLifecycleSettings = competitionLifecycleSettingsFromEnv(process.env);
 phase2Runtime.liveMatchStaleAfterMs = competitionLifecycleSettings.liveMatchStaleAfterMs;
 let competitionLifecycleSweeper: CompetitionLifecycleSweeper | null = null;
-const phase3Runtime = new V1Phase3Runtime(identitySql, phase3DomainAdapter);
+const phase3Runtime = new V1Phase3Runtime(identitySql, phase3DomainAdapter, undefined, {
+  publicProjection: phase2Runtime,
+});
 const queueName = schedulerQueueName(config.environment);
 const inlineScheduler = new SchedulerRuntime({
   queueName,

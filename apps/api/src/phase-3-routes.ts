@@ -1501,6 +1501,7 @@ export async function registerPhase3Routes(
         ),
         response: {
           200: SportSettingsResponse,
+          400: ErrorResponse,
           401: ErrorResponse,
           403: ErrorResponse,
           404: ErrorResponse,
