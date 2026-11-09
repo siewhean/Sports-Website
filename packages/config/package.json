@@ -24,7 +24,7 @@
     "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
-    "tldts": "7.4.9",
-    "zod": "4.4.3"
+    "tldts": "7.4.19",
+    "zod": "4.6.7"
   }
 }
